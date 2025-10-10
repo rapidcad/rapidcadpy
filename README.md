@@ -2,8 +2,8 @@
 
 A new Python library under heavy development for CAD sequence processing and manipulation. Designed with a primary focus on seamless integration with industry-grade CAD software like AutoDesk Inventor, enabling professional-level parametric 3D modeling, sketches, and construction history management.
 
-![Status](https://img.shields.io/badge/status-under%20heavy%20development-orange.svg)
-![Focus](https://img.shields.io/badge/focus-AutoDesk%20Inventor%20Integration-blue.svg)
+![Status](https://img.shields.io/badge/status-alpha-orange)
+
 
 ## 🚀 Features
 
