@@ -1,0 +1,110 @@
+---
+title: SketchBuilder
+---
+
+Builder class that converts pending shapes into sketches and manages extrusion.
+
+## Attributes
+
+<PyAttribute name={"plane"} type={null} value={"plane"} />
+
+<PyAttribute name={"shapes"} type={null} value={"shapes"} />
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self, plane, shapes)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self, plane, shapes: List):
+    self.plane = plane
+    self.shapes = shapes
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"plane"} type={null} value={null} />
+<PyParameter name={"shapes"} type={"List"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"extrude"} type={"(self, distance, operation='NewBodyFeatureOperation')"}>
+
+Extrude the shapes to create a 3D solid.
+
+Args:
+    distance: Extrusion distance
+    operation: Extrusion operation type
+
+Returns:
+    CAD object with the extruded feature
+
+<PySourceCode >
+
+```python
+def extrude(self, distance: float, operation: str = "NewBodyFeatureOperation"):
+    """
+    Extrude the shapes to create a 3D solid.
+
+    Args:
+        distance: Extrusion distance
+        operation: Extrusion operation type
+
+    Returns:
+        CAD object with the extruded feature
+    """
+    from .cad import Cad
+    from .extrude import Extrude
+    from .sketch import Sketch
+    from .sketch_extrude import SketchExtrude
+    from .wire import Wire
+
+    # Create a wire from the shapes
+    wire = Wire(edges=self.shapes)
+
+    # Create a sketch with the wire
+    sketch = Sketch(outer_wire=wire, inner_wires=[])
+
+    # Set the sketch_plane attribute directly on the sketch object
+    sketch.sketch_plane = self.plane
+
+    # Create extrude definition
+    extrude = Extrude(
+        extent_one=distance,
+        extent_two=0,
+        direction=1,
+        operation=operation,
+        taper_angle_one=0,
+        taper_angle_two=0,
+    )
+
+    # Create sketch extrude feature
+    sketch_extrude = SketchExtrude(
+        sketch=[sketch], extrude=extrude, sketch_plane=self.plane
+    )
+
+    # Return as CAD object
+    return Cad(construction_sequence=[sketch_extrude])
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"distance"} type={"float"} value={null} />
+<PyParameter name={"operation"} type={"str"} value={"'NewBodyFeatureOperation'"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

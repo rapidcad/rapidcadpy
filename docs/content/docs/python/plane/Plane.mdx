@@ -1,0 +1,224 @@
+---
+title: Plane
+---
+
+## Attributes
+
+<PyAttribute name={"origin"} type={null} value={"origin"} />
+
+<PyAttribute name={"x_dir"} type={null} value={"Vector(*x_dir)"} />
+
+<PyAttribute name={"y_dir"} type={null} value={"Vector(*y_dir)"} />
+
+<PyAttribute name={"z_dir"} type={null} value={"Vector(*z_dir)"} />
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self, origin=(0.0, 0.0, 0.0), x_dir=(1.0, 0.0, 0.0), y_dir=(0.0, 1.0, 0.0), z_dir=(0.0, 0.0, 1.0))"}>
+
+<PySourceCode >
+
+```python
+def __init__(
+    self,
+    origin: VectorLike = (0.0, 0.0, 0.0),
+    x_dir: VectorLike = (1.0, 0.0, 0.0),
+    y_dir: VectorLike = (0.0, 1.0, 0.0),
+    z_dir: VectorLike = (0.0, 0.0, 1.0),
+):
+    if isinstance(origin, Vector):
+        self.origin = origin
+    else:
+        self.origin = Vector(*origin)
+    self.x_dir = Vector(*x_dir)
+    self.y_dir = Vector(*y_dir)
+    self.z_dir = Vector(*z_dir)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"origin"} type={"VectorLike"} value={"(0.0, 0.0, 0.0)"} />
+<PyParameter name={"x_dir"} type={"VectorLike"} value={"(1.0, 0.0, 0.0)"} />
+<PyParameter name={"y_dir"} type={"VectorLike"} value={"(0.0, 1.0, 0.0)"} />
+<PyParameter name={"z_dir"} type={"VectorLike"} value={"(0.0, 0.0, 1.0)"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"from_dict"} type={"(transform_dict) -> Plane"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def from_dict(transform_dict: Dict[str, Any]) -> "Plane":
+    origin = Vector(
+        transform_dict["origin"]["x"],
+        transform_dict["origin"]["y"],
+        transform_dict["origin"]["z"],
+    )
+
+    x_axis = Vector(
+        transform_dict["x_axis"]["x"],
+        transform_dict["x_axis"]["y"],
+        transform_dict["x_axis"]["z"],
+    )
+
+    y_axis = Vector(
+        transform_dict["y_axis"]["x"],
+        transform_dict["y_axis"]["y"],
+        transform_dict["y_axis"]["z"],
+    )
+
+    z_axis = Vector(
+        transform_dict["z_axis"]["x"],
+        transform_dict["z_axis"]["y"],
+        transform_dict["z_axis"]["z"],
+    )
+
+    return Plane(origin, x_axis, y_axis, z_axis)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"transform_dict"} type={"Dict[str, Any]"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.plane.Plane"} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"(self) -> Dict[str, Any]"}>
+
+<PySourceCode >
+
+```python
+def to_json(self) -> Dict[str, Any]:
+    return {
+        "origin": self.origin.to_json(),
+        "x_dir": {
+            "x": float(self.x_dir.x),
+            "y": float(self.x_dir.y),
+            "z": float(self.x_dir.z),
+        },
+        "y_dir": {
+            "x": float(self.y_dir.x),
+            "y": float(self.y_dir.y),
+            "z": float(self.y_dir.z),
+        },
+        "z_dir": {
+            "x": float(self.z_dir.x),
+            "y": float(self.z_dir.y),
+            "z": float(self.z_dir.z),
+        },
+    }
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Dict[str, typing.Any]"} />
+
+</PyFunction>
+
+<PyFunction name={"from_json"} type={"(json_data) -> Plane"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def from_json(json_data: Dict[str, Any]) -> "Plane":
+    origin = Vector.from_json(json_data["origin"])
+    x_dir = Vector.from_json(json_data["x_dir"])
+    y_dir = Vector.from_json(json_data["y_dir"])
+    z_dir = Vector.from_json(json_data["z_dir"])
+    return Plane(origin, x_dir, y_dir, z_dir)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"json_data"} type={"Dict[str, Any]"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.plane.Plane"} />
+
+</PyFunction>
+
+<PyFunction name={"to_python"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_python(self):
+    return f"Plane(origin={self.origin.to_python()}, x_dir={self.x_dir.to_python()}, y_dir={self.y_dir.to_python()}, z_dir={self.z_dir.to_python()})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"round"} type={"(self, decimals=6)"}>
+
+<PySourceCode >
+
+```python
+def round(self, decimals=6):
+    self.origin = Vector(
+        round(self.origin.x, decimals),
+        round(self.origin.y, decimals),
+        round(self.origin.z, decimals),
+    )
+    self.x_dir = Vector(
+        round(self.x_dir.x, decimals),
+        round(self.x_dir.y, decimals),
+        round(self.x_dir.z, decimals),
+    )
+    self.y_dir = Vector(
+        round(self.y_dir.x, decimals),
+        round(self.y_dir.y, decimals),
+        round(self.y_dir.z, decimals),
+    )
+    self.z_dir = Vector(
+        round(self.z_dir.x, decimals),
+        round(self.z_dir.y, decimals),
+        round(self.z_dir.z, decimals),
+    )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"decimals"} type={null} value={"6"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

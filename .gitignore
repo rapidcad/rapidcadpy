@@ -1,0 +1,55 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+env/
+venv/
+
+# VSCode settings
+.vscode/
+
+# PyCharm settings
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Python environment files
+*.env
+*.venv
+*.egg-info/
+
+# Coverage reports
+htmlcov/
+.coverage
+.tox/
+.nox/
+
+# Build artifacts
+build/
+rapidcadpy/build/
+dist/
+*.egg
+*.whl
+
+# Documentation build files
+docs_old/_build/
+docs_old/_static/
+docs_old/_templates/
+.doctrees/
+*.doctree
+docs/.next
+docs/node_modules
+
+# test files
+*.step

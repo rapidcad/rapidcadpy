@@ -1,0 +1,106 @@
+---
+title: ParallelConstraint
+---
+
+## Attributes
+
+<PyAttribute name={"first"} type={null} value={"first"} />
+
+<PyAttribute name={"second"} type={null} value={"second"} />
+
+<PyAttribute name={"identifier"} type={null} value={"ConstraintType.Parallel"} />
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self, first, second)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self, first: Primitive, second: Primitive):
+    self.first = first
+    self.second = second
+    self.identifier = ConstraintType.Parallel
+    super().__init__()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"first"} type={"Primitive"} value={null} />
+<PyParameter name={"second"} type={"Primitive"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__str__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __str__(self):
+    return f"ParallelConstraint({self.first}, {self.second})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_json(self):
+    return {
+        "type": self.identifier,
+        "first": str(self.first.id),
+        "second": str(self.second.id),
+    }
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__repr__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __repr__(self):
+    return f"ParallelConstraint({self.first}, {self.second})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

@@ -1,0 +1,208 @@
+---
+title: SketchExtrude
+---
+
+## Attributes
+
+<PyAttribute name={"sketch"} type={"Optional[List[Sketch]]"} value={"field(default=None)"} />
+
+<PyAttribute name={"extrude"} type={"Optional[Extrude]"} value={"field(default=None)"} />
+
+<PyAttribute name={"bbox"} type={"np.ndarray"} value={null} />
+
+## Functions
+
+<PyFunction name={"__str__"} type={"(self) -> str"}>
+
+<PySourceCode >
+
+```python
+def __str__(self) -> str:
+    ext_str = f"Extrude: {self.extrude.extent_one}" if self.extrude else ""
+    sketch_str = "\n".join([str(s) for s in self.sketch])
+    return f"Sketch:\n{sketch_str}\n{ext_str}"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"str"} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"(self, index=0) -> Dict[str, Any]"}>
+
+<PySourceCode >
+
+```python
+def to_json(self, index: int = 0) -> Dict[str, Any]:
+    return {
+        "type": "SketchExtrude",
+        "id": str(self.id),
+        "name": self.name,
+        "sketch_plane": self.sketch_plane.to_json(),
+        "sketch": [s.to_json() for s in self.sketch] if self.sketch else [],
+        f"extrude_{index}": self.extrude.to_json() if self.extrude else None,
+    }
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"index"} type={"int"} value={"0"} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Dict[str, typing.Any]"} />
+
+</PyFunction>
+
+<PyFunction name={"to_python"} type={"(self, index=0) -> str"}>
+
+<PySourceCode >
+
+```python
+def to_python(self, index: Optional[int] = 0) -> str:
+    variables = []
+    declarations = []
+    sketch_variables = []
+    for sketch_index, sketch in enumerate(self.sketch):
+        sketch_variables.append(f"sketch_{sketch_index}")
+        declarations.append(f"{sketch.to_python(sketch_index)}")
+    if self.extrude:
+        variables.append(f"extrude_{index}")
+        declarations.append(f"extrude_{index} = {self.extrude.to_python(index)}")
+
+    code = "\n".join(declarations)
+    sketch_variable_list = ", ".join(sketch_variables)
+    sketch_variable_list = "[" + sketch_variable_list + "]"
+    code += "\nsketch_extrude_{} = SketchExtrude(sketch={}, extrude={})\n".format(
+        index, sketch_variable_list, variables[0] if variables else "None"
+    )
+    return code
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"index"} type={"Optional[int]"} value={"0"} />
+
+</div>
+
+<PyFunctionReturn type={"str"} />
+
+</PyFunction>
+
+<PyFunction name={"__eq__"} type={"(self, other)"}>
+
+<PySourceCode >
+
+```python
+def __eq__(self, other):
+    return self.sketch == other.sketch and self.extrude == other.extrude
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"other"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"flip_z_axis"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def flip_z_axis(self):
+    for sketch in self.sketch:
+        sketch.sketch_plane.z_dir *= -1
+    if self.extrude:
+        self.extrude.extent_one = self.extrude.extent_one
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"plot"} type={"(self, title='Sketch Extrude', bounding_box=False)"}>
+
+<PySourceCode >
+
+```python
+def plot(self, title="Sketch Extrude", bounding_box=False):
+    fig = go.Figure()
+    for sketch in self.sketch:
+        for trace in sketch.plot(return_fig=True):
+            if trace is not None:
+                fig.add_trace(trace)
+    # add the bounding box
+    if bounding_box:
+        bbox_min, bbox_max = self.bbox
+        x = [bbox_min[0], bbox_max[0], bbox_max[0], bbox_min[0], bbox_min[0]]
+        y = [bbox_min[1], bbox_min[1], bbox_max[1], bbox_max[1], bbox_min[1]]
+        fig.add_trace(go.Scatter(x=x, y=y, mode="lines", name="Bounding Box"))
+    fig.update_layout(
+        title=title,
+        scene=dict(aspectmode="cube"),
+        xaxis=dict(scaleanchor="y", title="X Axis"),
+        yaxis=dict(title="Y Axis"),
+        showlegend=False,
+        autosize=True,
+    )
+    fig.show()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"title"} type={null} value={"'Sketch Extrude'"} />
+<PyParameter name={"bounding_box"} type={null} value={"False"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__init__"} type={"(self, sketch_plane=Plane(), id=uuid.uuid4(), name='Feature', sketch=None, extrude=None) -> None"}>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"sketch_plane"} type={"Plane"} value={"Plane()"} />
+<PyParameter name={"id"} type={"Optional[uuid.UUID]"} value={"uuid.uuid4()"} />
+<PyParameter name={"name"} type={"str"} value={"'Feature'"} />
+<PyParameter name={"sketch"} type={"Optional[List[Sketch]]"} value={"None"} />
+<PyParameter name={"extrude"} type={"Optional[Extrude]"} value={"None"} />
+
+</div>
+
+<PyFunctionReturn type={"None"} />
+
+</PyFunction>

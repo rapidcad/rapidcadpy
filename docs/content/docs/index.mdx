@@ -1,0 +1,72 @@
+---
+title: Quick Start
+description: Get started with RapidCADpy quickly
+---
+
+# Quick Start
+
+Welcome to RapidCADpy! This guide will help you get up and running quickly.
+
+## Installation
+
+Install RapidCADpy using pip:
+
+```bash
+pip install rapidcadpy
+```
+
+## Basic Usage
+
+Here's a simple example to create a basic 3D model using the new App approach:
+
+```python
+from rapidcadpy.integrations.inventor import InventorApp
+
+# Initialize Inventor application
+app = InventorApp()
+app.new_document()
+
+# Create a workplane on the XY plane
+wp = app.work_plane("XY")
+
+# Create a simple cube
+cube = wp.move_to(-5, -5).rect(10, 10).extrude(10)
+
+# Export to STEP format
+cube.export("my_cube.step")
+```
+
+## More Advanced Example
+
+Here's how you can create and cut a feature using the fluent API and the Inventor backend:
+
+```python
+app = InventorApp()
+app.new_document()
+wp = app.work_plane("XY")
+
+arm_thick = 5
+
+# Create an arm shape
+arm = (
+    wp.move_to(-4.5, 0)
+    .line_to(-4.5, 20)
+    .line_to(-8, 45)
+    .three_point_arc((0, 53), (8, 45))
+    .line_to(4.5, 20)
+    .line_to(4.5, 0)
+    .three_point_arc((0, -4.5), (-4.5, 0))
+    .extrude(arm_thick)
+)
+
+# Create a hole and cut it from the arm
+hole = wp.move_to(0, 45).circle(4).extrude(arm_thick)
+arm.cut(hole)
+```
+
+## Next Steps
+
+- Learn about [Basic Modeling](/docs/tutorials/basic-modeling)
+- Fluent API guide: [Fluent API Examples](/docs/fluent-api)
+- Explore the [API Reference](/docs/api)
+- Check out more [Examples](/docs/examples)

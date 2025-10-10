@@ -1,0 +1,100 @@
+---
+title: Primitive
+---
+
+## Attributes
+
+<PyAttribute name={"id"} type={null} value={"id if id else uuid.uuid4()"} />
+
+<PyAttribute name={"name"} type={null} value={"name if name else self.__class__.__name__"} />
+
+## Functions
+
+<PyFunction name={"from_dict"} type={"(ent_dict)"}>
+
+Creates an entity from its json representation as a dictionary.
+
+Parameters
+----------
+ent_dict : dict
+    The dictionary containing the json data representing the entity.
+
+Returns
+-------
+Primitive
+    An entity of the appropriate type according to the dictionar data.
+
+<PySourceCode >
+
+```python
+@staticmethod
+def from_dict(ent_dict):
+    """Creates an entity from its json representation as a dictionary.
+
+    Parameters
+    ----------
+    ent_dict : dict
+        The dictionary containing the json data representing the entity.
+
+    Returns
+    -------
+    Primitive
+        An entity of the appropriate type according to the dictionar data.
+    """
+    entity_type = inspect_entity_type(ent_dict)
+
+    EntityClass = ENTITY_TYPE_TO_CLASS.get(entity_type)
+    return EntityClass.from_fs_dict(ent_dict)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"ent_dict"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"()"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def to_json():
+    raise NotImplementedError
+```
+
+</PySourceCode>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__init__"} type={"(self, id=None, name=None)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self, id: Optional[uuid.UUID] = None, name: Optional[str] = None):
+    self.id = id if id else uuid.uuid4()
+    self.name = name if name else self.__class__.__name__
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"id"} type={"Optional[uuid.UUID]"} value={"None"} />
+<PyParameter name={"name"} type={"Optional[str]"} value={"None"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

@@ -1,0 +1,60 @@
+---
+title: EndToStartCoincidenceConstraint
+---
+
+## Attributes
+
+<PyAttribute name={"end_primitive"} type={null} value={"end_primitive"} />
+
+<PyAttribute name={"start_primitive"} type={null} value={"start_primitive"} />
+
+<PyAttribute name={"identifier"} type={null} value={"ConstraintType.Coincident"} />
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self, end_primitive, start_primitive)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self, end_primitive: Primitive, start_primitive: Primitive):
+    super().__init__()
+    self.end_primitive = end_primitive
+    self.start_primitive = start_primitive
+    self.identifier = ConstraintType.Coincident
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"end_primitive"} type={"Primitive"} value={null} />
+<PyParameter name={"start_primitive"} type={"Primitive"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__repr__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __repr__(self):
+    return f"EndToStartCoincidenceConstraint({self.end_primitive}, {self.start_primitive})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

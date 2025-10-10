@@ -1,0 +1,990 @@
+---
+title: functions
+---
+
+<Tabs items={["Functions"]}>
+
+<Tab value={"Functions"}>
+
+<PyFunction name={"angle_from_vector_to_x"} type={"(vec) -> float"}>
+
+<PySourceCode >
+
+```python
+def angle_from_vector_to_x(vec: np.ndarray) -> float:
+    angle = 0.0
+    # 2 | 1
+    # -------
+    # 3 | 4
+    if vec[0] >= 0:
+        if vec[1] >= 0:
+            # Qadrant 1
+            angle = math.asin(vec[1])
+        else:
+            # Qadrant 4
+            angle = 2.0 * math.pi - math.asin(-vec[1])
+    else:
+        if vec[1] >= 0:
+            # Qadrant 2
+            angle = math.pi - math.asin(vec[1])
+        else:
+            # Qadrant 3
+            angle = math.pi + math.asin(-vec[1])
+    return angle
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"vec"} type={"np.ndarray"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"float"} />
+
+</PyFunction>
+<PyFunction name={"rotation_matrix_from_angles"} type={"(theta, phi, gamma) -> np.ndarray"}>
+
+<PySourceCode >
+
+```python
+def rotation_matrix_from_angles(theta: float, phi: float, gamma: float) -> np.ndarray:
+    # Rotation matrix around z-axis
+    R_z = np.array(
+        [
+            [np.cos(theta), -np.sin(theta), 0],
+            [np.sin(theta), np.cos(theta), 0],
+            [0, 0, 1],
+        ]
+    )
+
+    # Rotation matrix around y-axis
+    R_y = np.array(
+        [[np.cos(phi), 0, np.sin(phi)], [0, 1, 0], [-np.sin(phi), 0, np.cos(phi)]]
+    )
+
+    # Rotation matrix around x-axis
+    R_x = np.array(
+        [
+            [1, 0, 0],
+            [0, np.cos(gamma), -np.sin(gamma)],
+            [0, np.sin(gamma), np.cos(gamma)],
+        ]
+    )
+
+    # Combined rotation matrix
+    R = R_z @ R_y @ R_x
+    return R
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"theta"} type={"float"} value={null} />
+<PyParameter name={"phi"} type={"float"} value={null} />
+<PyParameter name={"gamma"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"numpy.numpy.ndarray"} />
+
+</PyFunction>
+<PyFunction name={"cartesian2polar"} type={"(vec, with_radius=False) -> np.ndarray"}>
+
+convert a vector in cartesian coordinates to polar(spherical) coordinates
+
+<PySourceCode >
+
+```python
+def cartesian2polar(vec: np.ndarray, with_radius: bool = False) -> np.ndarray:
+    """convert a vector in cartesian coordinates to polar(spherical) coordinates"""
+    vec = vec.round(6)
+    norm = np.linalg.norm(vec)
+    theta = np.arccos(vec[2] / norm)  # (0, pi)
+    phi = np.arctan(
+        vec[1] / (vec[0] + 1e-15)
+    )  # (-pi, pi) # FIXME: -0.0 cannot be identified here
+    if not with_radius:
+        return np.array([theta, phi])
+    else:
+        return np.array([theta, phi, norm])
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"vec"} type={"np.ndarray"} value={null} />
+<PyParameter name={"with_radius"} type={"bool"} value={"False"} />
+
+</div>
+
+<PyFunctionReturn type={"numpy.numpy.ndarray"} />
+
+</PyFunction>
+<PyFunction name={"polar2cartesian"} type={"(vec) -> np.ndarray"}>
+
+convert a vector in polar(spherical) coordinates to cartesian coordinates
+
+<PySourceCode >
+
+```python
+def polar2cartesian(vec: np.ndarray) -> np.ndarray:
+    """convert a vector in polar(spherical) coordinates to cartesian coordinates"""
+    r = 1 if len(vec) == 2 else vec[2]
+    theta, phi = vec[0], vec[1]
+    x = r * np.sin(theta) * np.cos(phi)
+    y = r * np.sin(theta) * np.sin(phi)
+    z = r * np.cos(theta)
+    return np.array([x, y, z])
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"vec"} type={"np.ndarray"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"numpy.numpy.ndarray"} />
+
+</PyFunction>
+<PyFunction name={"rotate_by_y"} type={"(vec, theta) -> np.ndarray"}>
+
+<PySourceCode >
+
+```python
+def rotate_by_y(vec: np.ndarray, theta: float) -> np.ndarray:
+    mat = np.array(
+        [
+            [np.cos(theta), 0, np.sin(theta)],
+            [0, 1, 0],
+            [-np.sin(theta), 0, np.cos(theta)],
+        ]
+    )
+    return np.dot(mat, vec)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"vec"} type={"np.ndarray"} value={null} />
+<PyParameter name={"theta"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"numpy.numpy.ndarray"} />
+
+</PyFunction>
+<PyFunction name={"rotate_by_z"} type={"(vec, phi) -> np.ndarray"}>
+
+<PySourceCode >
+
+```python
+def rotate_by_z(vec: np.ndarray, phi: float) -> np.ndarray:
+    mat = np.array(
+        [[np.cos(phi), -np.sin(phi), 0], [np.sin(phi), np.cos(phi), 0], [0, 0, 1]]
+    )
+    return np.dot(mat, vec)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"vec"} type={"np.ndarray"} value={null} />
+<PyParameter name={"phi"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"numpy.numpy.ndarray"} />
+
+</PyFunction>
+<PyFunction name={"polar_parameterization"} type={"(normal_3d, x_axis_3d) -> Tuple[float, float, float]"}>
+
+represent a coordinate system by its rotation from the standard 3D coordinate system
+
+Args:
+    normal_3d (np.array): unit vector for normal direction (z-axis)
+    x_axis_3d (np.array): unit vector for x-axis
+
+Returns:
+    theta, phi, gamma: axis-angle rotation
+
+<PySourceCode >
+
+```python
+def polar_parameterization(
+    normal_3d: np.ndarray, x_axis_3d: np.ndarray
+) -> Tuple[float, float, float]:
+    """represent a coordinate system by its rotation from the standard 3D coordinate system
+
+    Args:
+        normal_3d (np.array): unit vector for normal direction (z-axis)
+        x_axis_3d (np.array): unit vector for x-axis
+
+    Returns:
+        theta, phi, gamma: axis-angle rotation
+    """
+    normal_polar = cartesian2polar(normal_3d)
+    theta = normal_polar[0]
+    phi = normal_polar[1]
+
+    ref_x = rotate_by_z(rotate_by_y(np.array([1, 0, 0]), theta), phi)
+
+    gamma = np.arccos(np.dot(x_axis_3d, ref_x).round(6))
+    if np.dot(np.cross(ref_x, x_axis_3d), normal_3d) < 0:
+        gamma = -gamma
+    return theta, phi, gamma
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"normal_3d"} type={"np.ndarray"} value={null} />
+<PyParameter name={"x_axis_3d"} type={"np.ndarray"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Tuple[float, float, float]"} />
+
+</PyFunction>
+<PyFunction name={"polar_parameterization_inverse"} type={"(theta, phi, gamma) -> Tuple[np.ndarray, np.ndarray]"}>
+
+build a coordinate system by the given rotation from the standard 3D coordinate system
+
+<PySourceCode >
+
+```python
+def polar_parameterization_inverse(
+    theta: float, phi: float, gamma: float
+) -> Tuple[np.ndarray, np.ndarray]:
+    """build a coordinate system by the given rotation from the standard 3D coordinate system"""
+    normal_3d = polar2cartesian([theta, phi])
+    ref_x = rotate_by_z(rotate_by_y(np.array([1, 0, 0]), theta), phi)
+    ref_y = np.cross(normal_3d, ref_x)
+    x_axis_3d = ref_x * np.cos(gamma) + ref_y * np.sin(gamma)
+    return normal_3d, x_axis_3d
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"theta"} type={"float"} value={null} />
+<PyParameter name={"phi"} type={"float"} value={null} />
+<PyParameter name={"gamma"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Tuple[numpy.numpy.ndarray, numpy.numpy.ndarray]"} />
+
+</PyFunction>
+<PyFunction name={"render_plotly_line"} type={"(edge, dashed=False, plane=None) -> Any"}>
+
+Render a line with arrows and labels in Plotly.
+
+<PySourceCode >
+
+```python
+def render_plotly_line(edge: Any, dashed: bool = False, plane: Any = None) -> Any:
+    """Render a line with arrows and labels in Plotly."""
+    _line_style = "dash" if dashed else None
+    from pycad.geometry.arc import Arc as PyCadArc
+    from pycad.geometry.circle import Circle as PyCadCircle
+    from pycad.geometry.line import Line as PyCadLine
+
+    from rapidcadpy.primitive import Arc, Circle, Line
+
+    if isinstance(edge, Line) or isinstance(edge, PyCadLine):
+        if plane:
+            start = (
+                edge.start_point.x * plane.x_dir
+                + edge.start_point.y * plane.y_dir
+                + plane.origin
+            )
+            end = (
+                edge.end_point.x * plane.x_dir
+                + edge.end_point.y * plane.y_dir
+                + plane.origin
+            )
+        else:
+            start = (edge.start_point[0], edge.start_point[1])
+            end = (edge.end_point[0], edge.end_point[1])
+
+        # Add line with arrowhead and label
+        return go.Scatter(
+            x=[start[0], end[0]],
+            y=[start[1], end[1]],
+            name="Line",
+            marker=dict(
+                size=12,
+                symbol="arrow-right",  # Arrowhead symbol
+                angleref="previous",
+                color="black",
+            ),
+            text=[None, str(edge.id), str(edge.start_point), str(edge.end_point)],
+            textposition="top right",
+            hoverinfo="text",
+        )
+
+    elif isinstance(edge, Circle) or isinstance(edge, PyCadCircle):
+        center = (edge.center[0], edge.center[1])
+        theta = np.linspace(0, 2 * np.pi, 100)
+        x_circle = center[0] + edge.radius * np.cos(theta)
+        y_circle = center[1] + edge.radius * np.sin(theta)
+
+        return go.Scatter(
+            x=x_circle,
+            y=y_circle,
+            mode="lines",
+            line=dict(color="green", width=2, dash=_line_style),
+            name="Circle",
+        )
+
+    elif isinstance(edge, Arc):
+        start = (edge.start_point.x, edge.start_point.y)
+        end = (edge.end_point.x, edge.end_point.y)
+        center = (edge.center.x, edge.center.y)
+
+        theta1 = np.arctan2(start[1] - center[1], start[0] - center[0])
+        theta2 = np.arctan2(end[1] - center[1], end[0] - center[0])
+        if edge.ccw and theta2 < theta1:
+            theta2 += 2 * np.pi
+        elif not edge.ccw and theta1 < theta2:
+            theta1 += 2 * np.pi
+        theta = np.linspace(theta1, theta2, 100)
+
+        x_arc = center[0] + edge.radius * np.cos(theta)
+        y_arc = center[1] + edge.radius * np.sin(theta)
+
+        return go.Scatter(
+            x=x_arc,
+            y=y_arc,
+            mode="lines",
+            name="Arc",
+            hovertext=f"CCW {edge.ccw} \n ID {edge.id}",
+            text=[None, str(edge.id), str(edge.start_point), str(edge.end_point)],
+            textposition="top right",
+            hoverinfo="text",
+        )
+    elif isinstance(edge, PyCadArc):
+        start = (edge.start_point[0], edge.start_point[1])
+        end = (edge.end_point[0], edge.end_point[1])
+        center = (edge.center[0], edge.center[1])
+
+        theta1 = np.arctan2(start[1] - center[1], start[0] - center[0])
+        theta2 = np.arctan2(end[1] - center[1], end[0] - center[0])
+        if edge.ccw and theta2 < theta1:
+            theta2 += 2 * np.pi
+        elif not edge.ccw and theta1 < theta2:
+            theta1 += 2 * np.pi
+        theta = np.linspace(theta1, theta2, 100)
+
+        x_arc = center[0] + edge.radius * np.cos(theta)
+        y_arc = center[1] + edge.radius * np.sin(theta)
+
+        return go.Scatter(
+            x=x_arc,
+            y=y_arc,
+            mode="lines",
+            name="Arc",
+            hovertext=f"CCW {edge.ccw} \n ID {edge.id}",
+            text=[None, str(edge.id), str(edge.start_point), str(edge.end_point)],
+            textposition="top right",
+            hoverinfo="text",
+        )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"edge"} type={"Any"} value={null} />
+<PyParameter name={"dashed"} type={"bool"} value={"False"} />
+<PyParameter name={"plane"} type={"Any"} value={"None"} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Any"} />
+
+</PyFunction>
+<PyFunction name={"redner_arc_midpoints"} type={"(arc)"}>
+
+<PySourceCode >
+
+```python
+def redner_arc_midpoints(arc):
+    from rapidcadpy.primitive import Arc
+
+    if isinstance(arc, Arc):
+        mid = arc.get_mid_point()
+        return go.Scatter(
+            x=[mid.x],
+            y=[mid.y],
+            mode="markers",
+            name="Midpoint",
+            marker=dict(size=8, color="red"),
+        )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"arc"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"render_arc_centerpoints"} type={"(arc)"}>
+
+<PySourceCode >
+
+```python
+def render_arc_centerpoints(arc):
+    from rapidcadpy.primitive import Arc
+
+    if isinstance(arc, Arc):
+        return go.Scatter(
+            x=[arc.center.x],
+            y=[arc.center.y],
+            mode="markers",
+            name="Center",
+            marker=dict(size=8, color="red"),
+        )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"arc"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"render_arc_angles"} type={"(arc)"}>
+
+<PySourceCode >
+
+```python
+def render_arc_angles(arc):
+    from rapidcadpy.primitive import Arc
+
+    if isinstance(arc, Arc):
+        start_angle = arc.start_angle
+        end_angle = arc.end_angle
+        center = np.array(arc.center)  # Assuming center is a tuple or Vertex
+        radius = arc.radius
+
+        # Calculate the start and end points based on the angles and radius
+        start_x = center[0] + radius * np.cos(start_angle)
+        start_y = center[1] + radius * np.sin(start_angle)
+
+        end_x = center[0] + radius * np.cos(end_angle)
+        end_y = center[1] + radius * np.sin(end_angle)
+
+        # Render the lines from center to start and end points
+        return go.Scatter(
+            x=[center[0], start_x, center[0], end_x],
+            y=[center[1], start_y, center[1], end_y],
+            mode="lines+markers",
+            name="Arc Angles",
+            marker=dict(size=8, color="blue"),
+            line=dict(color="blue", width=2),
+        )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"arc"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"render_arc_ref_vec"} type={"(arc)"}>
+
+<PySourceCode >
+
+```python
+def render_arc_ref_vec(arc):
+    from rapidcadpy.primitive import Arc
+
+    if isinstance(arc, Arc):
+        center = np.array(arc.center)  # Assuming center is a tuple or Vertex
+        ref_vec = np.array(arc.ref_vec.get_2d())  # Assuming get_2d() gives [x, y]
+
+        # Endpoint of the reference vector
+        end_point = center + (ref_vec * arc.radius)
+
+        # Render as a line from center to endpoint
+        return go.Scatter(
+            x=[center[0], end_point[0]],
+            y=[center[1], end_point[1]],
+            mode="lines+markers",
+            name="Ref Vec",
+            marker=dict(size=8, color="green"),
+            line=dict(color="green", width=2),
+        )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"arc"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"render_choord_and_normal"} type={"(arc)"}>
+
+<PySourceCode >
+
+```python
+def render_choord_and_normal(arc):
+    from rapidcadpy.primitive import Arc
+
+    if isinstance(arc, Arc):
+        start_to_end_vector = arc.end_point - arc.start_point
+        chord_midpoint = (arc.start_point + arc.end_point) / 2
+
+        perpendicular_vector = np.cross(start_to_end_vector, [0, 0, 1])[:2]
+        perpendicular_vector = perpendicular_vector / np.linalg.norm(
+            perpendicular_vector
+        )
+        if arc.ccw == 0:
+            perpendicular_vector = -perpendicular_vector
+
+        return go.Scatter(
+            x=[
+                chord_midpoint[0],
+                chord_midpoint[0] + (perpendicular_vector[0] * arc.radius),
+            ],
+            y=[
+                chord_midpoint[1],
+                chord_midpoint[1] + (perpendicular_vector[1] * arc.radius),
+            ],
+            mode="lines+markers",
+            name="Normal",
+            marker=dict(size=8, color="green"),
+            line=dict(color="green", width=2),
+        )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"arc"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"render_arrow_chord"} type={"(edge)"}>
+
+<PySourceCode >
+
+```python
+def render_arrow_chord(edge):
+    from rapidcadpy.primitive import Arc
+
+    if isinstance(edge, Arc):
+        start = (edge.start_point.x, edge.start_point.y)
+        end = (edge.end_point.x, edge.end_point.y)
+
+        # Add an arrow representing the chord
+        arrow_trace = go.Scatter(
+            x=[start[0], end[0]],  # Chord endpoints
+            y=[start[1], end[1]],
+            mode="lines+markers",
+            line=dict(width=2, color="red", dash="solid"),  # Customize arrow line
+            marker=dict(
+                size=12,
+                symbol="arrow-right",  # Arrowhead symbol
+                angleref="previous",
+                color="red",
+            ),
+            name="Chord with Arrow",
+        )
+
+        # Return the traces as a list (to be added to the figure)
+        return arrow_trace
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"edge"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"render_constructed_center_point"} type={"(arc)"}>
+
+<PySourceCode >
+
+```python
+def render_constructed_center_point(arc):
+    from rapidcadpy.primitive import Arc
+
+    if isinstance(arc, Arc):
+        sweep_angle = arc.end_angle - arc.start_angle
+        start_to_end_vector = arc.end_point - arc.start_point
+        chord_midpoint = (arc.start_point + arc.end_point) / 2
+
+        perpendicular_vector = np.cross(start_to_end_vector, [0, 0, 1])[:2]
+        perpendicular_vector = perpendicular_vector / np.linalg.norm(
+            perpendicular_vector
+        )
+        if arc.ccw == 0:
+            perpendicular_vector = -perpendicular_vector
+
+        center_point = chord_midpoint - perpendicular_vector * (
+            arc.radius * np.cos(sweep_angle / 2)
+        )
+
+        return go.Scatter(
+            x=[center_point[0]],
+            y=[center_point[1]],
+            mode="markers",
+            name="Constructed Center",
+            marker=dict(size=8, color="green"),
+        )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"arc"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"visualize_lines"} type={"(outer_edges, inner_edges=None, title='CAD', return_fig=False, plane=None)"}>
+
+Visualize a list of lines and optionally inner edges with arrows and labels.
+
+<PySourceCode >
+
+```python
+def visualize_lines(
+    outer_edges, inner_edges=None, title="CAD", return_fig=False, plane=None
+):
+    """Visualize a list of lines and optionally inner edges with arrows and labels."""
+    if inner_edges is None:
+        inner_edges = []
+
+    fig = go.Figure()
+
+    traces = []
+    for edge in outer_edges:
+        trace = render_plotly_line(edge, plane=plane)
+        traces.append(trace)
+
+    # Plot each inner edge with dashed lines and store the traces
+    for edge in inner_edges:
+        trace = render_plotly_line(edge, dashed=True)
+        traces.append(trace)
+
+    # mark arc midpoints for three point arc
+    # for edge in outer_edges:
+    # traces.append(redner_arc_midpoints(edge))
+    # traces.append(render_arc_centerpoints(edge))
+    # traces.append(render_arc_ref_vec(edge))
+    # traces.append(render_choord_and_normal(edge))
+    # traces.append(render_constructed_center_point(edge))
+    # traces.append(render_arrow_chord(edge))
+
+    traces = [trace for trace in traces if trace is not None]
+
+    if return_fig:
+        return traces
+
+    # else plot the result
+    for trace in traces:
+        fig.add_trace(trace)
+    fig.update_layout(
+        title=title,
+        scene=dict(aspectmode="cube"),
+        xaxis=dict(scaleanchor="y", title="X Axis"),
+        yaxis=dict(title="Y Axis"),
+        showlegend=False,
+        autosize=True,
+    )
+    fig.show()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"outer_edges"} type={null} value={null} />
+<PyParameter name={"inner_edges"} type={null} value={"None"} />
+<PyParameter name={"title"} type={null} value={"'CAD'"} />
+<PyParameter name={"return_fig"} type={null} value={"False"} />
+<PyParameter name={"plane"} type={null} value={"None"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"angle_between_points"} type={"(center, start, end)"}>
+
+Calculate angle (in radians) between two points on a circle with a given center.
+
+<PySourceCode >
+
+```python
+def angle_between_points(center, start, end):
+    """Calculate angle (in radians) between two points on a circle with a given center."""
+    dx1, dy1 = start.x - center.x, start.y - center.y
+    dx2, dy2 = end.x - center.x, end.y - center.y
+    angle1 = math.atan2(dy1, dx1)
+    angle2 = math.atan2(dy2, dx2)
+    return abs(angle2 - angle1) % (2 * math.pi)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"center"} type={null} value={null} />
+<PyParameter name={"start"} type={null} value={null} />
+<PyParameter name={"end"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"visualize_logits"} type={"(logits, top_k=20, title='Logits Distribution')"}>
+
+Visualize logits distribution with highlighted top-k values.
+
+Args:
+    logits: torch.Tensor of shape [vocab_size]
+    top_k: Number of top logits to highlight
+    title: Plot title
+
+<PySourceCode >
+
+```python
+def visualize_logits(logits, top_k=20, title="Logits Distribution"):
+    """
+    Visualize logits distribution with highlighted top-k values.
+
+    Args:
+        logits: torch.Tensor of shape [vocab_size]
+        top_k: Number of top logits to highlight
+        title: Plot title
+    """
+    # Convert to numpy
+    logits_np = logits.cpu().detach().numpy()
+
+    # Get top-k indices and values
+    top_k_values, top_k_indices = torch.topk(logits, k=top_k)
+    # top_k_indices += 1  # Adjust for the +1 offset in your model
+    top_k_values = top_k_values.cpu().detach().numpy().tolist()
+    top_k_indices = top_k_indices.cpu().detach().numpy().tolist()
+
+    # Create the plot
+    plt.figure(figsize=(15, 6))
+
+    # Plot all logits
+    plt.plot(range(len(logits_np)), logits_np, "b-", alpha=0.3, label="All logits")
+
+    # Highlight top-k values
+    plt.scatter(
+        top_k_indices,
+        top_k_values,
+        color="red",
+        s=100,
+        alpha=0.5,
+        label=f"Top {top_k} logits",
+    )
+
+    # Add token indices for top-k values
+    for idx, val in zip(top_k_indices, top_k_values):
+        plt.annotate(
+            f"Token {idx}",  # Adjust for the +1 offset in your model
+            (idx, val),
+            xytext=(0, 10),
+            textcoords="offset points",
+            ha="center",
+            rotation=45,
+        )
+
+    # Customize the plot
+    plt.title(title)
+    plt.xlabel("Token Index")
+    plt.ylabel("Logit Value")
+    plt.grid(True, alpha=0.3)
+    plt.legend()
+    plt.show()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"logits"} type={null} value={null} />
+<PyParameter name={"top_k"} type={null} value={"20"} />
+<PyParameter name={"title"} type={null} value={"'Logits Distribution'"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"visualize_output_tensors"} type={"(pre_fcn, post_fcn, seq_length=None)"}>
+
+Visualize output tensors before and after FCN layer.
+
+Args:
+    pre_fcn: Output tensor before FCN [seq_len, vocab_size]
+    post_fcn: Output tensor after FCN [seq_len, vocab_size]
+    seq_length: Optional sequence length to plot
+
+<PySourceCode >
+
+```python
+def visualize_output_tensors(pre_fcn, post_fcn, seq_length=None):
+    """
+    Visualize output tensors before and after FCN layer.
+
+    Args:
+        pre_fcn: Output tensor before FCN [seq_len, vocab_size]
+        post_fcn: Output tensor after FCN [seq_len, vocab_size]
+        seq_length: Optional sequence length to plot
+    """
+    import seaborn as sns
+
+    plt.close("all")
+
+    # Convert to numpy and get argmax
+    pre_fcn = pre_fcn.detach().cpu().numpy()
+    post_fcn = post_fcn.detach().cpu().numpy()
+
+    if seq_length is None:
+        seq_length = min(pre_fcn.shape[0], 20)
+
+    # Create subplots
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10))
+
+    # Plot heatmap for pre-FCN outputs
+    sns.heatmap(pre_fcn[:seq_length], ax=ax1, cmap="coolwarm", center=0)
+    ax1.set_title("Output Distribution Before FCN")
+    ax1.set_xlabel("Vocabulary Index")
+    ax1.set_ylabel("Sequence Position")
+
+    # Plot heatmap for post-FCN outputs
+    sns.heatmap(post_fcn[:seq_length], ax=ax2, cmap="coolwarm", center=0)
+    ax2.set_title("Output Distribution After FCN")
+    ax2.set_xlabel("Vocabulary Index")
+    ax2.set_ylabel("Sequence Position")
+
+    # Add colorbar
+    plt.colorbar(ax1.collections[0], ax=ax1, label="Value")
+    plt.colorbar(ax2.collections[0], ax=ax2, label="Value")
+
+    plt.tight_layout()
+
+    # Print statistics
+    print_statistics = False
+    if print_statistics:
+        print("\nPre-FCN Statistics:")
+        print(f"Mean: {pre_fcn.mean():.4f}")
+        print(f"Std: {pre_fcn.std():.4f}")
+        print(f"Max: {pre_fcn.max():.4f}")
+        print(f"Min: {pre_fcn.min():.4f}")
+
+        print("\nPost-FCN Statistics:")
+        print(f"Mean: {post_fcn.mean():.4f}")
+        print(f"Std: {post_fcn.std():.4f}")
+        print(f"Max: {post_fcn.max():.4f}")
+        print(f"Min: {post_fcn.min():.4f}")
+
+        # Show argmax for each position
+        print("\nArgmax tokens per position:")
+        for pos in range(seq_length):
+            pre_max = pre_fcn[pos].argmax()
+            post_max = post_fcn[pos].argmax()
+            print(
+                f"Position {pos}: Pre-FCN: {pre_max - 1}, Post-FCN: {post_max - 1}"
+            )  # -1 for token offset
+
+    plt.show()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"pre_fcn"} type={null} value={null} />
+<PyParameter name={"post_fcn"} type={null} value={null} />
+<PyParameter name={"seq_length"} type={null} value={"None"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+<PyFunction name={"visualize_cad_vec"} type={"(source, target=None)"}>
+
+<PySourceCode >
+
+```python
+def visualize_cad_vec(source, target=None):
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 5))
+    sns.heatmap(source, ax=ax1, annot=True, cmap="viridis", fmt="d", cbar=False)
+    ax1.set_xlabel("Sequence Index")
+    ax1.set_ylabel("Source")
+    if target is not None:
+        sns.heatmap(target, ax=ax2, annot=True, cmap="viridis", fmt="d", cbar=False)
+        ax2.set_xlabel("Sequence Index")
+        ax2.set_ylabel("Target")
+    plt.show()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"source"} type={null} value={null} />
+<PyParameter name={"target"} type={null} value={"None"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+</Tab>
+
+</Tabs>

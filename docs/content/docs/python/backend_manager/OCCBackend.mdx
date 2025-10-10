@@ -1,0 +1,157 @@
+---
+title: OCCBackend
+---
+
+OpenCASCADE (OCC) backend using the existing OccIntegration.
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self):
+    self._integration = None
+    self._initialize_integration()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"_initialize_integration"} type={"(self)"}>
+
+Initialize the OCC integration if available.
+
+<PySourceCode >
+
+```python
+def _initialize_integration(self):
+    """Initialize the OCC integration if available."""
+    try:
+        from .integrations.occ_integration import OccIntegration
+
+        self._integration = OccIntegration()
+    except Exception as e:
+        print(f"Warning: Could not initialize OCC backend: {e}")
+        self._integration = None
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"export_cad"} type={"(self, cad, filename=None, **kwargs) -> Any"}>
+
+Export CAD to OCC format (STEP, BREP, etc.).
+
+<PySourceCode >
+
+```python
+def export_cad(self, cad, filename: Optional[str] = None, **kwargs) -> Any:
+    """Export CAD to OCC format (STEP, BREP, etc.)."""
+    if not self.is_available():
+        raise RuntimeError("OCC backend is not available")
+
+    if filename:
+        if filename.endswith(".step") or filename.endswith(".stp"):
+            return cad.to_step(filename)
+        elif filename.endswith(".brep"):
+            return cad.to_brep(filename)
+        elif filename.endswith(".stl"):
+            return cad.to_stl(filename)
+        else:
+            # Default to STEP
+            return cad.to_step(filename)
+    else:
+        # Return the OCC shape object
+        return cad.to_occ()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"cad"} type={null} value={null} />
+<PyParameter name={"filename"} type={"Optional[str]"} value={"None"} />
+<PyParameter name={"kwargs"} type={null} value={"{}"} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Any"} />
+
+</PyFunction>
+
+<PyFunction name={"is_available"} type={"(self) -> bool"}>
+
+Check if OCC backend is available.
+
+<PySourceCode >
+
+```python
+def is_available(self) -> bool:
+    """Check if OCC backend is available."""
+    if self._integration is None:
+        return False
+    try:
+        # Check if the CAD object has OCC methods
+        from .cad import Cad
+
+        return hasattr(Cad, "to_occ") and hasattr(Cad, "to_step")
+    except:
+        return False
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"get_name"} type={"(self) -> str"}>
+
+Get backend name.
+
+<PySourceCode >
+
+```python
+def get_name(self) -> str:
+    """Get backend name."""
+    return "OpenCASCADE"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"str"} />
+
+</PyFunction>

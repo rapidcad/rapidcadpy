@@ -1,0 +1,71 @@
+---
+title: constants
+---
+
+<PyAttribute name={"TORCH_AVAILABLE"} type={null} value={"True"} />
+
+<PyAttribute name={"ALL_COMMANDS"} type={null} value={"['Line', 'Arc', 'Circle', 'EOS', 'SOS', 'Ext', 'Sketch', 'EOL']"} />
+
+<PyAttribute name={"LINE_IDX"} type={null} value={"ALL_COMMANDS.index('Line')"} />
+
+<PyAttribute name={"ARC_IDX"} type={null} value={"ALL_COMMANDS.index('Arc')"} />
+
+<PyAttribute name={"CIRCLE_IDX"} type={null} value={"ALL_COMMANDS.index('Circle')"} />
+
+<PyAttribute name={"EOS_IDX"} type={null} value={"ALL_COMMANDS.index('EOS')"} />
+
+<PyAttribute name={"SOL_IDX"} type={null} value={"ALL_COMMANDS.index('SOS')"} />
+
+<PyAttribute name={"EXT_IDX"} type={null} value={"ALL_COMMANDS.index('Ext')"} />
+
+<PyAttribute name={"SKETCH_IDX"} type={null} value={"ALL_COMMANDS.index('Sketch')"} />
+
+<PyAttribute name={"EOL_IDX"} type={null} value={"ALL_COMMANDS.index('EOL')"} />
+
+<PyAttribute name={"PAD_VAL"} type={null} value={"-1"} />
+
+<PyAttribute name={"PAD_GRAPH"} type={null} value={"HeteroData()"} />
+
+<PyAttribute name={"PAD_TENSOR"} type={null} value={"torch.zeros(7, dtype=(torch.float32))"} />
+
+<PyAttribute name={"UNUSED_PARAM"} type={null} value={"257"} />
+
+<PyAttribute name={"N_COMMANDS"} type={null} value={"len(ALL_COMMANDS)"} />
+
+<PyAttribute name={"N_ARGS"} type={null} value={"15"} />
+
+<PyAttribute name={"QUANTIZATION_SCALE"} type={null} value={"256"} />
+
+<PyAttribute name={"N_BIT"} type={null} value={"8"} />
+
+<PyAttribute name={"COMMAND_MASK"} type={null} value={"{LINE_IDX: [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], ARC_IDX: [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], CIRCLE_IDX: [1, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0], SKETCH_IDX: [0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0], EXT_IDX: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1], EOL_IDX: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], SOL_IDX: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], EOS_IDX: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}"} />
+
+<PyAttribute name={"COMMAND_PARAMETER_COUNTS"} type={null} value={"{LINE_IDX + QUANTIZATION_SCALE + 1: 2, ARC_IDX + QUANTIZATION_SCALE + 1: 4, CIRCLE_IDX + QUANTIZATION_SCALE + 1: 3, EOS_IDX + QUANTIZATION_SCALE + 1: 0, SOL_IDX + QUANTIZATION_SCALE + 1: 0, EXT_IDX + QUANTIZATION_SCALE + 1: 1, SKETCH_IDX + QUANTIZATION_SCALE + 1: 6, EOL_IDX + QUANTIZATION_SCALE + 1: 0}"} />
+
+<PyAttribute name={"EXTRUDE_OPERATIONS"} type={null} value={"['NewBodyFeatureOperation', 'JoinFeatureOperation', 'CutFeatureOperation', 'IntersectFeatureOperation']"} />
+
+<PyAttribute name={"EXTENT_TYPE"} type={null} value={"['OneSideFeatureExtentType', 'SymmetricFeatureExtentType', 'TwoSidesFeatureExtentType']"} />
+
+<PyAttribute name={"NODE_TYPES"} type={null} value={"['primitive']"} />
+
+<PyAttribute name={"CONSTRAINT_TYPES"} type={null} value={"['horizontal', 'vertical', 'endtostartcoincidence', 'perpendicular', 'parallel']"} />
+
+<PyAttribute name={"CONSTRAINTS"} type={null} value={"[('primitive', 'horizontal', 'primitive'), ('primitive', 'vertical', 'primitive'), ('primitive', 'endtostartcoincidence', 'primitive'), ('primitive', 'perpendicular', 'primitive'), ('primitive', 'parallel', 'primitive')]"} />
+
+<PyAttribute name={"PRECISION"} type={null} value={"1e-05"} />
+
+<PyAttribute name={"NORM_FACTOR"} type={null} value={"0.75"} />
+
+<PyAttribute name={"MAX_N_EXT"} type={null} value={"10"} />
+
+<PyAttribute name={"MAX_N_LOOPS"} type={null} value={"6"} />
+
+<PyAttribute name={"MAX_N_CURVES"} type={null} value={"15"} />
+
+<PyAttribute name={"MAX_TOTAL_LEN"} type={null} value={"70"} />
+
+<PyAttribute name={"MAX_NODES"} type={null} value={"200"} />
+
+<PyAttribute name={"MAX_EDGES"} type={null} value={"800"} />
+
+<PyAttribute name={"ARGS_DIM"} type={null} value={"256"} />

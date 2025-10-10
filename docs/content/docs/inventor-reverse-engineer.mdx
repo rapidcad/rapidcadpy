@@ -1,0 +1,70 @@
+---
+title: Inventor Reverse Engineering
+sidebar_position: 4
+description: Learn how to use RapidCADpy to reverse engineer Inventor IPT files into Python code.
+---
+
+# Inventor Reverse Engineering
+
+RapidCADpy provides a powerful reverse engineering tool for Autodesk Inventor IPT files. This feature allows you to automatically generate Python code that recreates the geometry and features found in an Inventor part file.
+
+## What does it do?
+- Loads an IPT file using the Inventor COM API
+- Analyzes sketches, extrudes, and revolves
+- Generates readable Python code using the RapidCADpy fluent API
+
+## Example Usage
+
+```python
+from rapidcadpy.integrations.inventor.app import InventorApp
+from rapidcadpy.integrations.inventor.reverse_engineer import InventorReverseEngineer
+
+def reverse_engineer_ipt(file_path: str) -> str:
+    app = InventorApp()
+    doc = app.open_document(file_path)
+    engineer = InventorReverseEngineer(doc)
+    generated_code = engineer.analyze_ipt_file()
+    return generated_code
+
+# Example: Reverse engineer a cube IPT file
+code = reverse_engineer_ipt("C:/path/to/test_cube_10x10x10.ipt")
+print(code)
+```
+
+## What does the generated code look like?
+
+The output will be Python code that uses the RapidCADpy Inventor backend:
+
+```python
+from rapidcadpy.integrations.inventor import InventorApp
+
+# Initialize Inventor application
+app = InventorApp()
+app.new_document()
+
+# Sketch 1
+wp1 = app.work_plane("XY")
+wp1.move_to(0.0, 0.0).line_to(10.0, 0.0).line_to(10.0, 10.0).line_to(0.0, 10.0).line_to(0.0, 0.0)
+
+# Extrude feature 1
+shape1 = wp1.extrude(10.0, 'NewBodyFeatureOperation')
+```
+
+
+## Supported Features
+- Sketches (lines, arcs, circles)
+- Extrude features
+- Revolve features
+- Base planes and custom workplanes
+
+## Limitations
+- Only supports IPT part files
+- Axis for revolve is currently simplified (origin of sketch)
+- More advanced features (patterns, fillets, etc.) are not yet supported
+
+## Advanced: Customizing the Output
+You can extend the `InventorReverseEngineer` class to support more features or customize the generated code format. See the source in `rapidcadpy/integrations/inventor/reverse_engineer.py` for details.
+
+---
+
+For more information, see the API reference and the test suite in `tests/test_integrations/test_inventor_reverse_engineer.py`.

@@ -1,0 +1,133 @@
+from rapidcadpy.apikey.python.onshapepy.client import Client
+
+
+class CustomOnshapeClient(Client):
+    def eval_compressed_query(self, did, wid, eid, compressed_query=None):
+        fs_function = """
+            function(context is Context, queries){
+                var id = makeId("FVJi9rnRrDg7IKN");
+                return evOwnerSketchPlane(
+            }
+        """
+
+        body = {
+            "script": fs_function,
+        }
+
+        result = self._api.request(
+            "post",
+            "/api/partstudios/d/" + did + "/w/" + wid + "/e/" + eid + "/featurescript",
+            body=body,
+        )
+
+        return result
+
+    def get_entity_by_id(self, did, wid, eid, geo_id, entity_type):
+        """get the parameters of geometry entity for specified entity id and type
+
+        Args:
+            - did (str): Document ID
+            - wid (str): Workspace ID
+            - eid (str): Element ID
+            - geo_id (str): geometry entity ID
+            - entity_type (str): 'VERTEX', 'EDGE' or 'FACE'
+
+        Returns:
+            - requests.Response: OnShape response data
+        """
+        func_dict = {
+            "VERTEX": ("evVertexPoint", "vertex"),
+            "EDGE": ("evCurveDefinition", "edge"),
+            "FACE": ("evSurfaceDefinition", "face"),
+        }
+        body = {
+            "script": "function(context is Context, queries) { "
+            + "   var res_list = [];"
+            "   var q_arr = evaluateQuery(context, queries.id);"
+            "   for (var i = 0; i < size(q_arr); i+= 1){"
+            '       var res = %s(context, {"%s": q_arr[i]});'
+            % (func_dict[entity_type][0], func_dict[entity_type][1])
+            + "       res_list = append(res_list, res);"
+            "   }"
+            "   return res_list;"
+            "}",
+            "queries": [{"key": "id", "value": geo_id}],
+        }
+        res = self._api.request(
+            "post",
+            "/api/partstudios/d/" + did + "/w/" + wid + "/e/" + eid + "/featurescript",
+            body=body,
+        )
+
+        return res
+
+    @staticmethod
+    def parse_coord_msg(response):
+        """parse coordSystem parameters from OnShape response data"""
+        coord_param = {}
+        for item in response:
+            k_msg = item["message"]["key"]
+            k = k_msg["message"]["value"]
+            v_msg = item["message"]["value"]
+            v = [round(x["message"]["value"], 8) for x in v_msg["message"]["value"]]
+            coord_param.update({k: v})
+        return coord_param
+
+    @staticmethod
+    def parse_face_msg(response):
+        """parse face parameters from OnShape response data"""
+        # data = response.json()['result']['message']['value']
+        data = [response] if not isinstance(response, list) else response
+        faces = []
+        for item in data:
+            face_msg = item["message"]["value"]
+            face_type = item["message"]["typeTag"]
+            face_param = {"type": face_type}
+            for msg in face_msg:
+                k = msg["message"]["key"]["message"]["value"]
+                v_item = msg["message"]["value"]["message"]["value"]
+                if k == "coordSystem":
+                    v = CustomOnshapeClient.parse_coord_msg(v_item)
+                elif isinstance(v_item, list):
+                    v = [round(x["message"]["value"], 8) for x in v_item]
+                else:
+                    if isinstance(v_item, float):
+                        v = round(v_item, 8)
+                    else:
+                        v = v_item
+                face_param.update({k: v})
+            faces.append(face_param)
+        return faces
+
+    def expr2meter(self, did, wid, eid, expr):
+        """convert value expression to meter unit"""
+        body = {
+            "script": "function(context is Context, queries) { "
+            '   return lookupTableEvaluate("%s") * meter;' % (expr) + "}",
+            "queries": [],
+        }
+
+        res = self._api.request(
+            "post",
+            "/api/partstudios/d/" + did + "/w/" + wid + "/e/" + eid + "/featurescript",
+            body=body,
+        ).json()
+        return res["result"]["message"]["value"]
+
+    def bodydetails(self, did, wid, eid):
+        """get the body details for specified element id
+
+        Args:
+            - did (str): Document ID
+            - wid (str): Workspace ID
+            - eid (str): Element ID
+
+        Returns:
+            - requests.Response: OnShape response data
+        """
+        res = self._api.request(
+            "get",
+            "/api/partstudios/d/" + did + "/w/" + wid + "/e/" + eid + "/bodydetails",
+        )
+
+        return res

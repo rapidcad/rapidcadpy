@@ -1,0 +1,122 @@
+---
+title: CADBackend
+---
+
+Abstract base class for CAD backends.
+
+This defines the interface that all CAD backends must implement
+to work with the fluent API.
+
+## Functions
+
+<PyFunction name={"export_cad"} type={"(self, cad, filename=None, **kwargs) -> Any"}>
+
+Export a CAD object to the backend format.
+
+Args:
+    cad: The CAD object to export
+    filename: Optional filename to save to
+    **kwargs: Additional backend-specific options
+
+Returns:
+    Backend-specific result (e.g., Inventor document, OCC shape, etc.)
+
+<PySourceCode >
+
+```python
+@abstractmethod
+def export_cad(self, cad, filename: Optional[str] = None, **kwargs) -> Any:
+    """
+    Export a CAD object to the backend format.
+
+    Args:
+        cad: The CAD object to export
+        filename: Optional filename to save to
+        **kwargs: Additional backend-specific options
+
+    Returns:
+        Backend-specific result (e.g., Inventor document, OCC shape, etc.)
+    """
+    pass
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"cad"} type={null} value={null} />
+<PyParameter name={"filename"} type={"Optional[str]"} value={"None"} />
+<PyParameter name={"kwargs"} type={null} value={"{}"} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Any"} />
+
+</PyFunction>
+
+<PyFunction name={"is_available"} type={"(self) -> bool"}>
+
+Check if this backend is available and can be used.
+
+Returns:
+    True if backend is available, False otherwise
+
+<PySourceCode >
+
+```python
+@abstractmethod
+def is_available(self) -> bool:
+    """
+    Check if this backend is available and can be used.
+
+    Returns:
+        True if backend is available, False otherwise
+    """
+    pass
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"get_name"} type={"(self) -> str"}>
+
+Get the name of this backend.
+
+Returns:
+    Human-readable name of the backend
+
+<PySourceCode >
+
+```python
+@abstractmethod
+def get_name(self) -> str:
+    """
+    Get the name of this backend.
+
+    Returns:
+        Human-readable name of the backend
+    """
+    pass
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"str"} />
+
+</PyFunction>

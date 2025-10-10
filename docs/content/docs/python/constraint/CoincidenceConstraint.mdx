@@ -1,0 +1,106 @@
+---
+title: CoincidenceConstraint
+---
+
+## Attributes
+
+<PyAttribute name={"vertex"} type={null} value={"vertex"} />
+
+<PyAttribute name={"entity"} type={null} value={"entity"} />
+
+<PyAttribute name={"identifier"} type={null} value={"ConstraintType.Coincident"} />
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self, vertex, entity)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self, vertex: Vertex, entity: typing.Union[Vertex, Primitive]):
+    super().__init__()
+    self.vertex = vertex
+    self.entity = entity
+    self.identifier = ConstraintType.Coincident
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"vertex"} type={"Vertex"} value={null} />
+<PyParameter name={"entity"} type={"typing.Union[Vertex, Primitive]"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__str__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __str__(self):
+    return f"CoincidenceConstraint({self.vertex}, {self.entity})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_json(self):
+    return {
+        "type": self.identifier,
+        "vertex": str(self.vertex.name),
+        "entity": str(self.entity.name),
+    }
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__repr__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __repr__(self):
+    return f"CoincidenceConstraint({self.vertex}, {self.entity})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

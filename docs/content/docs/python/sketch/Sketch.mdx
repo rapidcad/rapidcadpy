@@ -1,0 +1,1310 @@
+---
+title: Sketch
+---
+
+This class encapsulates a sketch instance.
+
+## Attributes
+
+<PyAttribute name={"outer_wire"} type={"Wire"} value={null} />
+
+<PyAttribute name={"inner_wires"} type={"Optional[List[Wire]]"} value={"field(default_factory=list)"} />
+
+<PyAttribute name={"constraints"} type={"Optional[List[Constraint]]"} value={"field(default_factory=list)"} />
+
+<PyAttribute name={"id"} type={"Optional[uuid.UUID]"} value={"field(default=(uuid.uuid4()))"} />
+
+<PyAttribute name={"name"} type={"str"} value={"'Sketch'"} />
+
+<PyAttribute name={"start_point"} type={null} value={null} />
+
+<PyAttribute name={"end_point"} type={null} value={null} />
+
+<PyAttribute name={"bbox"} type={null} value={null}>
+
+compute bounding box (min/max points) of the sketch
+
+</PyAttribute>
+
+<PyAttribute name={"bbox_size"} type={null} value={null}>
+
+compute bounding box size (max of height and width)
+
+</PyAttribute>
+
+## Functions
+
+<PyFunction name={"__str__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __str__(self):
+    return "\n\t".join([str(edge) for edge in self.outer_wire.edges])
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__post_init__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __post_init__(self):
+    if self.id is None:
+        self.id = uuid.uuid4()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"get_face_by_id"} type={"(self, face_id)"}>
+
+<PySourceCode >
+
+```python
+def get_face_by_id(self, face_id: Union[str, uuid.UUID]):
+    if isinstance(face_id, str):
+        face_id = uuid.UUID(face_id)
+    for face in self.faces:
+        if face.id == face_id:
+            return face
+    return None
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"face_id"} type={"Union[str, uuid.UUID]"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"plot"} type={"(self, title=None, return_fig=False)"}>
+
+<PySourceCode >
+
+```python
+def plot(self, title=None, return_fig=False):
+    if return_fig:
+        return visualize_lines(
+            self.outer_wire.edges,
+            inner_edges=self.get_inner_edges(),
+            return_fig=True,
+            title=self.name,
+            plane=self.sketch_plane,
+        )
+    visualize_lines(
+        self.outer_wire.edges, inner_edges=self.get_inner_edges(), title=title
+    )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"title"} type={null} value={"None"} />
+<PyParameter name={"return_fig"} type={null} value={"False"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_json(self):
+    self.merge_coincident_vertices()
+    vertices = self.name_vertices_sequentially(variable_definitons=False)
+    return {
+        "vertices": {str(v.name): v.to_json() for v in vertices},
+        "outer_edges": [
+            e.to_json(dereferenced=True) for e in self.outer_wire.edges
+        ],
+        "inner_edges": [
+            [e.to_json(dereferenced=True) for e in w.edges]
+            for w in self.inner_wires or []
+        ],
+        "constraints": [c.to_json() for c in self.constraints or [] if c],
+    }
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"from_json"} type={"(data)"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def from_json(data):
+    outer_wire_edges = []
+    edge_dict = {}
+    for edge_data in data["outer_edges"]:
+        if edge_data["type"] == "Line":
+            edge = Line.from_json(edge_data)
+        elif edge_data["type"] == "Circle":
+            edge = Circle.from_json(edge_data)
+        elif edge_data["type"] == "Arc":
+            edge = Arc.from_json(edge_data)
+        outer_wire_edges.append(edge)
+
+    inner_wires = []
+    for inner_edge in data["inner_edges"]:
+        inner_wire_edges = []
+        for edge_data in inner_edge:
+            if edge_data["type"] == "Line":
+                edge = Line.from_json(edge_data)
+            elif edge_data["type"] == "Circle":
+                edge = Circle.from_json(edge_data)
+            elif edge_data["type"] == "Arc":
+                edge = Arc.from_json(edge_data)
+            inner_wire_edges.append(edge)
+        inner_wires.append(Wire(inner_wire_edges))
+
+    return Sketch(
+        outer_wire=Wire(edges=outer_wire_edges),
+        inner_wires=inner_wires,
+        sketch_plane=Plane.from_json(data["sketch_plane"]),
+    )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"data"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"from_dict"} type={"(all_stat, profile_uid_list)"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def from_dict(all_stat, profile_uid_list):
+    facedata = []
+    plane = Plane.from_dict(
+        all_stat["entities"][profile_uid_list[0][0]]["transform"]
+    )
+
+    for i in range(len(profile_uid_list)):
+        sketch_entity = all_stat["entities"][profile_uid_list[i][0]]
+        facedata.append(
+            FaceSequence.from_dict(sketch_entity, profile_uid_list[i][1])
+        )
+
+    return Sketch(facedata=facedata, sketch_plane=plane, reorder=True)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"all_stat"} type={null} value={null} />
+<PyParameter name={"profile_uid_list"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"_order_edges"} type={"(self, edges)"}>
+
+<PySourceCode >
+
+```python
+def _order_edges(self, edges):
+    if any(isinstance(edge, Circle) for edge in edges):
+        return edges
+    log.debug(f"### Ordering Edges {len(edges)}")
+    num_edges_before = len(edges)
+
+    # Create mappings from vertices to edges
+    start_to_edge: Dict[Vertex, List[Union[Line, Arc]]] = defaultdict(list)
+    end_to_edge: Dict[Vertex, List[Union[Line, Arc]]] = defaultdict(list)
+
+    for edge in edges:
+        start_to_edge[edge.start_point].append(edge)
+        end_to_edge[edge.end_point].append(edge)
+
+    # Choose starting edge
+    start_edge = edges[0]
+
+    # remove the start edge from the mappings
+    start_to_edge[start_edge.start_point].remove(start_edge)
+    end_to_edge[start_edge.end_point].remove(start_edge)
+
+    # Build the ordered list of xedges
+    ordered_edges = []
+    current_edge = start_edge
+
+    while len(start_to_edge) + len(end_to_edge) > 0:
+        ordered_edges.append(current_edge)
+        log.debug("\t\tCurrent Edge: %s", current_edge)
+        log.debug("\t\tRemaining Start To Edge: %s", start_to_edge)
+        log.debug("\t\tRemaining End To Edge: %s", end_to_edge)
+
+        if current_edge.end_point in start_to_edge:
+            log.debug("\t\t1 End Point in Start to Edge")
+            current_edge = start_to_edge[current_edge.end_point].pop(0)
+            end_to_edge[current_edge.end_point].remove(current_edge)
+        elif current_edge.start_point in end_to_edge:
+            log.debug("\t\t2 Start Point in End to Edge")
+            current_edge = end_to_edge[current_edge.start_point].pop(0)
+            start_to_edge[current_edge.start_point].remove(current_edge)
+        elif current_edge.end_point in end_to_edge:
+            log.debug("\t\t3 Flipping Edge")
+            # Add flipped edge
+            current_edge = end_to_edge[current_edge.end_point].pop(0)
+            start_to_edge[current_edge.start_point].remove(current_edge)
+            # Reverse flip to delete the old edge
+            current_edge.flip()
+        elif current_edge.start_point in start_to_edge:
+            log.debug("\t\t4 Flipping Edge")
+            # Add flipped edge
+            current_edge = start_to_edge[current_edge.start_point].pop(0)
+            end_to_edge[current_edge.end_point].remove(current_edge)
+            current_edge.flip()
+            log.debug(len(end_to_edge) + len(start_to_edge))
+        else:
+            log.debug("\t\t4 No Connected Edges")
+            break
+
+        # remove empty lists from dict
+        start_to_edge = {k: v for k, v in start_to_edge.items() if v}
+        end_to_edge = {k: v for k, v in end_to_edge.items() if v}
+
+    # Add the last edge
+    ordered_edges.append(current_edge)
+
+    if len(ordered_edges) != num_edges_before:
+        log.error(
+            f"Number of edges before {num_edges_before} is not equal to number of ordered edges {len(ordered_edges)}"
+        )
+
+    return ordered_edges
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"edges"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"order_edges"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def order_edges(self):
+    self._order_edges(self.outer_wire.edges)
+    for wire in self.inner_wires:
+        wire.edges = self._order_edges(wire.edges)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"get_inner_edges"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def get_inner_edges(self):
+    if len(self.inner_wires) == 0:
+        return []
+    return [edge for wire in self.inner_wires for edge in wire.edges]
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"_point_on_line"} type={"(point, line, tolerance=1e-05) -> bool"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def _point_on_line(point, line, tolerance: float = 1e-5) -> bool:
+    # check if point is somewhere on the line
+    x = point.x
+    y = point.y
+    x1 = line.start_point.x
+    y1 = line.start_point.y
+    x2 = line.end_point.x
+    y2 = line.end_point.y
+
+    cross_product = (y - y1) * (x2 - x1) - (x - x1) * (y2 - y1)
+
+    # The point is not collinear with the line segment
+    if abs(cross_product) > tolerance:
+        return False
+
+    # Check if the point is within the bounding box of the line segment
+    return (
+        min(x1, x2) - tolerance <= x <= max(x1, x2) + tolerance
+        and min(y1, y2) - tolerance <= y <= max(y1, y2) + tolerance
+    )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"point"} type={null} value={null} />
+<PyParameter name={"line"} type={null} value={null} />
+<PyParameter name={"tolerance"} type={"float"} value={"1e-05"} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"_point_on_circle"} type={"(point, circle, tolerance=1e-05) -> bool"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def _point_on_circle(point, circle, tolerance: float = 1e-5) -> bool:
+    # check if point is somewhere on the line
+    x = point.x
+    y = point.y
+    x1 = circle.center.x
+    y1 = circle.center.y
+    r = circle.radius
+
+    return abs((x - x1) ** 2 + (y - y1) ** 2 - r**2) < tolerance
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"point"} type={null} value={null} />
+<PyParameter name={"circle"} type={null} value={null} />
+<PyParameter name={"tolerance"} type={"float"} value={"1e-05"} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"fix_start_end_points"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def fix_start_end_points(self):
+    for edge in self.outer_wire.edges:
+        if isinstance(edge, Circle):
+            continue
+        lines_removed_edge = [
+            e for e in self.outer_wire.edges if e != edge and isinstance(e, Line)
+        ]
+        circles_removed_edge = [
+            e for e in self.outer_wire.edges if e != edge and isinstance(e, Circle)
+        ]
+        # Check if point1 is the point2 of another edge
+        all_other_points = [e.start_point for e in lines_removed_edge] + [
+            e.end_point for e in lines_removed_edge
+        ]
+        start_point_found = edge.start_point in all_other_points
+        end_point_found = edge.end_point in all_other_points
+
+        if not start_point_found:
+            log.debug("\tEdge with disconnected start point: %s", edge)
+            for edge2 in lines_removed_edge:
+                if self._point_on_line(point=edge2.end_point, line=edge) and any(
+                    edge2.end_point != edge.end_point
+                ):
+                    log.debug(f"\t6 Fixed edge {edge} -> ")
+                    edge.start_point = Vertex(
+                        x=edge2.end_point.x, y=edge2.end_point.y
+                    )
+                    log.debug(f"\t\t{edge}")
+                    break
+                if self._point_on_line(edge2.start_point, edge) and any(
+                    edge2.start_point != edge.end_point
+                ):
+                    log.debug(f"\t6 Fixed edge {edge} -> ")
+                    edge.start_point = Vertex(
+                        x=edge2.start_point.x, y=edge2.start_point.y
+                    )
+                    log.debug(f"\t\t{edge}")
+                    break
+            for edge2 in circles_removed_edge:
+                if self._point_on_circle(edge.start_point, edge2):
+                    log.debug(f"\t6.1 Start point on circle {edge2}")
+                    break
+        if not end_point_found:
+            log.debug("\tEdge with disconnected end point: %s", edge)
+            for edge2 in lines_removed_edge:
+                if self._point_on_line(edge2.end_point, edge) and any(
+                    edge2.end_point != edge.start_point
+                ):
+                    log.debug("\t7 Found connected edge: %s", edge2)
+                    edge.end_point = Vertex(
+                        x=edge2.end_point.x, y=edge2.end_point.y
+                    )
+                    break
+                if self._point_on_line(edge2.start_point, edge) and any(
+                    edge2.start_point != edge.start_point
+                ):
+                    log.debug("\t8 Found connected edge: %s", edge2)
+                    edge.end_point = Vertex(
+                        x=edge2.start_point.x, y=edge2.start_point.y
+                    )
+            for edge2 in circles_removed_edge:
+                if self._point_on_circle(edge.end_point, edge2):
+                    log.debug(f"\t8.1 End point on circle {edge2}")
+                    break
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"remove_coincidences"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def remove_coincidences(self):
+    # Remove coincident lines
+    edges_to_remove = set()
+    tolerance = 1e-5
+    for edge in self.outer_wire.edges:
+        if isinstance(edge, Line):
+            edges_removed = [e for e in self.outer_wire.edges if e != edge]
+            for edge2 in edges_removed:
+                if isinstance(edge2, Line):
+                    cross_product = np.cross(
+                        np.array(edge.end_point) - np.array(edge.start_point),
+                        np.array(edge2.end_point) - np.array(edge2.start_point),
+                    )
+                    # check if collinear
+                    if abs(cross_product) < tolerance:
+                        # check if edge is within the bounding box of edge2
+                        min_point = (
+                            np.minimum(edge2.start_point, edge2.end_point)
+                            - tolerance
+                        )
+                        max_point = (
+                            np.maximum(edge2.start_point, edge2.end_point)
+                            + tolerance
+                        )
+
+                        is_within_bbox = np.all(
+                            (min_point <= edge.start_point)
+                            & (edge.start_point <= max_point)
+                        )
+                        is_within_bbox = is_within_bbox and np.all(
+                            (min_point <= edge.end_point)
+                            & (edge.end_point <= max_point)
+                        )
+
+                        if is_within_bbox:
+                            edges_to_remove.add(edge)
+
+    self.outer_wire.edges = [
+        e for e in self.outer_wire.edges if e not in edges_to_remove
+    ]
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"merge_coincident_vertices"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def merge_coincident_vertices(self):
+    # Merge coincident vertices
+    for edge in self.outer_wire.edges:
+        if isinstance(edge, Line) or isinstance(edge, Arc):
+            for edge2 in self.outer_wire.edges:
+                if edge2 != edge and edge.start_point == edge2.start_point:
+                    edge.start_point = edge2.start_point
+                if edge2 != edge and edge.end_point == edge2.end_point:
+                    edge.end_point = edge2.end_point
+                if edge2 != edge and edge.start_point == edge2.end_point:
+                    edge.start_point = edge2.end_point
+                if edge2 != edge and edge.end_point == edge2.start_point:
+                    edge.end_point = edge2.start_point
+                if isinstance(edge, Arc) and isinstance(edge2, Arc):
+                    if edge.center == edge2.center:
+                        edge.center = edge2.center
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"name_vertices_sequentially"} type={"(self, variable_definitons=True)"}>
+
+<PySourceCode >
+
+```python
+def name_vertices_sequentially(self, variable_definitons=True):
+    vertex_index = 0
+    vertex_variable_definitions = []
+    parsed_vertices: Set[Vertex] = set()
+    not_detect_duplicates = False
+    for edge in self.outer_wire.edges + self.get_inner_edges():
+        if isinstance(edge, Line):
+            if edge.start_point not in parsed_vertices or not_detect_duplicates:
+                edge.start_point.name = f"vertex_{vertex_index}"
+                vertex_variable_definitions.append(
+                    f"vertex_{vertex_index} = Vertex(x={edge.start_point.x}, y={edge.start_point.y})"
+                )
+
+                parsed_vertices.add(edge.start_point)
+                vertex_index += 1
+            if edge.end_point not in parsed_vertices or not_detect_duplicates:
+                edge.end_point.name = f"vertex_{vertex_index}"
+                vertex_variable_definitions.append(
+                    f"vertex_{vertex_index} = Vertex(x={edge.end_point.x}, y={edge.end_point.y})"
+                )
+                parsed_vertices.add(edge.end_point)
+                vertex_index += 1
+        elif isinstance(edge, Circle):
+            if edge.center not in parsed_vertices or not_detect_duplicates:
+                edge.center.name = f"vertex_{vertex_index}"
+                vertex_variable_definitions.append(
+                    f"vertex_{vertex_index} = Vertex(x={edge.center.x}, y={edge.center.y})"
+                )
+                parsed_vertices.add(edge.center)
+                vertex_index += 1
+        elif isinstance(edge, Arc):
+            if edge.start_point not in parsed_vertices or not_detect_duplicates:
+                edge.start_point.name = f"vertex_{vertex_index}"
+                vertex_variable_definitions.append(
+                    f"vertex_{vertex_index} = Vertex(x={edge.start_point.x}, y={edge.start_point.y})"
+                )
+                parsed_vertices.add(edge.start_point)
+                vertex_index += 1
+            if edge.end_point not in parsed_vertices or not_detect_duplicates:
+                edge.end_point.name = f"vertex_{vertex_index}"
+                vertex_variable_definitions.append(
+                    f"vertex_{vertex_index} = Vertex(x={edge.end_point.x}, y={edge.end_point.y})"
+                )
+                parsed_vertices.add(edge.end_point)
+                vertex_index += 1
+            if edge.center not in parsed_vertices or not_detect_duplicates:
+                edge.center.name = f"vertex_{vertex_index}"
+                vertex_variable_definitions.append(
+                    f"vertex_{vertex_index} = Vertex(x={edge.center.x}, y={edge.center.y})"
+                )
+                parsed_vertices.add(edge.center)
+                vertex_index += 1
+
+    if variable_definitons:
+        return vertex_variable_definitions
+    return parsed_vertices
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"variable_definitons"} type={null} value={"True"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_python"} type={"(self, index=0)"}>
+
+<PySourceCode >
+
+```python
+def to_python(self, index: Optional[int] = 0):
+    # self.merge_coincident_vertices()
+    # vertices = self.name_vertices_sequentially(variable_definitons=True)
+
+    edges = []
+    line_counter = 0
+    circle_counter = 0
+    arc_counter = 0
+
+    outer_wire_variable_names = []
+    for i, edge in enumerate(self.outer_wire.edges):
+        if isinstance(edge, Line):
+            var_name = f"line_{line_counter}"
+            edges.append(
+                f"{var_name} = Line(start_point={edge.start_point.to_python()}, end_point={edge.end_point.to_python()})"
+            )
+            outer_wire_variable_names.append(var_name)
+            line_counter += 1
+        elif isinstance(edge, Circle):
+            var_name = f"circle_{circle_counter}"
+            edges.append(
+                f"{var_name} = Circle(center={edge.center.to_python()}, radius={edge.radius})"
+            )
+            outer_wire_variable_names.append(var_name)
+            circle_counter += 1
+        elif isinstance(edge, Arc):
+            var_name = f"arc_{arc_counter}"
+            edges.append(f"{var_name} = {edge.to_python()}")
+            outer_wire_variable_names.append(var_name)
+            arc_counter += 1
+
+    outer_wire = (
+        f"outer_wire_{index} = Wire([{', '.join(outer_wire_variable_names)}])"
+    )
+    variables = ["\n".join(edges) + "\n" + outer_wire + "\n"]
+
+    inner_wires_var_names = []
+    if len(self.inner_wires) > 0:
+        # Generate code for all inner wires
+        for i, inner_wire in enumerate(self.inner_wires):
+            inner_wire_edges = []
+            inner_wire_var_names = []
+            for edge in inner_wire.edges:
+                if isinstance(edge, Line):
+                    var_name = f"line_{line_counter}"
+                    inner_wire_var = f"{var_name} = Line(start_point={edge.start_point.to_python()}, end_point={edge.end_point.to_python()})"
+                    line_counter += 1
+                elif isinstance(edge, Circle):
+                    var_name = f"circle_{circle_counter}"
+                    inner_wire_var = f"{var_name} = Circle(center={edge.center.to_python()}, radius={edge.radius})"
+                    circle_counter += 1
+                elif isinstance(edge, Arc):
+                    var_name = f"arc_{arc_counter}"
+                    inner_wire_var = f"{var_name} = {edge.to_python()}"
+                    arc_counter += 1
+                else:
+                    raise ValueError(f"Unknown edge type: {type(edge)}")
+                inner_wire_var_names.append(var_name)
+                inner_wire_edges.append(inner_wire_var)
+
+            variables += ["\n".join(inner_wire_edges)]
+            inner_wire_var_name = f"inner_wire_{index}_{i}"
+            variables.append(
+                f"{inner_wire_var_name} = Wire([{', '.join(inner_wire_var_names)}])"
+            )
+            inner_wires_var_names.append(inner_wire_var_name)
+
+        # Create sketch with all inner wires
+        inner_wires_list = "[" + ", ".join(inner_wires_var_names) + "]"
+        sketch = f"sketch_{index} = Sketch(outer_wire = outer_wire_{index}, inner_wires = {inner_wires_list}, sketch_plane = {self.sketch_plane.to_python()})\n"
+    else:
+        sketch = f"sketch_{index} = Sketch(outer_wire = outer_wire_{index}, sketch_plane = {self.sketch_plane.to_python()})\n"
+
+    return "\n".join(variables) + "\n" + sketch
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"index"} type={"Optional[int]"} value={"0"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"normalize"} type={"(self, scale, translation)"}>
+
+Normalize into unit cube and centered at origin
+
+<PySourceCode >
+
+```python
+def normalize(self, scale: Optional[float], translation):
+    """
+    Normalize into unit cube and centered at origin
+    """
+    if not scale:
+        scale = 1 / self.bbox_size
+    for edge in self.outer_wire.edges + self.get_inner_edges():
+        edge.transform(translate=translation, scale=scale)
+
+    self.sketch_plane.origin = (
+        self.sketch_plane.origin + np.array((*translation, 0))
+    ) * scale
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"scale"} type={"Optional[float]"} value={null} />
+<PyParameter name={"translation"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"numericalize"} type={"(self, n=256)"}>
+
+quantize curve parameters into integers
+
+<PySourceCode >
+
+```python
+def numericalize(self, n=256):
+    """quantize curve parameters into integers"""
+    self.sketch_plane.numericalize(n)
+    for edge in self.outer_wire.edges + self.get_inner_edges():
+        edge.numericalize(n)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"n"} type={null} value={"256"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"denumericalize"} type={"(self, n=256)"}>
+
+quantize curve parameters into integers
+
+<PySourceCode >
+
+```python
+def denumericalize(self, n=256):
+    """quantize curve parameters into integers"""
+    self.sketch_plane.denumericalize(n)
+    for edge in self.outer_wire.edges + self.get_inner_edges():
+        edge.denumericalize(n)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"n"} type={null} value={"256"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"get_edge_type_index"} type={"(self, edge_type)"}>
+
+<PySourceCode >
+
+```python
+def get_edge_type_index(self, edge_type):
+    edge_type_map = {
+        "Coincidence": 0,
+        "StartToEndCoincidence": 1,
+        "EndToStartCoincidence": 2,
+        "Horizontal": 3,
+        "Vertical": 4,
+        "Perpendicular": 5,
+        "Parallel": 6,
+    }
+    return edge_type_map.get(edge_type, -1)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"edge_type"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"create_constraint_graph"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def create_constraint_graph(self):
+    import dgl
+
+    # Define dictionaries to store node and edge mappings
+    node_map = {}  # Maps node names to unique IDs
+    node_types = {}  # Maps node IDs to type (line=258, arc=259)
+    # Define the edges here
+    # Syntax:
+    # { (source_type, edge_type, destination_type)  : (src_node_id Tensor , dest_node_id Tensor ) }
+    edges = {
+        ("primitive", "endtostartcoincidence", "primitive"): ([], []),
+        ("primitive", "starttoendcoincidence", "primitive"): ([], []),
+        ("primitive", "parallel", "primitive"): ([], []),
+        ("primitive", "perpendicular", "primitive"): ([], []),
+        ("primitive", "horizontal", "primitive"): ([], []),
+        ("primitive", "vertical", "primitive"): ([], []),
+    }
+    edge_types = []
+
+    # Assign unique node IDs and classify nodes
+    node_counter = 0
+
+    def get_node_id(name, node_type):
+        nonlocal node_counter
+        if name not in node_map:
+            node_map[name] = node_counter
+            node_types[node_counter] = (
+                258 if node_type == "line" else 259
+            )  # Line = 258, Arc = 259
+            node_counter += 1
+        return node_map[name]
+
+    # Process constraints and create edges
+    for constraint in self.constraints:
+        if isinstance(constraint, StartToEndCoincidenceConstraint):
+            e_id = get_node_id(constraint.end_primitive.id, "line")
+            s_id = get_node_id(constraint.start_primitive.id, "line")
+            edges[("primitive", "starttoendcoincidence", "primitive")][0].append(
+                e_id
+            )
+            edges[("primitive", "starttoendcoincidence", "primitive")][1].append(
+                s_id
+            )
+            edge_types.append("EndToStartCoincidence")
+
+        elif isinstance(constraint, EndToStartCoincidenceConstraint):
+            e_id = get_node_id(constraint.end_primitive.id, "line")
+            s_id = get_node_id(constraint.start_primitive.id, "line")
+            edges[("primitive", "endtostartcoincidence", "primitive")][0].append(
+                e_id
+            )
+            edges[("primitive", "endtostartcoincidence", "primitive")][1].append(
+                s_id
+            )
+            edge_types.append("EndToStartCoincidence")
+
+        elif isinstance(constraint, HorizontalConstraint):
+            p_id = get_node_id(constraint.primitive.name, "line")
+            edges[("primitive", "horizontal", "primitive")][0].append(p_id)
+            edges[("primitive", "horizontal", "primitive")][1].append(p_id)
+            edge_types.append("Horizontal")
+
+        elif isinstance(constraint, VerticalConstraint):
+            p_id = get_node_id(constraint.primitive.name, "line")
+            edges[("primitive", "vertical", "primitive")][0].append(p_id)
+            edges[("primitive", "vertical", "primitive")][1].append(p_id)
+            edge_types.append("Vertical")
+
+        elif isinstance(constraint, PerpendicularConstraint):
+            f_id = get_node_id(constraint.first.name, "line")
+            s_id = get_node_id(constraint.second.name, "line")
+            edges[("primitive", "perpendicular", "primitive")][0].append(f_id)
+            edges[("primitive", "perpendicular", "primitive")][1].append(s_id)
+            edge_types.append("Perpendicular")
+
+        elif isinstance(constraint, ParallelConstraint):
+            f_id = get_node_id(constraint.first.name, "line")
+            s_id = get_node_id(constraint.second.name, "line")
+            edges[("primitive", "parallel", "primitive")][0].append(f_id)
+            edges[("primitive", "parallel", "primitive")][1].append(s_id)
+            edge_types.append("Parallel")
+
+    # Create the heterogeneous DGL graph
+    hg = dgl.heterograph(edges)
+
+    # Add node type as a feature (258 for lines, 259 for arcs)
+    node_type_tensor = torch.tensor([node_types[i] for i in range(len(node_map))])
+    hg.ndata["type"] = node_type_tensor
+
+    return hg
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_graph"} type={"(self, with_constraints=True)"}>
+
+<PySourceCode >
+
+```python
+def to_graph(self, with_constraints=True):
+    self.add_coincidence_constraints()
+    from collections import defaultdict
+
+    data = HeteroData()
+
+    node_map = {}  # Maps node names to unique IDs
+    node_types = {}  # Maps node IDs to type (258=line, 259=arc)
+    edge_index_dict = defaultdict(lambda: [[], []])  # Hetero edge index
+
+    node_counter = 0
+    node_attrs = {}
+
+    edge_index_dict = {
+        ("primitive", "starttoendcoincidence", "primitive"): ([], []),
+        ("primitive", "endtostartcoincidence", "primitive"): ([], []),
+        ("primitive", "horizontal", "primitive"): ([], []),
+        ("primitive", "vertical", "primitive"): ([], []),
+        ("primitive", "perpendicular", "primitive"): ([], []),
+        ("primitive", "parallel", "primitive"): ([], []),
+    }
+
+    def get_node_id(name, primitive):
+        nonlocal node_counter
+        if name not in node_map:
+            node_map[name] = node_counter
+            if isinstance(primitive, Line):
+                node_types[node_counter] = 258
+                node_attrs[node_counter] = {
+                    "type": node_types[node_counter],
+                    "start": primitive.start_point.to_json(),
+                    "end": primitive.end_point.to_json(),
+                }
+            if isinstance(primitive, Arc):
+                node_types[node_counter] = 259
+                node_attrs[node_counter] = {
+                    "type": node_types[node_counter],
+                    "start": primitive.start_point.to_json(),
+                    "end": primitive.end_point.to_json(),
+                    "sweep_angle": abs(primitive.start_angle - primitive.end_angle),
+                    "ccw": primitive.ccw,
+                }
+            if isinstance(primitive, Circle):
+                node_types[node_counter] = 260
+                node_attrs[node_counter] = {
+                    "type": node_types[node_counter],
+                    "center": primitive.center.to_json(),
+                    "radius": primitive.radius,
+                }
+            node_counter += 1
+        return node_map[name]
+
+    for constraint in self.constraints:
+        if isinstance(constraint, StartToEndCoincidenceConstraint):
+            e_id = get_node_id(
+                constraint.end_primitive.name, constraint.end_primitive
+            )
+            s_id = get_node_id(
+                constraint.start_primitive.name, constraint.start_primitive
+            )
+            edge_index_dict[("primitive", "starttoendcoincidence", "primitive")][
+                0
+            ].append(e_id)
+            edge_index_dict[("primitive", "starttoendcoincidence", "primitive")][
+                1
+            ].append(s_id)
+        elif isinstance(constraint, EndToStartCoincidenceConstraint):
+            e_id = get_node_id(
+                constraint.end_primitive.name, constraint.end_primitive
+            )
+            s_id = get_node_id(
+                constraint.start_primitive.name, constraint.start_primitive
+            )
+            edge_index_dict[("primitive", "endtostartcoincidence", "primitive")][
+                0
+            ].append(s_id)
+            edge_index_dict[("primitive", "endtostartcoincidence", "primitive")][
+                1
+            ].append(e_id)
+        elif isinstance(constraint, HorizontalConstraint):
+            p_id = get_node_id(constraint.primitive.name, constraint.primitive)
+            edge_index_dict[("primitive", "horizontal", "primitive")][0].append(
+                p_id
+            )
+            edge_index_dict[("primitive", "horizontal", "primitive")][1].append(
+                p_id
+            )
+        elif isinstance(constraint, VerticalConstraint):
+            p_id = get_node_id(constraint.primitive.name, constraint.primitive)
+            edge_index_dict[("primitive", "vertical", "primitive")][0].append(p_id)
+            edge_index_dict[("primitive", "vertical", "primitive")][1].append(p_id)
+
+        elif isinstance(constraint, PerpendicularConstraint):
+            f_id = get_node_id(constraint.first.name, constraint.first)
+            s_id = get_node_id(constraint.second.name, constraint.second)
+            edge_index_dict[("primitive", "perpendicular", "primitive")][0].append(
+                f_id
+            )
+            edge_index_dict[("primitive", "perpendicular", "primitive")][1].append(
+                s_id
+            )
+        elif isinstance(constraint, ParallelConstraint):
+            f_id = get_node_id(constraint.first.name, constraint.first)
+            s_id = get_node_id(constraint.second.name, constraint.second)
+            edge_index_dict[("primitive", "parallel", "primitive")][0].append(f_id)
+            edge_index_dict[("primitive", "parallel", "primitive")][1].append(s_id)
+
+    # Set node features (e.g., type)
+    num_nodes = len(node_map)
+    data["primitive"].x = torch.tensor(
+        [node_types[i] for i in range(num_nodes)], dtype=torch.long
+    )
+
+    starts, ends = [], []
+    centers, radii, sweep_angles, ccws = [], [], [], []
+
+    for i in range(num_nodes):
+        attr = node_attrs[i]
+
+        # Start
+        start = attr.get("start")
+        if start:
+            starts.append([start["x"], start["y"]])
+        else:
+            starts.append([None, None])
+
+        # End
+        end = attr.get("end")
+        if end:
+            ends.append([end["x"], end["y"]])
+        else:
+            ends.append([None, None])
+
+        # Center
+        center = attr.get("center")
+        if center:
+            centers.append([center["x"], center["y"]])
+        else:
+            centers.append([None, None])
+
+        # Radius
+        radii.append(attr.get("radius"))
+
+        # Sweep angle
+        sweep_angles.append(attr.get("sweep_angle"))
+
+        # CCW
+        ccws.append(attr.get("ccw"))
+
+    # Convert to tensors (replace None with NaN)
+    def to_tensor(arr, dim=2):
+        return torch.tensor(
+            [
+                [float(v) if v is not None else float("nan") for v in row]
+                for row in arr
+            ],
+            dtype=torch.float,
+        )
+
+    data["primitive"].start = to_tensor(starts)
+    data["primitive"].end = to_tensor(ends)
+    data["primitive"].center = to_tensor(centers)
+    data["primitive"].radius = torch.tensor(
+        [float(r) if r is not None else float("nan") for r in radii],
+        dtype=torch.float,
+    )
+    data["primitive"].sweep_angle = torch.tensor(
+        [float(a) if a is not None else float("nan") for a in sweep_angles],
+        dtype=torch.float,
+    )
+    data["primitive"].ccw = torch.tensor(
+        [bool(c) if c is not None else False for c in ccws], dtype=torch.bool
+    )
+
+    # Set edges
+    if with_constraints:
+        for (src_type, rel_type, dst_type), (
+            src_list,
+            dst_list,
+        ) in edge_index_dict.items():
+            edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)
+            data[(src_type, rel_type, dst_type)].edge_index = edge_index
+    else:
+        for (src_type, rel_type, dst_type), (
+            src_list,
+            dst_list,
+        ) in edge_index_dict.items():
+            if (
+                rel_type == "endtostartcoincidence"
+                or rel_type == "endtostartcoincidence"
+            ):
+                edge_index = torch.tensor([src_list, dst_list], dtype=torch.long)
+                data[(src_type, rel_type, dst_type)].edge_index = edge_index
+    return data
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"with_constraints"} type={null} value={"True"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"add_coincidence_constraints"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def add_coincidence_constraints(self):
+    edges = self.outer_wire.edges
+    for i, p1 in enumerate(edges):
+        for j, p2 in enumerate(edges):
+            if i == j:
+                continue
+            if isinstance(p1, Circle) or isinstance(p2, Circle):
+                continue
+            if p1.start_point == p2.end_point and False:
+                self.constraints.append(
+                    StartToEndCoincidenceConstraint(
+                        start_primitive=p1, end_primitive=p2
+                    )
+                )
+            if p1.end_point == p2.start_point:
+                self.constraints.append(
+                    EndToStartCoincidenceConstraint(
+                        start_primitive=p1, end_primitive=p2
+                    )
+                )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__init__"} type={"(self, outer_wire, inner_wires=list(), constraints=list(), id=uuid.uuid4(), name='Sketch') -> None"}>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"outer_wire"} type={"Wire"} value={null} />
+<PyParameter name={"inner_wires"} type={"Optional[List[Wire]]"} value={"list()"} />
+<PyParameter name={"constraints"} type={"Optional[List[Constraint]]"} value={"list()"} />
+<PyParameter name={"id"} type={"Optional[uuid.UUID]"} value={"uuid.uuid4()"} />
+<PyParameter name={"name"} type={"str"} value={"'Sketch'"} />
+
+</div>
+
+<PyFunctionReturn type={"None"} />
+
+</PyFunction>

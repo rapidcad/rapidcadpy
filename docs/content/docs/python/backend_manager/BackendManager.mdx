@@ -1,0 +1,318 @@
+---
+title: BackendManager
+---
+
+Manager for CAD backends - handles registration and selection.
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self):
+    self._backends: Dict[str, Type[CADBackend]] = {}
+    self._default_backend: Optional[str] = None
+    self._current_backend: Optional[CADBackend] = None
+
+    # Register built-in backends
+    self.register_backend("inventor", InventorBackend)
+    self.register_backend("occ", OCCBackend)
+    self.register_backend("opencascade", OCCBackend)  # Alias
+
+    # Set default backend
+    self._auto_select_default()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"register_backend"} type={"(self, name, backend_class)"}>
+
+Register a new backend.
+
+Args:
+    name: Name to register the backend under
+    backend_class: Backend class to register
+
+<PySourceCode >
+
+```python
+def register_backend(self, name: str, backend_class: Type[CADBackend]):
+    """
+    Register a new backend.
+
+    Args:
+        name: Name to register the backend under
+        backend_class: Backend class to register
+    """
+    self._backends[name.lower()] = backend_class
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"name"} type={"str"} value={null} />
+<PyParameter name={"backend_class"} type={"Type[CADBackend]"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"get_available_backends"} type={"(self) -> Dict[str, bool]"}>
+
+Get all registered backends and their availability.
+
+Returns:
+    Dictionary mapping backend names to availability status
+
+<PySourceCode >
+
+```python
+def get_available_backends(self) -> Dict[str, bool]:
+    """
+    Get all registered backends and their availability.
+
+    Returns:
+        Dictionary mapping backend names to availability status
+    """
+    result = {}
+    for name, backend_class in self._backends.items():
+        try:
+            backend = backend_class()
+            result[name] = backend.is_available()
+        except:
+            result[name] = False
+    return result
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Dict[str, bool]"} />
+
+</PyFunction>
+
+<PyFunction name={"set_backend"} type={"(self, name) -> bool"}>
+
+Set the current backend.
+
+Args:
+    name: Name of the backend to use
+
+Returns:
+    True if backend was successfully set, False otherwise
+
+<PySourceCode >
+
+```python
+def set_backend(self, name: str) -> bool:
+    """
+    Set the current backend.
+
+    Args:
+        name: Name of the backend to use
+
+    Returns:
+        True if backend was successfully set, False otherwise
+    """
+    name = name.lower()
+    if name not in self._backends:
+        print(f"Backend '{name}' is not registered")
+        return False
+
+    try:
+        backend_class = self._backends[name]
+        backend = backend_class()
+
+        if not backend.is_available():
+            print(f"Backend '{name}' is not available")
+            return False
+
+        self._current_backend = backend
+        print(f"Set backend to: {backend.get_name()}")
+        return True
+
+    except Exception as e:
+        print(f"Failed to initialize backend '{name}': {e}")
+        return False
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"name"} type={"str"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"get_current_backend"} type={"(self) -> Optional[CADBackend]"}>
+
+Get the currently selected backend.
+
+Returns:
+    Current backend instance, or None if no backend is set
+
+<PySourceCode >
+
+```python
+def get_current_backend(self) -> Optional[CADBackend]:
+    """
+    Get the currently selected backend.
+
+    Returns:
+        Current backend instance, or None if no backend is set
+    """
+    return self._current_backend
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Optional[rapidcadpy.backend_manager.CADBackend]"} />
+
+</PyFunction>
+
+<PyFunction name={"get_backend_name"} type={"(self) -> Optional[str]"}>
+
+Get the name of the current backend.
+
+Returns:
+    Name of current backend, or None if no backend is set
+
+<PySourceCode >
+
+```python
+def get_backend_name(self) -> Optional[str]:
+    """
+    Get the name of the current backend.
+
+    Returns:
+        Name of current backend, or None if no backend is set
+    """
+    if self._current_backend:
+        return self._current_backend.get_name()
+    return None
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Optional[str]"} />
+
+</PyFunction>
+
+<PyFunction name={"_auto_select_default"} type={"(self)"}>
+
+Automatically select the best available backend.
+
+<PySourceCode >
+
+```python
+def _auto_select_default(self):
+    """Automatically select the best available backend."""
+    # Priority order: Inventor (if available), then OCC
+    priority_order = ["inventor", "occ"]
+
+    for backend_name in priority_order:
+        if self.set_backend(backend_name):
+            self._default_backend = backend_name
+            break
+
+    if not self._current_backend:
+        print("Warning: No CAD backend is available")
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"export_cad"} type={"(self, cad, filename=None, **kwargs) -> Any"}>
+
+Export CAD using the current backend.
+
+Args:
+    cad: CAD object to export
+    filename: Optional filename
+    **kwargs: Backend-specific options
+
+Returns:
+    Backend-specific result
+
+<PySourceCode >
+
+```python
+def export_cad(self, cad, filename: Optional[str] = None, **kwargs) -> Any:
+    """
+    Export CAD using the current backend.
+
+    Args:
+        cad: CAD object to export
+        filename: Optional filename
+        **kwargs: Backend-specific options
+
+    Returns:
+        Backend-specific result
+    """
+    if not self._current_backend:
+        raise RuntimeError("No backend is currently set")
+
+    return self._current_backend.export_cad(cad, filename, **kwargs)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"cad"} type={null} value={null} />
+<PyParameter name={"filename"} type={"Optional[str]"} value={"None"} />
+<PyParameter name={"kwargs"} type={null} value={"{}"} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Any"} />
+
+</PyFunction>

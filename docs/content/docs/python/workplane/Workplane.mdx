@@ -1,0 +1,375 @@
+---
+title: Workplane
+---
+
+A fluent API workplane that provides CadQuery-like syntax for CAD operations.
+
+This class maintains a working plane and allows chaining operations to build
+complex 3D models using a simple, intuitive syntax.
+
+## Attributes
+
+<PyAttribute name={"plane"} type={null} value={"plane"} />
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self, plane)"}>
+
+Initialize a workplane with a given plane.
+
+Args:
+    plane: The plane to work on
+
+<PySourceCode >
+
+```python
+def __init__(self, plane):
+    """
+    Initialize a workplane with a given plane.
+
+    Args:
+        plane: The plane to work on
+    """
+    self.plane = plane
+    # Import here to avoid circular imports
+    from .cad_types import Vertex
+
+    self._current_position = Vertex(0, 0)
+    self._pending_shapes = []
+    self._current_sketch = None
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"plane"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"moveTo"} type={"(self, x, y) -> Workplane"}>
+
+Move the current position to the specified coordinates.
+
+Args:
+    x: X coordinate
+    y: Y coordinate
+
+Returns:
+    Self for method chaining
+
+<PySourceCode >
+
+```python
+def moveTo(self, x: float, y: float) -> "Workplane":
+    """
+    Move the current position to the specified coordinates.
+
+    Args:
+        x: X coordinate
+        y: Y coordinate
+
+    Returns:
+        Self for method chaining
+    """
+    from .cad_types import Vertex
+
+    self._current_position = Vertex(x, y)
+    return self
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"x"} type={"float"} value={null} />
+<PyParameter name={"y"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.workplane.Workplane"} />
+
+</PyFunction>
+
+<PyFunction name={"circle"} type={"(self, radius) -> Workplane"}>
+
+Create a circle at the current position.
+
+Args:
+    radius: Circle radius
+
+Returns:
+    Self for method chaining
+
+<PySourceCode >
+
+```python
+def circle(self, radius: float) -> "Workplane":
+    """
+    Create a circle at the current position.
+
+    Args:
+        radius: Circle radius
+
+    Returns:
+        Self for method chaining
+    """
+    from .primitive import Circle
+
+    circle = Circle(center=self._current_position, radius=radius)
+    self._pending_shapes.append(circle)
+    return self
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"radius"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.workplane.Workplane"} />
+
+</PyFunction>
+
+<PyFunction name={"line"} type={"(self, x, y) -> Workplane"}>
+
+Create a line from current position to the specified coordinates.
+
+Args:
+    x: End X coordinate
+    y: End Y coordinate
+
+Returns:
+    Self for method chaining
+
+<PySourceCode >
+
+```python
+def line(self, x: float, y: float) -> "Workplane":
+    """
+    Create a line from current position to the specified coordinates.
+
+    Args:
+        x: End X coordinate
+        y: End Y coordinate
+
+    Returns:
+        Self for method chaining
+    """
+    from .cad_types import Vertex
+    from .primitive import Line
+
+    end_point = Vertex(x, y)
+    line = Line(start_point=self._current_position, end_point=end_point)
+    self._pending_shapes.append(line)
+    self._current_position = end_point
+    return self
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"x"} type={"float"} value={null} />
+<PyParameter name={"y"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.workplane.Workplane"} />
+
+</PyFunction>
+
+<PyFunction name={"lineTo"} type={"(self, x, y) -> Workplane"}>
+
+Alias for line() method.
+
+<PySourceCode >
+
+```python
+def lineTo(self, x: float, y: float) -> "Workplane":
+    """
+    Alias for line() method.
+    """
+    return self.line(x, y)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"x"} type={"float"} value={null} />
+<PyParameter name={"y"} type={"float"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.workplane.Workplane"} />
+
+</PyFunction>
+
+<PyFunction name={"rect"} type={"(self, width, height, centered=True) -> Workplane"}>
+
+Create a rectangle.
+
+Args:
+    width: Rectangle width
+    height: Rectangle height
+    centered: If True, center at current position; if False, start at current position
+
+Returns:
+    Self for method chaining
+
+<PySourceCode >
+
+```python
+def rect(self, width: float, height: float, centered: bool = True) -> "Workplane":
+    """
+    Create a rectangle.
+
+    Args:
+        width: Rectangle width
+        height: Rectangle height
+        centered: If True, center at current position; if False, start at current position
+
+    Returns:
+        Self for method chaining
+    """
+    from .cad_types import Vertex
+    from .primitive import Line
+
+    if centered:
+        x_offset = width / 2
+        y_offset = height / 2
+        start_x = self._current_position.x - x_offset
+        start_y = self._current_position.y - y_offset
+    else:
+        start_x = self._current_position.x
+        start_y = self._current_position.y
+
+    # Create rectangle as four lines
+    p1 = Vertex(start_x, start_y)
+    p2 = Vertex(start_x + width, start_y)
+    p3 = Vertex(start_x + width, start_y + height)
+    p4 = Vertex(start_x, start_y + height)
+
+    self._pending_shapes.extend(
+        [
+            Line(start_point=p1, end_point=p2),
+            Line(start_point=p2, end_point=p3),
+            Line(start_point=p3, end_point=p4),
+            Line(start_point=p4, end_point=p1),
+        ]
+    )
+
+    return self
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"width"} type={"float"} value={null} />
+<PyParameter name={"height"} type={"float"} value={null} />
+<PyParameter name={"centered"} type={"bool"} value={"True"} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.workplane.Workplane"} />
+
+</PyFunction>
+
+<PyFunction name={"add"} type={"(self, other) -> SketchBuilder"}>
+
+Combine this workplane with another and return a SketchBuilder.
+
+Args:
+    other: Another workplane to combine with
+
+Returns:
+    SketchBuilder for further operations
+
+<PySourceCode >
+
+```python
+def add(self, other: "Workplane") -> "SketchBuilder":
+    """
+    Combine this workplane with another and return a SketchBuilder.
+
+    Args:
+        other: Another workplane to combine with
+
+    Returns:
+        SketchBuilder for further operations
+    """
+    # Combine pending shapes from both workplanes
+    all_shapes = self._pending_shapes + other._pending_shapes
+    return SketchBuilder(self.plane, all_shapes)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"other"} type={"Workplane"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.workplane.SketchBuilder"} />
+
+</PyFunction>
+
+<PyFunction name={"extrude"} type={"(self, distance, operation='NewBodyFeatureOperation')"}>
+
+Extrude the pending shapes and return a CAD object.
+
+Args:
+    distance: Extrusion distance
+    operation: Extrusion operation type
+
+Returns:
+    CAD object with the extruded feature
+
+<PySourceCode >
+
+```python
+def extrude(self, distance: float, operation: str = "NewBodyFeatureOperation"):
+    """
+    Extrude the pending shapes and return a CAD object.
+
+    Args:
+        distance: Extrusion distance
+        operation: Extrusion operation type
+
+    Returns:
+        CAD object with the extruded feature
+    """
+    # Create a sketch builder and extrude
+    builder = SketchBuilder(self.plane, self._pending_shapes)
+    return builder.extrude(distance, operation)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"distance"} type={"float"} value={null} />
+<PyParameter name={"operation"} type={"str"} value={"'NewBodyFeatureOperation'"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

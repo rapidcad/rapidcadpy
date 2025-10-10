@@ -1,0 +1,267 @@
+---
+title: Vertex
+---
+
+## Attributes
+
+<PyAttribute name={"id"} type={null} value={"id if id else uuid.uuid4()"} />
+
+<PyAttribute name={"name"} type={null} value={"name"} />
+
+<PyAttribute name={"x"} type={null} value={null} />
+
+<PyAttribute name={"y"} type={null} value={null} />
+
+## Functions
+
+<PyFunction name={"__new__"} type={"(cls, x, y, id=None, name='unnamed_vertex')"}>
+
+<PySourceCode >
+
+```python
+def __new__(
+    cls,
+    x: float,
+    y: float,
+    id: Optional[uuid.UUID] = None,
+    name: str = "unnamed_vertex",
+):
+    obj = np.asarray([float(x), float(y)])
+    obj = np.round(obj, 6).view(cls)
+    return obj
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"cls"} type={null} value={null} />
+<PyParameter name={"x"} type={"float"} value={null} />
+<PyParameter name={"y"} type={"float"} value={null} />
+<PyParameter name={"id"} type={"Optional[uuid.UUID]"} value={"None"} />
+<PyParameter name={"name"} type={"str"} value={"'unnamed_vertex'"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__init__"} type={"(self, x, y, id=None, name='unnamed_vertex')"}>
+
+<PySourceCode >
+
+```python
+def __init__(
+    self,
+    x: float,
+    y: float,
+    id: Optional[uuid.UUID] = None,
+    name: str = "unnamed_vertex",
+):
+    # Assign the extra attributes
+    self.id = id if id else uuid.uuid4()
+    self.name = name
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"x"} type={"float"} value={null} />
+<PyParameter name={"y"} type={"float"} value={null} />
+<PyParameter name={"id"} type={"Optional[uuid.UUID]"} value={"None"} />
+<PyParameter name={"name"} type={"str"} value={"'unnamed_vertex'"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__array_finalize__"} type={"(self, obj)"}>
+
+<PySourceCode >
+
+```python
+def __array_finalize__(self, obj):
+    if obj is None:
+        return
+    self.id = getattr(obj, "id", None)
+    self.name = getattr(obj, "name", "unnamed_vertex")
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"obj"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__str__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __str__(self):
+    return f"Vertex(x={self.x}, y={self.y})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_json(self):
+    return {
+        "x": round(float(self.x), 6),
+        "y": round(float(self.y), 6),
+    }
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"from_json"} type={"(json_data)"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def from_json(json_data):
+    return Vertex(json_data["x"], json_data["y"])
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"json_data"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__eq__"} type={"(self, other)"}>
+
+<PySourceCode >
+
+```python
+def __eq__(self, other):
+    tolerance = 1e-9
+    if not isinstance(other, Vertex):
+        return math.isclose(self.x, other[0], abs_tol=tolerance) and math.isclose(
+            self.y, other[1], abs_tol=tolerance
+        )
+    return math.isclose(self.x, other.x, abs_tol=tolerance) and math.isclose(
+        self.y, other.y, abs_tol=tolerance
+    )
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"other"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"__hash__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __hash__(self):
+    return hash((round(self.x, 6), round(self.y, 6)))
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_python"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_python(self):
+    return f"Vertex(x={self.x}, y={self.y})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"round"} type={"(self, decimals=0)"}>
+
+<PySourceCode >
+
+```python
+def round(self, decimals=0):
+    self[0] = round(self[0], decimals)
+    self[1] = round(self[1], decimals)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"decimals"} type={null} value={"0"} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

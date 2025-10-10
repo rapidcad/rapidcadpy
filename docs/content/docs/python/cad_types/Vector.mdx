@@ -1,0 +1,169 @@
+---
+title: Vector
+---
+
+## Attributes
+
+<PyAttribute name={"x"} type={null} value={null} />
+
+<PyAttribute name={"y"} type={null} value={null} />
+
+<PyAttribute name={"z"} type={null} value={null} />
+
+## Functions
+
+<PyFunction name={"__new__"} type={"(cls, x, y, z=0) -> Vector"}>
+
+<PySourceCode >
+
+```python
+def __new__(cls, x: float, y: float, z: float = 0) -> "Vector":
+    return np.asarray([x, y, z]).view(cls)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"cls"} type={null} value={null} />
+<PyParameter name={"x"} type={"float"} value={null} />
+<PyParameter name={"y"} type={"float"} value={null} />
+<PyParameter name={"z"} type={"float"} value={"0"} />
+
+</div>
+
+<PyFunctionReturn type={"rapidcadpy.cad_types.Vector"} />
+
+</PyFunction>
+
+<PyFunction name={"__eq__"} type={"(self, other) -> bool"}>
+
+<PySourceCode >
+
+```python
+def __eq__(self, other: object) -> bool:
+    return np.allclose(self, other)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"other"} type={"object"} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"normalize"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def normalize(self):
+    return self / np.linalg.norm(self)
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"get_2d"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def get_2d(self):
+    return np.array((self[0], self[1]))
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_json"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_json(self):
+    return {
+        "x": float(self.x),
+        "y": float(self.y),
+        "z": float(self.z),
+    }
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"from_json"} type={"(json_data)"}>
+
+<PySourceCode >
+
+```python
+@staticmethod
+def from_json(json_data):
+    return Vector(json_data["x"], json_data["y"], json_data["z"])
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"json_data"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"to_python"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def to_python(self):
+    return f"Vector({self.x}, {self.y}, {self.z})"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>

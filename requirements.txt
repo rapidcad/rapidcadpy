@@ -1,0 +1,42 @@
+# RapidCAD-Py Requirements
+# Base configuration - Core dependencies for rapidcadpy
+
+# Core numerical computing
+numpy>=1.20.0
+
+# Plotting and visualization
+plotly>=5.0.0
+matplotlib>=3.5.0
+seaborn
+
+# Image processing
+Pillow>=8.0.0
+
+# Progress bars and utilities
+tqdm>=4.60.0
+strenum
+
+# Development dependencies (optional)
+pytest>=6.0.0
+
+# Special configuration 1: rapidcadpy[ocp] - OpenCASCADE integration
+# Uncomment the following line for OCC/OpenCASCADE support
+# cadquery-ocp>=7.8.0
+
+# Special configuration 2: rapidcadpy[inventor] - Autodesk Inventor integration  
+# Uncomment the following line for Windows Inventor COM automation support
+# pywin32>=300
+
+# Installation instructions:
+# 
+# Base install:
+# pip install -r requirements.txt
+#
+# For OCC support (Linux/macOS/Windows):
+# pip install rapidcadpy[ocp] cadquery-ocp
+#
+# For Inventor support (Windows only):
+# pip install rapidcadpy[inventor] pywin32
+#
+# For both integrations:
+# pip install rapidcadpy[ocp,inventor] cadquery-ocp pywin32

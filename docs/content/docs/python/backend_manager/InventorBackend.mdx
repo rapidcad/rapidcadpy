@@ -1,0 +1,281 @@
+---
+title: InventorBackend
+---
+
+Inventor backend using the existing InventorIntegration.
+
+## Functions
+
+<PyFunction name={"__init__"} type={"(self)"}>
+
+<PySourceCode >
+
+```python
+def __init__(self):
+    self._integration = None
+    self._initialize_integration()
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"_initialize_integration"} type={"(self)"}>
+
+Initialize the Inventor integration if available.
+
+<PySourceCode >
+
+```python
+def _initialize_integration(self):
+    """Initialize the Inventor integration if available."""
+    try:
+        from .integrations.inventor_integration import InventorIntegration
+
+        self._integration = InventorIntegration()
+    except Exception as e:
+        print(f"Warning: Could not initialize Inventor backend: {e}")
+        self._integration = None
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
+
+<PyFunction name={"export_cad"} type={"(self, cad, filename=None, **kwargs) -> Any"}>
+
+Export CAD to Inventor format with enhanced saving options.
+
+Args:
+    cad: CAD object to export
+    filename: Optional filename to save (.ipt file)
+    **kwargs: Additional options:
+        - close_on_save (bool): Close document after saving (default: False)
+        - save_as_copy (bool): Save as copy without changing current document (default: False)
+        - overwrite (bool): Overwrite existing file if it exists (default: True)
+        - visible (bool): Make Inventor application visible (default: current state)
+
+Returns:
+    Inventor part document object
+
+<PySourceCode >
+
+```python
+def export_cad(self, cad, filename: Optional[str] = None, **kwargs) -> Any:
+    """
+    Export CAD to Inventor format with enhanced saving options.
+
+    Args:
+        cad: CAD object to export
+        filename: Optional filename to save (.ipt file)
+        **kwargs: Additional options:
+            - close_on_save (bool): Close document after saving (default: False)
+            - save_as_copy (bool): Save as copy without changing current document (default: False)
+            - overwrite (bool): Overwrite existing file if it exists (default: True)
+            - visible (bool): Make Inventor application visible (default: current state)
+
+    Returns:
+        Inventor part document object
+    """
+    if not self.is_available():
+        raise RuntimeError("Inventor backend is not available")
+
+    close_on_save = kwargs.get("close_on_save", False)
+    save_as_copy = kwargs.get("save_as_copy", False)
+    overwrite = kwargs.get("overwrite", True)
+    visible = kwargs.get("visible", None)
+
+    # Set Inventor visibility if specified
+    if visible is not None:
+        self._integration.inventor_app.Visible = visible
+
+    # Export to Inventor
+    result = self._integration.to_inventor(cad, filename, close_on_save)
+
+    # Enhanced saving logic
+    if filename:
+        # Ensure .ipt extension
+        if not filename.lower().endswith(".ipt"):
+            filename = filename + ".ipt"
+
+        import os
+
+        if os.path.exists(filename) and not overwrite:
+            raise FileExistsError(
+                f"File {filename} already exists and overwrite=False"
+            )
+
+        try:
+            if save_as_copy:
+                # Save as copy without changing the current document
+                self._integration.part_doc.SaveAs(
+                    filename, True
+                )  # True = SaveCopyAs
+                print(f"✓ Saved copy to: {filename}")
+            else:
+                # Regular save
+                self._integration.part_doc.SaveAs(filename, False)
+                print(f"✓ Saved Inventor file: {filename}")
+
+            if close_on_save:
+                self._integration.part_doc.Close()
+                print("✓ Closed Inventor document")
+
+        except Exception as e:
+            print(f"Warning: Could not save file {filename}: {e}")
+
+    return result
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"cad"} type={null} value={null} />
+<PyParameter name={"filename"} type={"Optional[str]"} value={"None"} />
+<PyParameter name={"kwargs"} type={null} value={"{}"} />
+
+</div>
+
+<PyFunctionReturn type={"typing.Any"} />
+
+</PyFunction>
+
+<PyFunction name={"save_ipt"} type={"(self, cad, filename, **kwargs) -> bool"}>
+
+Convenience method specifically for saving .ipt files.
+
+Args:
+    cad: CAD object to export
+    filename: Filename for the .ipt file (extension added automatically)
+    **kwargs: Same options as export_cad
+
+Returns:
+    True if save was successful, False otherwise
+
+<PySourceCode >
+
+```python
+def save_ipt(self, cad, filename: str, **kwargs) -> bool:
+    """
+    Convenience method specifically for saving .ipt files.
+
+    Args:
+        cad: CAD object to export
+        filename: Filename for the .ipt file (extension added automatically)
+        **kwargs: Same options as export_cad
+
+    Returns:
+        True if save was successful, False otherwise
+    """
+    try:
+        self.export_cad(cad, filename, **kwargs)
+        return True
+    except Exception as e:
+        print(f"Failed to save .ipt file: {e}")
+        return False
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+<PyParameter name={"cad"} type={null} value={null} />
+<PyParameter name={"filename"} type={"str"} value={null} />
+<PyParameter name={"kwargs"} type={null} value={"{}"} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"is_available"} type={"(self) -> bool"}>
+
+Check if Inventor backend is available.
+
+<PySourceCode >
+
+```python
+def is_available(self) -> bool:
+    """Check if Inventor backend is available."""
+    return self._integration is not None
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"bool"} />
+
+</PyFunction>
+
+<PyFunction name={"get_name"} type={"(self) -> str"}>
+
+Get backend name.
+
+<PySourceCode >
+
+```python
+def get_name(self) -> str:
+    """Get backend name."""
+    return "Inventor"
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={"str"} />
+
+</PyFunction>
+
+<PyFunction name={"get_integration"} type={"(self)"}>
+
+Get the underlying InventorIntegration instance.
+
+<PySourceCode >
+
+```python
+def get_integration(self):
+    """Get the underlying InventorIntegration instance."""
+    return self._integration
+```
+
+</PySourceCode>
+
+<div >
+
+<PyParameter name={"self"} type={null} value={null} />
+
+</div>
+
+<PyFunctionReturn type={null} />
+
+</PyFunction>
