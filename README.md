@@ -1,30 +1,31 @@
 # PyCadSeq
 
-A powerful Python library for CAD sequence processing and manipulation, designed for working with parametric 3D models, sketches, and construction histories.
+A new Python library under heavy development for CAD sequence processing and manipulation. Designed with a primary focus on seamless integration with industry-grade CAD software like AutoDesk Inventor, enabling professional-level parametric 3D modeling, sketches, and construction history management.
 
-![Status](https://img.shields.io/badge/status-alpha-yellow.svg)
+![Status](https://img.shields.io/badge/status-under%20heavy%20development-orange.svg)
+![Focus](https://img.shields.io/badge/focus-AutoDesk%20Inventor%20Integration-blue.svg)
 
 ## 🚀 Features
 
+- **Industry-Grade CAD Integration**: Deep integration with AutoDesk Inventor for professional CAD workflows
 - **Parametric CAD Modeling**: Create and manipulate 3D models using construction sequences
-- **Sketch-based Design**: Work with 2D sketches containing lines, arcs, circles, and constraints
+- **Professional Sketch-based Design**: Work with 2D sketches containing lines, arcs, circles, and constraints
 - **Multiple Export Formats**: Export to STEP, STL, and native CAD formats
-- **CAD System Integration**: Built-in support for Autodesk Inventor and OpenCASCADE
-- **Data Processing**: Parse and process CAD data from Fusion 360 Gallery and DeepCAD datasets
-- **Visualization**: Built-in plotting and 3D visualization capabilities
-- **Constraint System**: Handle geometric constraints like coincidence, perpendicularity, and parallelism
+- **Enterprise CAD System Support**: Built-in support for Autodesk Inventor and OpenCASCADE
+- **Advanced Data Processing**: Parse and process CAD data from Fusion 360 Gallery and DeepCAD datasets
+- **Professional Visualization**: Built-in plotting and 3D visualization capabilities
+- **Comprehensive Constraint System**: Handle geometric constraints like coincidence, perpendicularity, and parallelism
+
+> **Note**: This library is currently under heavy development. Features and APIs may change as we continue to add features.
 
 ## 📦 Installation
 
 ### From source
 ```bash
-git clone https://github.com/yourusername/rapidcadpy.git
+git clone https://github.com/rapidcad/rapidcadpy.git
 cd rapidcadpy
 pip install -e .
 ```
-
-
-The documentation will be available at `docs/_build/html/index.html`.
 
 
 ## 🛠️ Dependencies
