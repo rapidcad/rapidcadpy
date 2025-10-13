@@ -3,13 +3,13 @@ from typing import TYPE_CHECKING, Optional, Tuple
 
 from win32com.client import constants
 
-from rapidcadpy import Workplane
-from rapidcadpy.cad_types import VectorLike, Vertex
+from pycadseq import Workplane
+from pycadseq.cad_types import VectorLike, Vertex
 
-from rapidcadpy.integrations.inventor.shape import InventorShape
+from pycadseq.integrations.inventor.shape import InventorShape
 
 if TYPE_CHECKING:
-    from rapidcadpy.integrations.inventor.app import InventorApp
+    from pycadseq.integrations.inventor.app import InventorApp
 
 class InventorWorkPlane(Workplane):
     def __init__(
@@ -69,10 +69,19 @@ class InventorWorkPlane(Workplane):
         self._current_position = Vertex(0, 0)
 
     def line_to(self, x: float, y: float) -> "InventorWorkPlane":
+        """Draw a line from the current position to the specified point."""
+        # Get start point from current position
         start_point = self._current_position
+        
+        # Create sketch points for start and end
         sp = self._get_sketch_point(start_point.x, start_point.y)
         ep = self._get_sketch_point(x, y)
-        self.sketch.SketchLines.AddByTwoPoints(sp, ep)
+        
+        # Only create a line if start and end points are different
+        if abs(start_point.x - x) > 1e-9 or abs(start_point.y - y) > 1e-9:
+            self.sketch.SketchLines.AddByTwoPoints(sp, ep)
+        
+        # Update current position
         self._current_position = Vertex(x, y)
         return self
 

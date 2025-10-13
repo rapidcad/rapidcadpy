@@ -104,3 +104,29 @@ class TestInventorReverseEngineer:
         assert "app = InventorApp()" in generated_code
         assert "line_to" in generated_code
         assert "revolve" in generated_code
+    
+    def test_reverse_engineer_complex_shaft(self, sample_ipt_complex_shaft):
+        """Test reverse engineering a complex shaft."""
+        print(sample_ipt_complex_shaft)
+        assert os.path.exists(sample_ipt_complex_shaft)
+        generated_code = reverse_engineer_ipt(sample_ipt_complex_shaft)
+
+        # Verify the generated code contains expected elements
+        print(generated_code)
+        assert "from pycadseq.integrations.inventor import InventorApp" in generated_code
+        assert "app = InventorApp()" in generated_code
+        assert "line_to" in generated_code
+        assert "revolve" in generated_code
+
+    def test_reverse_engineer_complex_shaft_2(self, sample_ipt_complex_shaft):
+        """Test reverse engineering a complex shaft."""
+        print(sample_ipt_complex_shaft)
+        assert os.path.exists(sample_ipt_complex_shaft)
+        generated_code = reverse_engineer_ipt(sample_ipt_complex_shaft)
+
+        # Verify the generated code contains expected elements
+        print(generated_code)
+        assert "from pycadseq.integrations.inventor import InventorApp" in generated_code
+        assert "app = InventorApp()" in generated_code
+        assert "line_to" in generated_code
+        assert "revolve" in generated_code

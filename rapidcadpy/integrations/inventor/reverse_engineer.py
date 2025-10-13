@@ -20,7 +20,7 @@ class InventorReverseEngineer:
 
         # Initialize code
         self.generated_code = [
-            "from rapidcadpy.integrations.inventor import InventorApp",
+            "from pycadseq.integrations.inventor import InventorApp",
             "",
             "# Initialize Inventor application",
             "app = InventorApp()",
@@ -168,35 +168,83 @@ class InventorReverseEngineer:
         # Collect lines
         for i in range(1, sketch.SketchLines.Count + 1):
             line = sketch.SketchLines.Item(i)
-            start_pt = line.StartSketchPoint.Geometry
-            end_pt = line.EndSketchPoint.Geometry
-            elements.append(
-                {
-                    "type": "line",
-                    "start": (round(start_pt.X, 6), round(start_pt.Y, 6)),
-                    "end": (round(end_pt.X, 6), round(end_pt.Y, 6)),
-                    "used": False,
-                }
-            )
+            try:
+                # Check if the line has valid start and end points
+                if line.StartSketchPoint is None or line.EndSketchPoint is None:
+                    continue  # Skip invalid lines
+                
+                start_pt = line.StartSketchPoint.Geometry
+                end_pt = line.EndSketchPoint.Geometry
+                
+                # Additional check for valid geometry
+                if start_pt is None or end_pt is None:
+                    continue
+                
+                elements.append(
+                    {
+                        "type": "line",
+                        "start": (round(start_pt.X, 6), round(start_pt.Y, 6)),
+                        "end": (round(end_pt.X, 6), round(end_pt.Y, 6)),
+                        "used": False,
+                    }
+                )
+            except Exception as e:
+                # Skip lines that can't be processed
+                print(f"Warning: Skipping line {i} due to error: {e}")
+                continue
 
         # Collect arcs
         for i in range(1, sketch.SketchArcs.Count + 1):
             arc = sketch.SketchArcs.Item(i)
-            start_pt = arc.StartSketchPoint.Geometry
-            end_pt = arc.EndSketchPoint.Geometry
-            center_pt = arc.CenterSketchPoint.Geometry
-            elements.append(
-                {
-                    "type": "arc",
-                    "start": (round(start_pt.X, 6), round(start_pt.Y, 6)),
-                    "end": (round(end_pt.X, 6), round(end_pt.Y, 6)),
-                    "center": (round(center_pt.X, 6), round(center_pt.Y, 6)),
-                    "radius": round(arc.Radius, 6),
-                    "start_angle": arc.StartAngle,
-                    "end_angle": arc.EndAngle,
-                    "used": False,
-                }
-            )
+            try:
+                # Check if the arc has valid start, end, and center points
+                if (arc.StartSketchPoint is None or 
+                    arc.EndSketchPoint is None or 
+                    arc.CenterSketchPoint is None):
+                    continue  # Skip invalid arcs
+                
+                start_pt = arc.StartSketchPoint.Geometry
+                end_pt = arc.EndSketchPoint.Geometry
+                center_pt = arc.CenterSketchPoint.Geometry
+                
+                # Additional check for valid geometry
+                if start_pt is None or end_pt is None or center_pt is None:
+                    continue
+                
+                # Try to get angles, but calculate them if not available
+                try:
+                    start_angle = arc.StartAngle
+                    end_angle = arc.EndAngle
+                except AttributeError:
+                    # Calculate angles from points if properties not available
+                    start_angle = math.atan2(start_pt.Y - center_pt.Y, start_pt.X - center_pt.X)
+                    end_angle = math.atan2(end_pt.Y - center_pt.Y, end_pt.X - center_pt.X)
+                
+                # Try to get radius, calculate if not available
+                try:
+                    radius = round(arc.Radius, 6)
+                except AttributeError:
+                    # Calculate radius from center to start point
+                    dx = start_pt.X - center_pt.X
+                    dy = start_pt.Y - center_pt.Y
+                    radius = round(math.sqrt(dx*dx + dy*dy), 6)
+                
+                elements.append(
+                    {
+                        "type": "arc",
+                        "start": (round(start_pt.X, 6), round(start_pt.Y, 6)),
+                        "end": (round(end_pt.X, 6), round(end_pt.Y, 6)),
+                        "center": (round(center_pt.X, 6), round(center_pt.Y, 6)),
+                        "radius": radius,
+                        "start_angle": start_angle,
+                        "end_angle": end_angle,
+                        "used": False,
+                    }
+                )
+            except Exception as e:
+                # Skip arcs that can't be processed
+                print(f"Warning: Skipping arc {i} due to error: {e}")
+                continue
 
         # Build connected paths
         paths = []
@@ -234,16 +282,38 @@ class InventorReverseEngineer:
         # Add circles as separate paths
         for i in range(1, sketch.SketchCircles.Count + 1):
             circle = sketch.SketchCircles.Item(i)
-            center_pt = circle.CenterSketchPoint.Geometry
-            paths.append(
-                [
-                    {
-                        "type": "circle",
-                        "center": (round(center_pt.X, 6), round(center_pt.Y, 6)),
-                        "radius": round(circle.Radius, 6),
-                    }
-                ]
-            )
+            try:
+                # Check if the circle has valid center point
+                if circle.CenterSketchPoint is None:
+                    continue  # Skip invalid circles
+                
+                center_pt = circle.CenterSketchPoint.Geometry
+                
+                # Additional check for valid geometry
+                if center_pt is None:
+                    continue
+                
+                # Try to get radius, use default if not available
+                try:
+                    radius = round(circle.Radius, 6)
+                except AttributeError:
+                    # Default radius if property not available
+                    radius = 1.0
+                    print(f"Warning: Could not get radius for circle {i}, using default: {radius}")
+                
+                paths.append(
+                    [
+                        {
+                            "type": "circle",
+                            "center": (round(center_pt.X, 6), round(center_pt.Y, 6)),
+                            "radius": radius,
+                        }
+                    ]
+                )
+            except Exception as e:
+                # Skip circles that can't be processed
+                print(f"Warning: Skipping circle {i} due to error: {e}")
+                continue
 
         return paths
 
