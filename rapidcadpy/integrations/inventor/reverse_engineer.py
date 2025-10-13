@@ -20,7 +20,7 @@ class InventorReverseEngineer:
 
         # Initialize code
         self.generated_code = [
-            "from pycadseq.integrations.inventor import InventorApp",
+            "from rapidcadpy import InventorApp",
             "",
             "# Initialize Inventor application",
             "app = InventorApp()",
@@ -95,9 +95,8 @@ class InventorReverseEngineer:
                     f"# Sketch {sketch_num}",
                     f"{wp_var} = app.work_plane(",
                     f"    origin={workplane_info['origin']},",
-                    f"    x_dir={workplane_info['x_dir']},",
-                    f"    y_dir={workplane_info['y_dir']},",
-                    "    app=app",
+                    f"    normal={workplane_info['normal']},",
+                    "     app=app",
                     ")",
                     "",
                 ]
@@ -139,23 +138,10 @@ class InventorReverseEngineer:
             plane = planar_entity.Geometry
             origin = plane.RootPoint
             normal = plane.Normal
-            # Create reasonable X and Y directions
-            if abs(normal.Z) < 0.9:
-                x_dir = normal.CrossProduct(
-                    self.app.transient_geom.CreateVector(0, 0, 1)
-                )
-            else:
-                x_dir = normal.CrossProduct(
-                    self.app.transient_geom.CreateVector(0, 1, 0)
-                )
-            x_dir.Normalize()
-            y_dir = normal.CrossProduct(x_dir)
-            y_dir.Normalize()
-
+            
             return {
                 "origin": (round(origin.X, 6), round(origin.Y, 6), round(origin.Z, 6)),
-                "x_dir": (round(x_dir.X, 6), round(x_dir.Y, 6), round(x_dir.Z, 6)),
-                "y_dir": (round(y_dir.X, 6), round(y_dir.Y, 6), round(y_dir.Z, 6)),
+                "normal": (round(normal.X, 6), round(normal.Y, 6), round(normal.Z, 6)),
             }
         except:
             # Default to XY plane
@@ -371,27 +357,30 @@ class InventorReverseEngineer:
         """Analyze an extrude feature."""
         # Get distance
         extent = feature.Extent
-        if hasattr(extent, "Distance"):
-            distance = round(extent.Distance, 6)
-        else:
-            distance = 10.0  # Default
+        try:
+            distance_extent = win32.CastTo(extent, "DistanceExtent")
 
-        # Get operation type
-        operation_map = {
-            constants.kNewBodyOperation: "NewBodyFeatureOperation",
-            constants.kJoinOperation: "JoinBodyFeatureOperation",
-            constants.kCutOperation: "Cut",
-            constants.kIntersectOperation: "Intersect",
-        }
-        operation = operation_map.get(feature.Operation, "NewBodyFeatureOperation")
+            distance = round(distance_extent.Distance.Value, 6)
+            # Get operation type
+            operation_map = {
+                constants.kNewBodyOperation: "NewBodyFeatureOperation",
+                constants.kJoinOperation: "JoinBodyFeatureOperation",
+                constants.kCutOperation: "Cut",
+                constants.kIntersectOperation: "Intersect",
+            }
+            operation = operation_map.get(feature.Operation, "NewBodyFeatureOperation")
 
-        self.generated_code.extend(
-            [
-                f"# Extrude feature {feature_num}",
-                f"shape{feature_num} = {wp_var}.extrude({distance}, '{operation}')",
-                "",
-            ]
-        )
+            self.generated_code.extend(
+                [
+                    f"# Extrude feature {feature_num}",
+                    f"shape{feature_num} = {wp_var}.extrude({distance}, '{operation}')",
+                    "",
+                ]
+            )
+        except Exception as e:
+            raise RuntimeError(f"Failed to analyze extrude feature: {e}")
+
+        
 
     def _analyze_revolve_feature(self, feature, wp_var: str, feature_num: int):
         """Analyze a revolve feature."""

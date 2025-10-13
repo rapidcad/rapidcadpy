@@ -1,22 +1,28 @@
-from pycadseq.app import App
+from typing import TYPE_CHECKING, Optional, Any
+
+from rapidcadpy.app import App
+from rapidcadpy.cad_types import VectorLike
+
+if TYPE_CHECKING:
+    from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane
 
 
 class InventorApp(App):
-    def __init__(self):
+    def __init__(self, headless: bool = True):
         try:
             import win32com.client as win32
             from win32com.client import gencache, Dispatch
         except ImportError:
             raise ImportError("pywin32 is required for Inventor integration. Install with: pip install pywin32")
 
-        from pycadseq.integrations.inventor.workplane import InventorWorkPlane
+        from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane
 
         super().__init__(InventorWorkPlane)
         try:
             self.inventor_app = win32.GetActiveObject("Inventor.Application")
         except Exception:
             self.inventor_app = Dispatch("Inventor.Application")
-            self.inventor_app.Visible = False
+            self.inventor_app.Visible = not headless
 
         # Load the Inventor COM wrapper (type lib)
         self.mod = gencache.EnsureModule(
@@ -51,5 +57,24 @@ class InventorApp(App):
                 f"File '{file_path}' is not a valid Inventor Part Document."
             )
 
-    def work_plane(self, name: str = "XY") -> "InventorWorkPlane":
-        return super().work_plane(name)  # type: ignore
+    def work_plane(self, name: str = "XY", origin: Optional[VectorLike] = None, normal: Optional[VectorLike] = None, **kwargs) -> "InventorWorkPlane":
+        """
+        Create a workplane either by name or by origin and normal vector.
+        
+        Args:
+            name: Standard plane name ("XY", "XZ", "YZ") - used if origin/normal not provided
+            origin: Origin point for custom workplane
+            normal: Normal vector for custom workplane  
+            **kwargs: Additional arguments (like app parameter)
+            
+        Returns:
+            InventorWorkPlane instance
+        """
+        from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane
+        
+        if origin is not None and normal is not None:
+            # Create custom workplane from origin and normal
+            return InventorWorkPlane.from_origin_normal(origin, normal, app=self)
+        else:
+            # Create standard named workplane
+            return super().work_plane(name)  # type: ignore

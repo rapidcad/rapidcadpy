@@ -107,7 +107,7 @@ cube.export("model.ipt")
 ```python
 # Load from Autodesk Inventor file
 app = InventorApp()
-doc = app.open_document(file_path)
+doc = app.open_document(your_ipt_file_path)
 
 # Create reverse engineer instance
 engineer = InventorReverseEngineer(doc)
