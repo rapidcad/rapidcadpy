@@ -106,10 +106,14 @@ cube.export("model.ipt")
 
 ```python
 # Load from Autodesk Inventor file
-cad = Cad.from_inventor("existing_model.ipt")
+app = InventorApp()
+doc = app.open_document(file_path)
 
-# Load from JSON (Fusion 360 Gallery format)
-cad = Cad.from_json(json_data)
+# Create reverse engineer instance
+engineer = InventorReverseEngineer(doc)
+
+# Generate code
+rapid_cad_code = engineer.analyze_ipt_file()
 ```
 
 ## 🎯 Core Concepts
