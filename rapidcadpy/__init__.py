@@ -9,14 +9,11 @@ __author__ = "Your Name"
 __email__ = "your.email@example.com"
 
 # Core fluent API components
-from .app import App, OpenCascadeApp
-from .cad import Cad
-
+from .app import App
 # Core geometry types for fluent API
 from .cad_types import Vector, Vertex
 
 # Essential primitives for fluent modeling
-from .primitive import Arc, Circle, Line
 from .workplane import Workplane
 
 # Optional integrations - import with error handling
@@ -24,6 +21,10 @@ try:
     from .integrations.inventor.app import InventorApp
 except ImportError:
     InventorApp = None
+try:
+    from .integrations.occ.app import OpenCascadeApp
+except ImportError:
+    OpenCascadeApp = None
 
 # Handle optional dependencies that might not be available
 try:
@@ -40,14 +41,10 @@ __all__ = [
     # Core fluent API
     "App",
     "Workplane",
-    "Cad",
     # Geometry types
     "Vector",
     "Vertex",
     # Primitives
-    "Line",
-    "Arc",
-    "Circle",
     # Optional integrations
     "OpenCascadeApp",
     "InventorApp",

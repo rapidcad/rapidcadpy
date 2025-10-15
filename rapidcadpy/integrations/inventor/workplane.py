@@ -1,44 +1,133 @@
 import math
-from typing import TYPE_CHECKING, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Optional, Tuple
 
 from win32com.client import constants
 
-from pycadseq import Workplane
-from pycadseq.cad_types import VectorLike, Vertex
+from rapidcadpy import Workplane
+from rapidcadpy.cad_types import VectorLike, Vertex
 
-from pycadseq.integrations.inventor.shape import InventorShape
+from rapidcadpy.integrations.inventor.shape import InventorShape
 
 if TYPE_CHECKING:
-    from pycadseq.integrations.inventor.app import InventorApp
+    from rapidcadpy.integrations.inventor.app import InventorApp
 
 class InventorWorkPlane(Workplane):
     def __init__(
         self,
-        origin: VectorLike = (0.0, 0.0, 0.0),
-        x_dir: VectorLike = (1.0, 0.0, 0.0),
-        y_dir: VectorLike = (0.0, 1.0, 0.0),
-        z_dir: VectorLike = (0.0, 0.0, 1.0),
-        app: Optional["InventorApp"] = None,
+        app: "InventorApp",
+        sketch 
     ):
-        super().__init__(origin=origin, x_dir=x_dir, y_dir=y_dir, z_dir=z_dir, app=app)
+        super().__init__(app=app)
         self.tg = self.app.transient_geom
         self.app: "InventorApp" = app  # type: ignore
+        self.sketch = sketch
+        # no duplicate point objects in the sketch, use dict
+        self.point2d_dict = {}
+        self.sketchpoint_dict = {}
 
-        # create a workplane in inventor
-        origin_pt = self.tg.CreatePoint(origin[0], origin[1], origin[2])
-        x_vec = self.tg.CreateUnitVector(x_dir[0], x_dir[1], x_dir[2])
-        y_vec = self.tg.CreateUnitVector(y_dir[0], y_dir[1], y_dir[2])
-        work_plane = self.app.comp_def.WorkPlanes.AddFixed(
+    @classmethod
+    def from_origin_normal(
+        cls, origin: VectorLike, normal: VectorLike, app: "InventorApp" 
+    ) -> "InventorWorkPlane":
+        """Create an InventorWorkPlane from origin and normal vector.
+
+        Args:
+            origin: Origin point of the workplane
+            normal: Normal vector (up-axis direction)
+            app: Optional app instance
+        Returns:
+            New InventorWorkPlane with specified origin and normal
+        """
+        tg = app.transient_geom
+        # create a workplane in inventor using up_dir as the normal
+        origin_pt = tg.CreatePoint(origin[0], origin[1], origin[2])
+        up_vec = tg.CreateUnitVector(normal[0], normal[1], normal[2])
+        x_vec = tg.CreateUnitVector(1, 0, 0)
+        y_vec = up_vec.CrossProduct(x_vec)
+
+        # in inventor the y vector is the up direction
+        work_plane = app.comp_def.WorkPlanes.AddFixed(
             origin_pt, x_vec, y_vec, False
         )
         work_plane.Visible = False
 
         # add a sketch on the workplane
-        self.sketch = self.app.comp_def.Sketches.Add(work_plane)
+        sketch = app.comp_def.Sketches.Add(work_plane)
+        return cls(
+            app=app,
+            sketch=sketch,
+        )
+    
+    @classmethod
+    def xy_plane(
+        cls, app: "InventorApp"
+    ) -> "InventorWorkPlane":
+        """Create an InventorWorkPlane in the XY orientation at the given origin.
 
-        # no duplicate point objects in the sketch, use dict
-        self.point2d_dict = {}
-        self.sketchpoint_dict = {}
+        Args:
+            app: InventorApp instance
+            origin: Origin point of the workplane
+        Returns:
+            New InventorWorkPlane in the XY orientation at the specified origin
+        """
+        return cls(
+            app=app,
+            sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(3)),
+        )
+    
+    @classmethod
+    def xz_plane(
+        cls, app: "InventorApp"
+    ) -> "InventorWorkPlane":
+        """Create an InventorWorkPlane in the XZ orientation at the given origin.
+
+        Args:
+            app: InventorApp instance
+        """
+        return cls(
+            app=app,
+            sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(2)),
+        )
+    
+    @classmethod
+    def yz_plane(
+        cls, app: "InventorApp"
+    ) -> "InventorWorkPlane":
+        """Create an InventorWorkPlane in the YZ orientation at the given origin.
+
+        Args:
+            app: InventorApp instance
+        """
+        return cls(
+            app=app,
+            sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(1)),
+        )
+    
+
+
+    @classmethod
+    def create_offset_plane(
+        cls, app: "InventorApp", name: str = "XY", offset: float = 0.0, *args, **kwargs
+    ) -> "Workplane":
+        """Create a standard named workplane with an offset.
+
+        Args:
+            name: Standard plane name ("XY", "XZ", "YZ")
+            offset: Offset distance from the standard plane
+            app: Optional app instance
+        Returns:
+            Workplane instance at the specified offset
+        """
+        if name == "XY":
+            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(app.comp_def.WorkPlanes(3), offset)
+        elif name == "XZ":
+            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(app.comp_def.WorkPlanes(2), offset)
+        elif name == "YZ":
+            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(app.comp_def.WorkPlanes(1), offset)
+        else:
+            raise ValueError(f"Unsupported plane name '{name}' for offset plane")
+        sketch = app.comp_def.Sketches.Add(plane)
+        return cls(app=app, sketch=sketch)
 
     def _get_point2d(self, x, y):
         key = (round(x, 6), round(y, 6))
@@ -155,22 +244,26 @@ class InventorWorkPlane(Workplane):
         return self
 
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation"
+        self, distance: float, operation: str = "NewBodyFeatureOperation", symmetric: bool = False
     ) -> InventorShape:
         profile = self.sketch.Profiles.AddForSolid()
         ext_op = {
-            "JoinBodyFeatureOperation": 1,
-            "Cut": 2,
-            "Intersect": 3,
+            "JoinBodyFeatureOperation": constants.kJoinOperation,
+            "Cut": constants.kCutOperation,
+            "CutOperation": constants.kCutOperation,
+            "Intersect": constants.kIntersectOperation,
             "NewBodyFeatureOperation": constants.kNewBodyOperation,
-        }.get(operation, 0)
+        }.get(operation, constants.kNewBodyOperation)
         ext_def = self.app.comp_def.Features.ExtrudeFeatures.CreateExtrudeDefinition(
             profile, ext_op
         )
-        ext_def.SetDistanceExtent(distance, constants.kPositiveExtentDirection)
+        if distance < 0:
+            direction = constants.kNegativeExtentDirection
+        else:
+            direction = constants.kPositiveExtentDirection
+        ext_def.SetDistanceExtent(abs(distance), direction)
         extrusion_feature = self.app.comp_def.Features.ExtrudeFeatures.Add(ext_def)
         # After extrusion, create a new sketch for future operations
-        self._create_new_sketch()
 
         # Return the shape representing the extruded body
         return InventorShape(obj=extrusion_feature.SurfaceBody, app=self.app)
@@ -178,33 +271,75 @@ class InventorWorkPlane(Workplane):
     def revolve(
         self,
         angle: float,
-        axis: Tuple[float, float],
+        axis: str,
         operation: str = "NewBodyFeatureOperation",
     ) -> InventorShape:
         """
         Revolve the current sketch around a specified axis.
         """
-        profile = self.sketch.Profiles.AddForSolid()
+        # Check if sketch has any geometry
+        if self.sketch.SketchLines.Count == 0 and self.sketch.SketchArcs.Count == 0:
+            raise RuntimeError("Sketch is empty - cannot create revolve feature")
+        
+        # Create profile from the sketch
+        try:
+            profile = self.sketch.Profiles.AddForSolid()
+        except Exception as e:
+            # If AddForSolid fails, try to get existing profiles
+            if self.sketch.Profiles.Count > 0:
+                profile = self.sketch.Profiles.Item(1)
+            else:
+                raise RuntimeError(f"Failed to create profile for revolve: {e}")
+        
+        # Map operation string to Inventor constants
         rev_op = {
             "JoinBodyFeatureOperation": constants.kJoinOperation,
             "NewBodyFeatureOperation": constants.kNewBodyOperation,
-        }.get(operation, 0)
+            "Cut": constants.kCutOperation,
+            "CutOperation": constants.kCutOperation,
+        }.get(operation, constants.kNewBodyOperation)
 
-        # Find or create a WorkAxis at the given axis point
-        # For simplicity, use the first work axis (usually the origin Z axis)
-        # You may need to create a custom axis for arbitrary axes
-        work_axes = self.app.comp_def.WorkAxes(3)
+        # For axis (0.0, 0.0), use the Z-axis work axis (typically WorkAxes.Item(3))
+        # This assumes the sketch is on a plane perpendicular to Z-axis
+        try:
+            if axis == "Z":
+                # Use the Z-axis (typically the 3rd work axis in Inventor)
+                work_axis = self.app.comp_def.WorkAxes.Item(3)
+            elif axis == "X":
+                work_axis = self.app.comp_def.WorkAxes.Item(1)
+            elif axis == "Y":
+                work_axis = self.app.comp_def.WorkAxes.Item(2)
+            else:
+                # For other axes, we'd need to create a custom work axis
+                # For now, default to Z-axis
+                work_axis = self.app.comp_def.WorkAxes.Item(3)
+        except:
+            # Fallback: try to get any available work axis
+            if self.app.comp_def.WorkAxes.Count > 0:
+                work_axis = self.app.comp_def.WorkAxes.Item(1)
+            else:
+                raise RuntimeError("No work axes available for revolve operation")
 
-        if abs(angle - 2 * math.pi) < 1e-6 or abs(angle - 360) < 1e-3:
-            # Full revolve
-            revolve_feature = self.app.comp_def.Features.RevolveFeatures.AddFull(
-                profile, work_axes, rev_op
-            )
-        else:
-            # Partial revolve
-            revolve_feature = self.app.comp_def.Features.RevolveFeatures.AddByAngle(
-                profile, work_axes, angle, rev_op
-            )
+        try:
+            if abs(angle - 2 * math.pi) < 1e-6 or abs(angle - 360) < 1e-3:
+                # Full revolve (360 degrees)
+                revolve_feature = self.app.comp_def.Features.RevolveFeatures.AddFull(
+                    profile, work_axis, rev_op
+                )
+            else:
+                # Partial revolve
+                revolve_feature = self.app.comp_def.Features.RevolveFeatures.AddByAngle(
+                    profile, work_axis, angle, rev_op
+                )
+        except Exception as e:
+            # Provide more detailed error information
+            error_msg = f"Failed to create revolve feature. "
+            error_msg += f"Profile count: {self.sketch.Profiles.Count}, "
+            error_msg += f"Work axis: {work_axis}, "
+            error_msg += f"Operation: {operation} ({rev_op}), "
+            error_msg += f"Angle: {angle}. "
+            error_msg += f"Original error: {e}"
+            raise RuntimeError(error_msg)
 
-        self._create_new_sketch()
+        # self._create_new_sketch()
         return InventorShape(obj=revolve_feature.SurfaceBody, app=self.app)

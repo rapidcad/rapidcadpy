@@ -25,10 +25,6 @@ class Workplane(ABC):
 
     def __init__(
         self,
-        origin: VectorLike = (0.0, 0.0, 0.0),
-        x_dir: VectorLike = (1.0, 0.0, 0.0),
-        y_dir: VectorLike = (0.0, 1.0, 0.0),
-        z_dir: VectorLike = (0.0, 0.0, 1.0),
         app: Optional["App"] = None,
         *args,
         **kwargs,
@@ -40,21 +36,11 @@ class Workplane(ABC):
             origin: Origin point of the coordinate system
             x_dir: X-axis direction vector (ignored if theta/phi/gamma provided)
             y_dir: Y-axis direction vector (ignored if theta/phi/gamma provided)
-            z_dir: Z-axis direction vector (ignored if theta/phi/gamma provided)
+            up_dir: Up-axis direction vector (ignored if theta/phi/gamma provided)
             theta: Legacy PlaneOld API - rotation angle around z-axis
             phi: Legacy PlaneOld API - rotation angle around y-axis
             gamma: Legacy PlaneOld API - rotation angle around x-axis
         """
-        from rapidcadpy.cad_types import Vector
-
-        # Coordinate system (former Plane functionality)
-        if isinstance(origin, Vector):
-            self.origin = origin
-        else:
-            self.origin = Vector(*origin)
-        self.x_dir = Vector(*x_dir)
-        self.y_dir = Vector(*y_dir)
-        self.z_dir = Vector(*z_dir)
 
         # Working state (fluent API functionality)
         from .cad_types import Vertex
@@ -66,36 +52,66 @@ class Workplane(ABC):
 
     # ========== Factory methods for standard planes ==========
 
-    @classmethod
+    @abstractmethod
     def xy_plane(
-        cls, app: "App", origin: VectorLike = (0.0, 0.0, 0.0), *args, **kwargs
+        cls, app: "App", *args, **kwargs
     ) -> "Workplane":
         """Create a workplane in the XY orientation at the given origin."""
-        return cls(origin=origin, app=app, *args, **kwargs)
+        ...
 
-    @classmethod
+    @abstractmethod
     def xz_plane(
-        cls, origin: VectorLike = (0.0, 0.0, 0.0), app: Optional[Any] = None
+        cls, app:"App", *args, **kwargs
     ) -> "Workplane":
         """Create a workplane in the XZ orientation at the given origin."""
-        return cls(
-            origin=origin,
-            x_dir=(1.0, 0.0, 0.0),
-            y_dir=(0.0, 0.0, 1.0),
-            z_dir=(0.0, 1.0, 0.0),
-            app=app,
-        )
+        ...
 
-    @classmethod
+    @abstractmethod
     def yz_plane(
-        cls, origin: VectorLike = (0.0, 0.0, 0.0), app: Optional[Any] = None
+        cls, app: "App", *args, **kwargs
     ) -> "Workplane":
         """Create a workplane in the YZ orientation at the given origin."""
+        ...
+    
+    @abstractmethod
+    def create_offset_plane(
+        cls, app: "App", name: str = "XY", offset: float = 0.0
+    ) -> "Workplane":
+        """Create a standard named workplane with an offset.
+
+        Args:
+            name: Standard plane name ("XY", "XZ", "YZ")
+            offset: Offset distance from the standard plane
+            app: Optional app instance
+        Returns:
+            Workplane instance at the specified offset
+        """
+        ...
+
+    @classmethod
+    def from_origin_normal(
+        cls, app: "App", origin: VectorLike, normal: VectorLike,
+    ) -> "Workplane":
+        """Create a workplane from origin and normal vector.
+        
+        Args:
+            origin: Origin point of the workplane
+            normal: Normal vector (z-axis direction)
+            app: Optional app instance
+            
+        Returns:
+            New workplane with specified origin and normal
+        """
+        from rapidcadpy.cad_types import Vector
+        
+        # Convert to vectors
+        origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
+        normal_vec = Vector(*normal) if not isinstance(normal, Vector) else normal
+        
+        # Use default x and y directions for now
         return cls(
-            origin=origin,
-            x_dir=(0.0, 1.0, 0.0),
-            y_dir=(0.0, 0.0, 1.0),
-            z_dir=(1.0, 0.0, 0.0),
+            origin=origin_vec,
+            up_dir=normal_vec,
             app=app,
         )
 
@@ -132,7 +148,7 @@ class Workplane(ABC):
             y_dir=Vector(
                 y_axis_normalized[0], y_axis_normalized[1], y_axis_normalized[2]
             ),
-            z_dir=Vector(
+            up_dir=Vector(
                 normal_normalized[0], normal_normalized[1], normal_normalized[2]
             ),
         )
@@ -166,15 +182,15 @@ class Workplane(ABC):
             origin=origin_vec,
             x_dir=Vector(x_norm[0], x_norm[1], x_norm[2]),
             y_dir=Vector(y_norm[0], y_norm[1], y_norm[2]),
-            z_dir=Vector(z_norm[0], z_norm[1], z_norm[2]),
+            up_dir=Vector(z_norm[0], z_norm[1], z_norm[2]),
         )
 
     # ========== Coordinate system properties and methods ==========
 
     @property
     def normal(self) -> Vector:
-        """Get the normal vector of the plane (z_dir)."""
-        return self.z_dir
+        """Get the normal vector of the plane (up_dir)."""
+        return self.up_dir
 
     def translate_plane(self, offset: VectorLike) -> "Workplane":
         """
@@ -200,7 +216,7 @@ class Workplane(ABC):
                 self.origin.z + offset_vec.z,
             )
 
-        new_workplane = Workplane(new_origin, self.x_dir, self.y_dir, self.z_dir)
+        new_workplane = Workplane(new_origin, self.x_dir, self.y_dir, self.up_dir)
         new_workplane._pending_shapes = self._pending_shapes.copy()
         new_workplane._current_position = self._current_position
         return new_workplane
@@ -248,10 +264,10 @@ class Workplane(ABC):
                 "y": float(self.y_dir.y),
                 "z": float(self.y_dir.z),
             },
-            "z_dir": {
-                "x": float(self.z_dir.x),
-                "y": float(self.z_dir.y),
-                "z": float(self.z_dir.z),
+            "up_dir": {
+                "x": float(self.up_dir.x),
+                "y": float(self.up_dir.y),
+                "z": float(self.up_dir.z),
             },
         }
 
@@ -261,12 +277,12 @@ class Workplane(ABC):
         origin = Vector.from_json(json_data["origin"])
         x_dir = Vector.from_json(json_data["x_dir"])
         y_dir = Vector.from_json(json_data["y_dir"])
-        z_dir = Vector.from_json(json_data["z_dir"])
-        return Workplane(origin, x_dir, y_dir, z_dir)
+        up_dir = Vector.from_json(json_data["up_dir"])
+        return Workplane(origin, x_dir, y_dir, up_dir)
 
     def to_python(self):
         """Generate Python code representation."""
-        return f"Workplane(origin={self.origin.to_python()}, x_dir={self.x_dir.to_python()}, y_dir={self.y_dir.to_python()}, z_dir={self.z_dir.to_python()})"
+        return f"Workplane(origin={self.origin.to_python()}, x_dir={self.x_dir.to_python()}, y_dir={self.y_dir.to_python()}, up_dir={self.up_dir.to_python()})"
 
     def round(self, decimals=6):
         """Round coordinate system values to specified decimal places."""
