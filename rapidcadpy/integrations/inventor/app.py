@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 
 
 class InventorApp(App):
-    def __init__(self, headless: bool = True):
+    def __init__(self, headless: bool = False):
         try:
             import win32com.client as win32
             from win32com.client import gencache, Dispatch
@@ -57,14 +57,15 @@ class InventorApp(App):
                 f"File '{file_path}' is not a valid Inventor Part Document."
             )
 
-    def work_plane(self, name: str = "XY", origin: Optional[VectorLike] = None, normal: Optional[VectorLike] = None, **kwargs) -> "InventorWorkPlane":
+    def work_plane(self, name: str = "XY", origin: Optional[VectorLike] = None, normal: Optional[VectorLike] = None, offset: Optional[float] = None, **kwargs) -> "InventorWorkPlane":
         """
         Create a workplane either by name or by origin and normal vector.
         
         Args:
             name: Standard plane name ("XY", "XZ", "YZ") - used if origin/normal not provided
             origin: Origin point for custom workplane
-            normal: Normal vector for custom workplane  
+            normal: Normal vector for custom workplane
+            offset: Offset distance for the workplane
             **kwargs: Additional arguments (like app parameter)
             
         Returns:
@@ -75,6 +76,12 @@ class InventorApp(App):
         if origin is not None and normal is not None:
             # Create custom workplane from origin and normal
             return InventorWorkPlane.from_origin_normal(origin, normal, app=self)
+        elif offset is not None and name in ["XY", "XZ", "YZ"]:
+            # Create standard named workplane with offset
+            return InventorWorkPlane.create_offset_plane(app=self, name=name, offset=offset)
+        elif name == "XY":
+            # Create standard XY workplane at origin
+            return InventorWorkPlane.xy_plane(app=self)
         else:
             # Create standard named workplane
             return super().work_plane(name)  # type: ignore

@@ -81,7 +81,15 @@ class InventorReverseEngineer:
         workplane_info = self._get_workplane_info(sketch.PlanarEntity)
 
         # Create workplane code
-        if "plane_name" in workplane_info:
+        if "plane_name" in workplane_info and "offset" in workplane_info:
+            self.generated_code.extend(
+                [
+                    f"# Sketch {sketch_num}",
+                    f"{wp_var} = app.work_plane(\"{workplane_info['plane_name']}\", offset={workplane_info['offset']})",
+                    "",
+                ]
+            )
+        elif "plane_name" in workplane_info:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
@@ -121,18 +129,21 @@ class InventorReverseEngineer:
 
     def _get_workplane_info(
         self, planar_entity
-    ) -> Dict[str, Tuple[float, float, float]]:
+    ):
         """Extract workplane origin and orientation."""
-        try:
-            # Check if it's a standard workplane (XY, XZ, YZ)
-            if hasattr(planar_entity, "Name"):
-                name = planar_entity.Name
-                if "XY" in name:
-                    return {"plane_name": "XY"}
-                elif "XZ" in name:
-                    return {"plane_name": "XZ"}
-                elif "YZ" in name:
-                    return {"plane_name": "YZ"}
+        if planar_entity.DefinitionType == constants.kPlaneAndOffsetWorkPlane:
+            offset = planar_entity.Definition.Offset.Value
+            base_plane_name = planar_entity.Definition.Plane.Name
+            if "XY" in base_plane_name:
+                return {"plane_name": "XY", "offset": offset}
+        elif hasattr(planar_entity, "Name"):
+            name = planar_entity.Name
+            if "XY" in name:
+                return {"plane_name": "XY"}
+            elif "XZ" in name:
+                return {"plane_name": "XZ"}
+            elif "YZ" in name:
+                return {"plane_name": "YZ"}
 
             # For custom workplanes, extract geometry
             plane = planar_entity.Geometry
@@ -143,9 +154,7 @@ class InventorReverseEngineer:
                 "origin": (round(origin.X, 6), round(origin.Y, 6), round(origin.Z, 6)),
                 "normal": (round(normal.X, 6), round(normal.Y, 6), round(normal.Z, 6)),
             }
-        except:
-            # Default to XY plane
-            return {"plane_name": "XY"}
+
 
     def _get_connected_paths(self, sketch) -> List[List[Dict]]:
         """Get sketch elements organized into connected paths."""
@@ -360,7 +369,17 @@ class InventorReverseEngineer:
         try:
             distance_extent = win32.CastTo(extent, "DistanceExtent")
 
-            distance = round(distance_extent.Distance.Value, 6)
+            direction = distance_extent.Direction
+            if direction == constants.kNegativeExtentDirection:
+                distance = -round(distance_extent.Distance.Value, 6)
+            else:
+                distance = round(distance_extent.Distance.Value, 6)
+            if direction == constants.kSymmetricExtentDirection:
+                symmetric = "symmetric=True"
+            else:
+                symmetric = "symmetric=False"
+
+            
             # Get operation type
             operation_map = {
                 constants.kNewBodyOperation: "NewBodyFeatureOperation",
@@ -373,7 +392,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Extrude feature {feature_num}",
-                    f"shape{feature_num} = {wp_var}.extrude({distance}, '{operation}')",
+                    f"shape{feature_num} = {wp_var}.extrude({distance}, '{operation}', {symmetric})",
                     "",
                 ]
             )
@@ -384,16 +403,53 @@ class InventorReverseEngineer:
 
     def _analyze_revolve_feature(self, feature, wp_var: str, feature_num: int):
         """Analyze a revolve feature."""
-        # Get angle
         extent = feature.Extent
-        if hasattr(extent, "Angle"):
-            angle = round(extent.Angle, 6)
+        extent_type = feature.ExtentType
+        # Get angle
+        if extent_type == constants.kAngleExtent:
+            # Cast to AngleExtent to get the angle
+            angle_extent = win32.CastTo(extent, "AngleExtent")
+            angle = round(angle_extent.Angle.Value, 6)
+        elif extent_type == constants.kFullSweepExtent:
+            # Full revolution (360 degrees = 2*pi radians)
+            angle = 6.283185307179586  # 2*pi
         else:
-            angle = math.pi * 2  # Default full revolution
+            raise ValueError("Unsupported revolve extent type.")
 
-        # Get axis - this is tricky, we'll use a simple approach
-        # For now, assume axis is at origin of sketch
-        axis = (0.0, 0.0)  # Simplified
+        # Get axis
+        axis_entity = feature.AxisEntity
+        
+        # Determine which basis vector (X, Y, or Z) the axis is aligned with
+        # Get the axis direction vector
+        if hasattr(axis_entity, 'Geometry'):
+            axis_geom = axis_entity.Geometry
+            # For a line, get direction vector
+            if hasattr(axis_geom, 'Direction'):
+                direction = axis_geom.Direction
+                
+                if abs(direction.X) == 1.0:
+                    axis = "X"
+                elif abs(direction.Y) == 1.0:
+                    axis = "Y"
+                elif abs(direction.Z) == 1.0:
+                    axis = "Z"
+            else:
+                # Default to Z axis
+                axis = "Z"
+        else:
+            # Check if it's a work axis by name
+            if hasattr(axis_entity, 'Name'):
+                name = axis_entity.Name.upper()
+                if 'X' in name:
+                    axis = "X"
+                elif 'Y' in name:
+                    axis = "Y"
+                elif 'Z' in name:
+                    axis = "Z"
+                else:
+                    axis = "Z"  # Default
+            else:
+                axis = "Z"  # Default
 
         # Get operation type
         operation_map = {
@@ -407,7 +463,7 @@ class InventorReverseEngineer:
         self.generated_code.extend(
             [
                 f"# Revolve feature {feature_num}",
-                f"shape{feature_num} = {wp_var}.revolve({angle}, {axis}, '{operation}')",
+                f"shape{feature_num} = {wp_var}.revolve({angle}, '{axis}', '{operation}')",
                 "",
             ]
         )
