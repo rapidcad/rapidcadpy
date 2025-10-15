@@ -38,6 +38,7 @@ class InventorReverseEngineer:
         # Get all features that use sketches
         extrude_features = self.comp_def.Features.ExtrudeFeatures
         revolve_features = self.comp_def.Features.RevolveFeatures
+        chamfer_features = self.comp_def.Features.ChamferFeatures
 
         # Collect all features with their sketches
         feature_sketch_pairs = []
@@ -57,6 +58,14 @@ class InventorReverseEngineer:
             feature_sketch_pairs.append(
                 {"sketch": sketch, "feature": feature, "type": "revolve", "index": i}
             )
+
+        # Add chamfer features
+        for i in range(1, chamfer_features.Count + 1):
+            feature = chamfer_features.Item(i)
+            chamfer_distance = feature.Definition.Distance.Value
+            angle = feature.Definition.Angle.Value
+            face = feature.Definition.Face
+            edges = feature.Definition.Face.Edges
 
         # Sort by creation order (using sketch index as approximation)
         feature_sketch_pairs.sort(key=lambda x: self._get_sketch_index(x["sketch"]))
@@ -361,6 +370,8 @@ class InventorReverseEngineer:
             self._analyze_extrude_feature(feature, wp_var, feature_num)
         elif feature_type == "revolve":
             self._analyze_revolve_feature(feature, wp_var, feature_num)
+        else:
+            ...
 
     def _analyze_extrude_feature(self, feature, wp_var: str, feature_num: int):
         """Analyze an extrude feature."""
