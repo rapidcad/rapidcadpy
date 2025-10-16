@@ -62,10 +62,9 @@ class InventorReverseEngineer:
         # Add chamfer features
         for i in range(1, chamfer_features.Count + 1):
             feature = chamfer_features.Item(i)
-            chamfer_distance = feature.Definition.Distance.Value
-            angle = feature.Definition.Angle.Value
-            face = feature.Definition.Face
-            edges = feature.Definition.Face.Edges
+            feature_sketch_pairs.append(
+                {"sketch": None, "feature": feature, "type": "chamfer", "index": i}
+            )
 
         # Sort by creation order (using sketch index as approximation)
         feature_sketch_pairs.sort(key=lambda x: self._get_sketch_index(x["sketch"]))
@@ -82,10 +81,35 @@ class InventorReverseEngineer:
             if self.comp_def.Sketches.Item(i) == target_sketch:
                 return i
         return 999  # Put unknown sketches at the end
+    
+    def _analyze_chamfer(self, feature, feature_type: str, wp_var: str, feature_num: int):
+        """Analyze a chamfer feature and generate code."""
+        chamfer_distance = feature.Definition.Distance.Value
+        if feature.DefinitionType == constants.kDistanceAndAngle:
+            angle = feature.Definition.Angle.Value
+            face = feature.Definition.Face
+            edges = feature.Definition.Face.Edges
+            self.generated_code.extend(
+                [
+                    f"# Chamfer feature {feature_num}",
+                    f"{wp_var}.chamfer(\"X+\", distance={chamfer_distance}, angle={angle})",
+                    "",
+                ]
+            )
+        else:
+            # Generate code for chamfer
+            self.generated_code.extend(
+                [
+                    f"{wp_var}.chamfer(\"X+\", distance={chamfer_distance})",
+                    "",
+                ]
+        )
 
     def _analyze_sketch(self, sketch, wp_var: str, sketch_num: int):
         """Analyze a sketch and generate workplane and geometry code."""
         # Get workplane info
+        if sketch is None:
+            return
         sketch = win32.CastTo(sketch, "PlanarSketch")
         workplane_info = self._get_workplane_info(sketch.PlanarEntity)
 
@@ -163,7 +187,6 @@ class InventorReverseEngineer:
                 "origin": (round(origin.X, 6), round(origin.Y, 6), round(origin.Z, 6)),
                 "normal": (round(normal.X, 6), round(normal.Y, 6), round(normal.Z, 6)),
             }
-
 
     def _get_connected_paths(self, sketch) -> List[List[Dict]]:
         """Get sketch elements organized into connected paths."""
@@ -370,6 +393,8 @@ class InventorReverseEngineer:
             self._analyze_extrude_feature(feature, wp_var, feature_num)
         elif feature_type == "revolve":
             self._analyze_revolve_feature(feature, wp_var, feature_num)
+        elif feature_type == "chamfer":
+            self._analyze_chamfer(feature, feature_type, wp_var, feature_num)
         else:
             ...
 
@@ -409,8 +434,6 @@ class InventorReverseEngineer:
             )
         except Exception as e:
             raise RuntimeError(f"Failed to analyze extrude feature: {e}")
-
-        
 
     def _analyze_revolve_feature(self, feature, wp_var: str, feature_num: int):
         """Analyze a revolve feature."""

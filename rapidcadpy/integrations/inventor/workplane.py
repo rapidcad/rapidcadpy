@@ -266,6 +266,7 @@ class InventorWorkPlane(Workplane):
         # After extrusion, create a new sketch for future operations
 
         # Return the shape representing the extruded body
+        self._create_new_sketch()
         return InventorShape(obj=extrusion_feature.SurfaceBody, app=self.app)
 
     def revolve(

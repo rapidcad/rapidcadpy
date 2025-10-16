@@ -30,7 +30,7 @@ class TestFluentAPIInventorBackend:
         not pytest.importorskip("win32com", reason="win32com not available"),
         reason="win32com not available",
     )
-    def test_drop_arm(self):
+    def test_drop_arm_old(self):
         arm_thick = 5
 
         app = InventorApp()
@@ -246,3 +246,23 @@ class TestFluentAPIInventorBackend:
 
         # Revolve feature 8
         shape8 = wp8.revolve(6.283185307179586, 'X', 'Cut')
+
+    def test_drop_arm(self):
+        from rapidcadpy import InventorApp
+
+        # Initialize Inventor application
+        app = InventorApp()
+        app.new_document()
+
+        arm_thick = 6
+
+        wp = app.work_plane("XY")
+
+        # arm: loft rectangle at hub to rectangle at dropped tip
+        arm = wp.move_to(-4.5, 0).line_to(-4.5,20).line_to(-8,45).three_point_arc((0,53),(8,45)).line_to(4.5,20).line_to(4.5, 0).three_point_arc((0, -4.5), (-4.5,0)).extrude(arm_thick)
+
+        hole = wp.move_to(0, 45).circle(4).extrude(arm_thick)
+
+        part = arm.cut(hole)
+
+        part.to_ipt("/Users/elias.berger/rapidcad_old/backend/exports/drop_arm.ipt")

@@ -203,7 +203,7 @@ class InventorShape(Shape):
         if not os.path.exists(file_path):
             raise RuntimeError(f"IPT file was not created at: {file_path}")
 
-    def cut(self, other: "Shape") -> "Shape":
+    def cut(self, other: "Shape") -> "InventorShape":
         """
         Perform a boolean cut operation between this shape and another shape.
 
@@ -275,7 +275,7 @@ class InventorShape(Shape):
             error_msg += f"Error: {str(e)}"
             raise RuntimeError(error_msg)
 
-    def union(self, other: "Shape") -> "Shape":
+    def union(self, other: "Shape") -> "InventorShape":
         """
         Perform a boolean union operation between this shape and another shape.
 
