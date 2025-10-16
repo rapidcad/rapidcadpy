@@ -45,6 +45,20 @@ def sample_ipt_simple_shaft():
     path = pathlib.Path(__file__).parent.parent / "test_files" / "simple_shaft.ipt"
     return path.resolve()
 
+@pytest.fixture
+def sample_ipt_complex_shaft():
+    path = pathlib.Path(__file__).parent.parent / "test_files" / "generated_shaft.ipt"
+    return path.resolve()
+
+@pytest.fixture
+def sample_ipt_complex_shaft_6():
+    path = pathlib.Path(__file__).parent.parent / "test_files" / "shaft_6.ipt"
+    return path.resolve()
+
+@pytest.fixture
+def sample_ipt_offset_sketch_plane():
+    path = pathlib.Path(__file__).parent.parent / "test_files" / "offset_sketch_plane.ipt"
+    return path.resolve()
 
 def reverse_engineer_ipt(file_path: str, output_file: str = None) -> str:
     """
@@ -58,7 +72,7 @@ def reverse_engineer_ipt(file_path: str, output_file: str = None) -> str:
         Generated Python code as string
     """
     # Initialize Inventor
-    app = InventorApp()
+    app = InventorApp(headless=True)
     doc = app.open_document(file_path)
     
     # Create reverse engineer instance
@@ -104,7 +118,20 @@ class TestInventorReverseEngineer:
         assert "app = InventorApp()" in generated_code
         assert "line_to" in generated_code
         assert "revolve" in generated_code
-    
+
+    def test_reverse_engineer_offset_sketch_plane(self, sample_ipt_offset_sketch_plane):
+        """Test reverse engineering a complex shaft."""
+        print(sample_ipt_offset_sketch_plane)
+        assert os.path.exists(sample_ipt_offset_sketch_plane)
+        generated_code = reverse_engineer_ipt(sample_ipt_offset_sketch_plane)
+
+        # Verify the generated code contains expected elements
+        print(generated_code)
+        assert "from rapidcadpy import InventorApp" in generated_code
+        assert "app = InventorApp()" in generated_code
+        assert "line_to" in generated_code
+        assert "revolve" in generated_code
+
     def test_reverse_engineer_complex_shaft(self, sample_ipt_complex_shaft):
         """Test reverse engineering a complex shaft."""
         print(sample_ipt_complex_shaft)
@@ -113,20 +140,22 @@ class TestInventorReverseEngineer:
 
         # Verify the generated code contains expected elements
         print(generated_code)
-        assert "from pycadseq.integrations.inventor import InventorApp" in generated_code
+        assert "from rapidcadpy import InventorApp" in generated_code
         assert "app = InventorApp()" in generated_code
         assert "line_to" in generated_code
         assert "revolve" in generated_code
 
-    def test_reverse_engineer_complex_shaft_2(self, sample_ipt_complex_shaft):
+    def test_reverse_engineer_complex_shaft_2(self, sample_ipt_complex_shaft_6):
         """Test reverse engineering a complex shaft."""
-        print(sample_ipt_complex_shaft)
-        assert os.path.exists(sample_ipt_complex_shaft)
-        generated_code = reverse_engineer_ipt(sample_ipt_complex_shaft)
+        print(sample_ipt_complex_shaft_6)
+        assert os.path.exists(sample_ipt_complex_shaft_6)
+        generated_code = reverse_engineer_ipt(sample_ipt_complex_shaft_6)
 
         # Verify the generated code contains expected elements
         print(generated_code)
-        assert "from pycadseq.integrations.inventor import InventorApp" in generated_code
+        assert "from rapidcadpy import InventorApp" in generated_code
         assert "app = InventorApp()" in generated_code
         assert "line_to" in generated_code
         assert "revolve" in generated_code
+    
+    

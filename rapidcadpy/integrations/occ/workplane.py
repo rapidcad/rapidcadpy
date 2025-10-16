@@ -1,4 +1,5 @@
 import warnings
+from typing import Any, Optional
 
 from OCP.BOPAlgo import BOPAlgo_Tools
 from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
@@ -7,12 +8,37 @@ from OCP.gp import gp_Pnt, gp_Vec
 from OCP.TopoDS import TopoDS_Compound
 
 from rapidcadpy import Vertex, Workplane
+from rapidcadpy.cad_types import VectorLike
 from rapidcadpy.integrations.occ.shape import OccShape
 
 
 class OccWorkplane(Workplane):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    @classmethod
+    def from_origin_normal(
+        cls, origin: VectorLike, normal: VectorLike, app: Optional[Any] = None
+    ) -> "OccWorkplane":
+        """Create an OccWorkplane from origin and normal vector.
+
+        Args:
+            origin: Origin point of the workplane
+            normal: Normal vector (up-axis direction)
+            app: Optional app instance
+
+        Returns:
+            New OccWorkplane with specified origin and normal
+        """
+        import numpy as np
+        from rapidcadpy.cad_types import Vector
+
+        # Convert to vectors
+        origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
+        normal_vec = Vector(*normal) if not isinstance(normal, Vector) else normal
+
+        # Use default x and y directions for now
+        return cls(
+            origin=(origin_vec.x, origin_vec.y, origin_vec.z),
+            up_dir=(normal_vec.x, normal_vec.y, normal_vec.z),
+        )
 
     def _make_wire(self):
         wire_builder = BRepBuilderAPI_MakeWire()
@@ -90,7 +116,9 @@ class OccWorkplane(Workplane):
         self, distance: float, operation: str = "NewBodyFeatureOperation"
     ) -> "OccShape":
         face = self._make_face()
-        extrude_vector = self.z_dir * distance
-        extrude_vector = gp_Vec(extrude_vector.x, extrude_vector.y, extrude_vector.z)
+        # Calculate extrude vector
+        up_dir_vec = self.up_dir * distance
+        # Convert to gp_Vec using indexing to avoid attribute access issues
+        extrude_vector = gp_Vec(float(up_dir_vec[0]), float(up_dir_vec[1]), float(up_dir_vec[2]))
         prism_builder: Any = BRepPrimAPI_MakePrism(face, extrude_vector, True)
         return OccShape(obj=prism_builder.Shape())

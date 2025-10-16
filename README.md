@@ -1,19 +1,21 @@
-# PyCadSeq
+# RapidCAD-Py
 
-A new Python library under heavy development for CAD sequence processing and manipulation. Designed with a primary focus on seamless integration with industry-grade CAD software like AutoDesk Inventor, enabling professional-level parametric 3D modeling, sketches, and construction history management.
+A new Python library under heavy development for CAD modeling and manipulation. Designed with a primary focus on seamless integration with industry-grade CAD software like AutoDesk Inventor, enabling professional-level parametric 3D modeling, sketches, and construction history management.
 
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
 
 ## 🚀 Features
 
-- **Industry-Grade CAD Integration**: Deep integration with AutoDesk Inventor for professional CAD workflows
+- **Industry-Grade CAD Integration**: Integration with AutoDesk Inventor for professional CAD workflows
 - **Parametric CAD Modeling**: Create and manipulate 3D models using construction sequences
 - **Professional Sketch-based Design**: Work with 2D sketches containing lines, arcs, circles, and constraints
-- **Multiple Export Formats**: Export to STEP, STL, and native CAD formats
 - **Enterprise CAD System Support**: Built-in support for Autodesk Inventor and OpenCASCADE
 - **Advanced Data Processing**: Parse and process CAD data from Fusion 360 Gallery and DeepCAD datasets
-- **Professional Visualization**: Built-in plotting and 3D visualization capabilities
+
+## Roadmap
+- **Multiple Export Formats**: Export to STEP, STL, and native CAD formats
+- **Visualization**: Built-in plotting and 3D visualization capabilities
 - **Comprehensive Constraint System**: Handle geometric constraints like coincidence, perpendicularity, and parallelism
 
 > **Note**: This library is currently under heavy development. Features and APIs may change as we continue to add features.
@@ -107,7 +109,7 @@ cube.export("model.ipt")
 ```python
 # Load from Autodesk Inventor file
 app = InventorApp()
-doc = app.open_document(file_path)
+doc = app.open_document(your_ipt_file_path)
 
 # Create reverse engineer instance
 engineer = InventorReverseEngineer(doc)

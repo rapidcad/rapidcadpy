@@ -1,0 +1,50 @@
+---
+title: Workplanes
+description: Working with workplanes in RapidCADpy
+---
+
+# Workplanes
+
+Workplanes are fundamental to creating 2D sketches and 3D geometry in RapidCADpy. They define a coordinate system where you can draw shapes and perform operations like extrude and revolve.
+
+## Creating Standard Workplanes
+
+The simplest way to create a workplane is using one of the standard planes (XY, XZ, or YZ):
+
+```python
+from rapidcadpy import InventorApp
+
+app = InventorApp()
+app.new_document()
+
+# Create a workplane on the XY plane
+wp_xy = app.work_plane("XY")
+
+# Create a workplane on the XZ plane
+wp_xz = app.work_plane("XZ")
+
+# Create a workplane on the YZ plane
+wp_yz = app.work_plane("YZ")
+```
+
+## Creating Offset Workplanes
+
+You can create a workplane that is offset from one of the standard planes:
+
+```python
+from rapidcadpy import InventorApp
+
+app = InventorApp()
+app.new_document()
+
+# Create a workplane 5 units above the XY plane
+wp = app.work_plane("XY", offset=5.0)
+
+# Create a workplane 10 units in front of the XZ plane
+wp = app.work_plane("XZ", offset=10.0)
+
+# Create a workplane -3 units from the YZ plane (negative offset)
+wp = app.work_plane("YZ", offset=-3.0)
+```
+
+Currently support for the Inventor Integration.
