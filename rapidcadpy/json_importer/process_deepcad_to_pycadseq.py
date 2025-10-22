@@ -3,6 +3,8 @@ import math
 from typing import Dict, List, Tuple, Any, Optional
 from collections import OrderedDict
 
+import numpy as np
+
 
 class DeepCadToPyCadSeqGenerator:
     """
@@ -179,7 +181,11 @@ class DeepCadToPyCadSeqGenerator:
             else:
                 # Connected path of lines and arcs, ending with .close()
                 code_line = self._generate_path_code_return(path, wp_var)
-                self.generated_code.append(code_line + ".close()")
+                self.generated_code.append(code_line)
+    
+    @staticmethod
+    def parse_vector(vector_dict):
+        return np.array([vector_dict["x"], vector_dict["y"], vector_dict["z"]])
 
     def _generate_path_code_return(self, curves: List[Dict[str, Any]], wp_var: str) -> str:
         """Return code for a connected path of curves as a string (for chaining .close())."""
@@ -199,8 +205,28 @@ class DeepCadToPyCadSeqGenerator:
                 start_angle = curve["start_angle"]
                 end_angle = curve["end_angle"]
                 mid_angle = (start_angle + end_angle) / 2
-                mid_x = center_point["x"] + radius * math.cos(mid_angle)
-                mid_y = center_point["y"] + radius * math.sin(mid_angle)
+
+                reference_vector = DeepCadToPyCadSeqGenerator.parse_vector(
+                    curve["reference_vector"]
+                )
+
+                ref_vec = reference_vector / np.linalg.norm(reference_vector)
+                mid_angle = (start_angle + end_angle) / 2
+                # Rotation matrix for the midpoint angle
+                rot_matrix = np.array(
+                    [
+                        [np.cos(mid_angle), -np.sin(mid_angle)],
+                        [np.sin(mid_angle), np.cos(mid_angle)],
+                    ]
+                )
+
+                # Rotate the reference vector to get the direction for the midpoint
+                rotated_vec = rot_matrix @ ref_vec[:2]
+
+                # Calculate midpoint coordinates
+                mid_x = center_point["x"] + rotated_vec[0] * radius
+                mid_y = center_point["y"] + rotated_vec[1] * radius
+
                 code_line += f".three_point_arc(({round(mid_x, 6)}, {round(mid_y, 6)}), ({end_point['x']}, {end_point['y']}))"
             elif "circle" in curve["type"].lower():
                 center = curve["center_point"]
@@ -218,36 +244,70 @@ class DeepCadToPyCadSeqGenerator:
         def reorder_curves(curves):
             if not curves or len(curves) == 1:
                 return curves
+            
+            def points_equal(p1, p2, tolerance=1e-9):
+                """Compare points with tolerance for floating-point precision."""
+                if p1 is None or p2 is None:
+                    return False
+                return abs(p1[0] - p2[0]) < tolerance and abs(p1[1] - p2[1]) < tolerance
+            
             # Build connectivity map
             points = [(get_point(c, "start_point"), get_point(c, "end_point")) for c in curves]
             used = [False] * len(curves)
+            
             # Find left-most start point
-            left_idx = min(range(len(curves)), key=lambda i: (points[i][0][0], points[i][0][1]))
+            valid_indices = [i for i in range(len(curves)) if points[i][0] is not None]
+            if not valid_indices:
+                return curves
+            
+            left_idx = min(valid_indices, key=lambda i: (points[i][0][0], points[i][0][1]))
             ordered = [curves[left_idx]]
             used[left_idx] = True
             last_pt = points[left_idx][1]
-            for _ in range(len(curves) - 1):
+            
+            # Try to connect remaining curves
+            for _ in range(len(curves) - 1):  # Only need to add N-1 more curves
                 found = False
+                
+                # Try forward connection
                 for j, (start, end) in enumerate(points):
-                    if not used[j] and (start == last_pt):
+                    if not used[j] and points_equal(start, last_pt):
                         ordered.append(curves[j])
                         used[j] = True
                         last_pt = end
                         found = True
                         break
+                
                 if not found:
-                    # Try to connect by reversing
+                    # Try reverse connection
                     for j, (start, end) in enumerate(points):
-                        if not used[j] and (end == last_pt):
-                            # Reverse curve
-                            curves[j]["start_point"], curves[j]["end_point"] = curves[j]["end_point"], curves[j]["start_point"]
+                        if not used[j] and points_equal(end, last_pt):
+                            # Reverse the curve
+                            curves[j]["start_point"], curves[j]["end_point"] = (
+                                curves[j]["end_point"], 
+                                curves[j]["start_point"]
+                            )
+                            # Update points array
+                            points[j] = (end, start)
                             ordered.append(curves[j])
                             used[j] = True
-                            last_pt = curves[j]["end_point"]
+                            last_pt = start  # Use the new end point
                             found = True
                             break
+                
                 if not found:
-                    break  # Could not connect further
+                    # Could not connect - this might be a disconnected loop
+                    # Add remaining curves as a warning or try starting a new chain
+                    print(f"Warning: Could not connect all curves. Connected {len(ordered)} of {len(curves)}")
+                    break
+            
+            # Return all curves, even if some couldn't be connected
+            # Add any remaining unused curves at the end
+            for j, curve in enumerate(curves):
+                if not used[j]:
+                    ordered.append(curve)
+                    print(f"Warning: Curve {j} added at end (disconnected)")
+            
             return ordered
         paths = []
         for loop in loops:

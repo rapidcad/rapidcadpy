@@ -78,7 +78,6 @@ class TestFluentAPIInventorBackend:
         # wp1.extrude(0.1)  # Thin extrusion to create a profile
         wp1.revolve(6.283185307179586, "Z", "JoinBodyFeatureOperation")
 
-
     def test_offset_sketch_plane(self):
         from rapidcadpy import InventorApp
 
@@ -89,16 +88,36 @@ class TestFluentAPIInventorBackend:
         # Sketch 1
         wp1 = app.work_plane("XY")
 
-        wp1.move_to(0.0, 0.0).line_to(0.0, 2.2).line_to(10.7, 2.2).line_to(10.7, 3.0).line_to(13.165, 3.0).line_to(13.165, 3.65).line_to(15.365, 3.65).line_to(15.365, 3.0).line_to(17.83, 3.0).line_to(17.83, 0.0).line_to(0.0, 0.0)
+        wp1.move_to(0.0, 0.0).line_to(0.0, 2.2).line_to(10.7, 2.2).line_to(
+            10.7, 3.0
+        ).line_to(13.165, 3.0).line_to(13.165, 3.65).line_to(15.365, 3.65).line_to(
+            15.365, 3.0
+        ).line_to(17.83, 3.0).line_to(17.83, 0.0).line_to(0.0, 0.0)
 
         # Revolve feature 1
-        shape1 = wp1.revolve(6.283185307179586, 'X', 'NewBodyFeatureOperation')
+        shape1 = wp1.revolve(6.283185307179586, "X", "NewBodyFeatureOperation")
 
         # Sketch 2
         wp2 = app.work_plane("XY", offset=2.2)
 
         wp2.move_to(0.85, 0.0).line_to(9.85, 0.0)
-        wp2.move_to(1.45, -0.6).line_to(9.25, -0.6).three_point_arc((9.85, 0.0), (9.25, 0.6)).line_to(1.45, 0.6).three_point_arc((0.85, 0.0), (1.45, -0.6))
+        wp2.move_to(1.45, -0.6).line_to(9.25, -0.6).three_point_arc(
+            (9.85, 0.0), (9.25, 0.6)
+        ).line_to(1.45, 0.6).three_point_arc((0.85, 0.0), (1.45, -0.6))
 
         # Extrude feature 2
-        shape2 = wp2.extrude(-0.5, 'Cut', symmetric=False)
+        shape2 = wp2.extrude(-0.5, "Cut", symmetric=False)
+
+    def test_shield_cad(self):
+        from rapidcadpy import InventorApp
+
+        # Initialize Inventor application
+        app = InventorApp()
+        app.new_document()
+
+        # Sketch 1
+        wp1 = app.work_plane("XY")
+
+        wp1.move_to(-0.1692273, -0.06081982).three_point_arc((-0.113369, -0.185601), (0.00293384, -0.25746143)).three_point_arc((0.118158, -0.186268), (0.1692273, -0.06081982)).line_to(0.1692273, 0.16610546).three_point_arc((0.079251, 0.182199), (-0.00043091, 0.22698241)).three_point_arc((-0.079712, 0.181706), (-0.1692273, 0.16375488)).line_to(-0.1692273, -0.06081982)
+        # Extrude feature 1
+        shape1 = wp1.extrude(0.03175, 'NewBodyFeatureOperation')

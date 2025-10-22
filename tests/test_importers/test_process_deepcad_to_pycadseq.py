@@ -35,6 +35,15 @@ def sample_deepcad_json_3():
         pytest.skip(f"Test file not found: {path}")
     return str(path.resolve())
 
+@pytest.fixture
+def sample_deepcad_json_shield():
+    """Fixture to provide path to sample DeepCAD JSON file."""
+    path = pathlib.Path(__file__).parent / "test_files" / "00950156.json"
+    print(path)
+    if not path.exists():
+        pytest.skip(f"Test file not found: {path}")
+    return str(path.resolve())
+
 
 class TestDeepCadToPyCadSeqGenerator:
     """Test class for DeepCAD to PyCadSeq code generation."""
@@ -114,6 +123,21 @@ class TestDeepCadToPyCadSeqGenerator:
 
         print(generated_code)
         assert "shape1 = wp1.extrude(0.0889, 'NewBodyFeatureOperation')" in generated_code
+
+    
+    def test_generate_code_inventor_backend_4(self, sample_deepcad_json_shield):
+        # import cadquery as cq
+        # # Generating a workplane for sketch 0
+        # wp_sketch0 = cq.Workplane(cq.Plane(cq.Vector(-0.3984375, -0.140625, 0.0), cq.Vector(1.0, 0.0, 0.0), cq.Vector(0.0, 0.0, 1.0)))
+        # loop0=wp_sketch0.moveTo(0.0, 0.0).threePointArc((0.12852046713924567, -0.2902208040373281), (0.39868421052631575, -0.45682565789473684)).threePointArc((0.6677794083540989, -0.291568910679627), (0.7890625, 0.0)).lineTo(0.7890625, 0.531578947368421).threePointArc((0.5779158474692538, 0.5688487899131874), (0.3903782894736842, 0.6727796052631578)).threePointArc((0.2072170508610379, 0.5666201164651841), (0.0, 0.5232730263157894)).lineTo(0.0, 0.0).close()
+        # solid0=wp_sketch0.add(loop0).extrude(0.078125)
+        # solid=solid0
+        generated_code = generate_pycadseq_code_from_deepcad_json(
+            sample_deepcad_json_shield, 
+            backend="inventor"
+        )
+
+        print(generated_code)
         
     
     def test_generate_code_occ_backend(self, sample_deepcad_json):
