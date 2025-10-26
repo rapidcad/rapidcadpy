@@ -7,7 +7,7 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.gp import gp_Pnt, gp_Vec
 from OCP.TopoDS import TopoDS_Compound
 
-from rapidcadpy import Vertex, Workplane
+from rapidcadpy.workplane import  Workplane
 from rapidcadpy.cad_types import VectorLike
 from rapidcadpy.integrations.occ.shape import OccShape
 
@@ -27,7 +27,6 @@ class OccWorkplane(Workplane):
         Returns:
             New OccWorkplane with specified origin and normal
         """
-        import numpy as np
         from rapidcadpy.cad_types import Vector
 
         # Convert to vectors
@@ -119,6 +118,8 @@ class OccWorkplane(Workplane):
         # Calculate extrude vector
         up_dir_vec = self.up_dir * distance
         # Convert to gp_Vec using indexing to avoid attribute access issues
-        extrude_vector = gp_Vec(float(up_dir_vec[0]), float(up_dir_vec[1]), float(up_dir_vec[2]))
+        extrude_vector = gp_Vec(
+            float(up_dir_vec[0]), float(up_dir_vec[1]), float(up_dir_vec[2])
+        )
         prism_builder: Any = BRepPrimAPI_MakePrism(face, extrude_vector, True)
         return OccShape(obj=prism_builder.Shape())

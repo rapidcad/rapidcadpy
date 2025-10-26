@@ -1,54 +1,55 @@
 import math
-from typing import TYPE_CHECKING, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Tuple, Union
 
 from win32com.client import constants
 
 from rapidcadpy import Workplane
-from rapidcadpy.cad_types import VectorLike, Vertex
-
+from rapidcadpy.cad_types import VectorLike, Vertex, Vector
 from rapidcadpy.integrations.inventor.shape import InventorShape
 
 if TYPE_CHECKING:
     from rapidcadpy.integrations.inventor.app import InventorApp
 
+
 class InventorWorkPlane(Workplane):
-    def __init__(
-        self,
-        app: "InventorApp",
-        sketch 
-    ):
+    def __init__(self, app: "InventorApp", sketch):
         super().__init__(app=app)
         self.tg = self.app.transient_geom
         self.app: "InventorApp" = app  # type: ignore
         self.sketch = sketch
+        # Track all sketches for multi-sketch extrusion
+        self.sketches = [sketch]
         # no duplicate point objects in the sketch, use dict
         self.point2d_dict = {}
         self.sketchpoint_dict = {}
 
     @classmethod
     def from_origin_normal(
-        cls, origin: VectorLike, normal: VectorLike, app: "InventorApp" 
+        cls, app: "InventorApp", origin: VectorLike, normal: VectorLike
     ) -> "InventorWorkPlane":
         """Create an InventorWorkPlane from origin and normal vector.
 
         Args:
-            origin: Origin point of the workplane
+            app: InventorApp instance
+            origin: Origin point of the workplane (3D coordinates)
             normal: Normal vector (up-axis direction)
-            app: Optional app instance
         Returns:
             New InventorWorkPlane with specified origin and normal
         """
         tg = app.transient_geom
+        
+        # Ensure we have 3D coordinates
+        origin_3d = origin if len(origin) == 3 else (origin[0], origin[1], 0.0)
+        normal_3d = normal if len(normal) == 3 else (normal[0], normal[1], 0.0)
+        
         # create a workplane in inventor using up_dir as the normal
-        origin_pt = tg.CreatePoint(origin[0], origin[1], origin[2])
-        up_vec = tg.CreateUnitVector(normal[0], normal[1], normal[2])
+        origin_pt = tg.CreatePoint(origin_3d[0], origin_3d[1], origin_3d[2])
+        up_vec = tg.CreateUnitVector(normal_3d[0], normal_3d[1], normal_3d[2])
         x_vec = tg.CreateUnitVector(1, 0, 0)
         y_vec = up_vec.CrossProduct(x_vec)
 
         # in inventor the y vector is the up direction
-        work_plane = app.comp_def.WorkPlanes.AddFixed(
-            origin_pt, x_vec, y_vec, False
-        )
+        work_plane = app.comp_def.WorkPlanes.AddFixed(origin_pt, x_vec, y_vec, False)
         work_plane.Visible = False
 
         # add a sketch on the workplane
@@ -57,11 +58,9 @@ class InventorWorkPlane(Workplane):
             app=app,
             sketch=sketch,
         )
-    
+
     @classmethod
-    def xy_plane(
-        cls, app: "InventorApp"
-    ) -> "InventorWorkPlane":
+    def xy_plane(cls, app: "InventorApp") -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the XY orientation at the given origin.
 
         Args:
@@ -74,11 +73,9 @@ class InventorWorkPlane(Workplane):
             app=app,
             sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(3)),
         )
-    
+
     @classmethod
-    def xz_plane(
-        cls, app: "InventorApp"
-    ) -> "InventorWorkPlane":
+    def xz_plane(cls, app: "InventorApp") -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the XZ orientation at the given origin.
 
         Args:
@@ -88,11 +85,9 @@ class InventorWorkPlane(Workplane):
             app=app,
             sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(2)),
         )
-    
+
     @classmethod
-    def yz_plane(
-        cls, app: "InventorApp"
-    ) -> "InventorWorkPlane":
+    def yz_plane(cls, app: "InventorApp") -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the YZ orientation at the given origin.
 
         Args:
@@ -102,8 +97,6 @@ class InventorWorkPlane(Workplane):
             app=app,
             sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(1)),
         )
-    
-
 
     @classmethod
     def create_offset_plane(
@@ -119,11 +112,17 @@ class InventorWorkPlane(Workplane):
             Workplane instance at the specified offset
         """
         if name == "XY":
-            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(app.comp_def.WorkPlanes(3), offset)
+            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(
+                app.comp_def.WorkPlanes(3), offset
+            )
         elif name == "XZ":
-            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(app.comp_def.WorkPlanes(2), offset)
+            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(
+                app.comp_def.WorkPlanes(2), offset
+            )
         elif name == "YZ":
-            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(app.comp_def.WorkPlanes(1), offset)
+            plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(
+                app.comp_def.WorkPlanes(1), offset
+            )
         else:
             raise ValueError(f"Unsupported plane name '{name}' for offset plane")
         sketch = app.comp_def.Sketches.Add(plane)
@@ -149,6 +148,9 @@ class InventorWorkPlane(Workplane):
 
         # Create a new sketch on the same workplane
         self.sketch = self.app.comp_def.Sketches.Add(current_workplane)
+        
+        # Append the new sketch to the sketches list for multi-sketch extrusion
+        self.sketches.append(self.sketch)
 
         # Reset the point dictionaries to avoid conflicts
         self.point2d_dict = {}
@@ -157,19 +159,24 @@ class InventorWorkPlane(Workplane):
         # Reset current position to origin
         self._current_position = Vertex(0, 0)
 
+    def move_to(self, x: float, y: float) -> "InventorWorkPlane":
+        """Move the current position to the specified point."""
+        self._current_position = Vertex(x, y)
+        return self
+
     def line_to(self, x: float, y: float) -> "InventorWorkPlane":
         """Draw a line from the current position to the specified point."""
         # Get start point from current position
         start_point = self._current_position
-        
+
         # Create sketch points for start and end
         sp = self._get_sketch_point(start_point.x, start_point.y)
         ep = self._get_sketch_point(x, y)
-        
+
         # Only create a line if start and end points are different
         if abs(start_point.x - x) > 1e-9 or abs(start_point.y - y) > 1e-9:
             self.sketch.SketchLines.AddByTwoPoints(sp, ep)
-        
+
         # Update current position
         self._current_position = Vertex(x, y)
         return self
@@ -215,14 +222,14 @@ class InventorWorkPlane(Workplane):
         return self
 
     def three_point_arc(
-        self, p1: Tuple[float, float], p2: Tuple[float, float]
+        self, p1: VectorLike, p2: VectorLike
     ) -> "InventorWorkPlane":
         """
         Create a three-point arc using the current position as the first point.
 
         Args:
-            p1: Tuple (x, y) for the middle point of the arc
-            p2: Tuple (x, y) for the end point of the arc
+            p1: Middle point of the arc (x, y) or (x, y, z)
+            p2: End point of the arc (x, y) or (x, y, z)
 
         Returns:
             InventorWorkPlane: Self for method chaining
@@ -244,9 +251,22 @@ class InventorWorkPlane(Workplane):
         return self
 
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation", symmetric: bool = False
+        self,
+        distance: float,
+        operation: str = "NewBodyFeatureOperation",
+        symmetric: bool = False,
     ) -> InventorShape:
-        profile = self.sketch.Profiles.AddForSolid()
+        """Extrude all sketches in the workplane.
+        
+        Args:
+            distance: Extrusion distance (positive or negative)
+            operation: Operation type for extrusion
+            symmetric: Whether to extrude symmetrically (not yet implemented)
+            
+        Returns:
+            InventorShape representing the last extruded body (or combined result)
+        """
+        # Map operation string to Inventor constants
         ext_op = {
             "JoinBodyFeatureOperation": constants.kJoinOperation,
             "Cut": constants.kCutOperation,
@@ -254,19 +274,76 @@ class InventorWorkPlane(Workplane):
             "Intersect": constants.kIntersectOperation,
             "NewBodyFeatureOperation": constants.kNewBodyOperation,
         }.get(operation, constants.kNewBodyOperation)
-        ext_def = self.app.comp_def.Features.ExtrudeFeatures.CreateExtrudeDefinition(
-            profile, ext_op
-        )
+        
+        # Determine extrusion direction
         if distance < 0:
             direction = constants.kNegativeExtentDirection
         else:
             direction = constants.kPositiveExtentDirection
-        ext_def.SetDistanceExtent(abs(distance), direction)
-        extrusion_feature = self.app.comp_def.Features.ExtrudeFeatures.Add(ext_def)
+        
+        extruded_shapes = []
+        
+        # Helper function to check if a sketch has geometry
+        def sketch_has_geometry(sketch):
+            """Check if sketch has any geometric entities."""
+            return (sketch.SketchLines.Count > 0 or 
+                    sketch.SketchCircles.Count > 0 or 
+                    sketch.SketchArcs.Count > 0 or
+                    sketch.SketchEllipses.Count > 0 or
+                    sketch.SketchSplines.Count > 0)
+        
+        # Filter out empty sketches
+        valid_sketches = [s for s in self.sketches if sketch_has_geometry(s)]
+        
+        if not valid_sketches:
+            raise RuntimeError("No valid sketches to extrude - all sketches are empty")
+        
+        # Extrude each valid sketch
+        for sketch_idx, sketch in enumerate(valid_sketches):
+            # Check if profiles already exist, if not create them
+            if sketch.Profiles.Count == 0:
+                try:
+                    # Create profiles from the sketch - use Combine=False to get separate profiles
+                    # for each closed loop (this prevents the outer boundary from being filled)
+                    sketch.Profiles.AddForSolid(False)
+                except Exception as e:
+                    # Skip sketches that can't create valid profiles
+                    print(f"Warning: Skipping sketch {sketch_idx} - could not create profiles: {e}")
+                    continue
+            
+            # Now extrude each profile separately
+            for profile_idx in range(1, sketch.Profiles.Count + 1):
+                try:
+                    profile = sketch.Profiles.Item(profile_idx)
+                    
+                    # Skip profiles that are not closed or have no area
+                    if not profile or profile.Count == 0:
+                        continue
+                    
+                    # For the first profile, use the specified operation
+                    # For subsequent profiles, use Join operation to combine them
+                    current_op = ext_op if len(extruded_shapes) == 0 else constants.kJoinOperation
+                    
+                    # Create extrude definition
+                    ext_def = self.app.comp_def.Features.ExtrudeFeatures.CreateExtrudeDefinition(
+                        profile, current_op
+                    )
+                    ext_def.SetDistanceExtent(abs(distance), direction)
+                    
+                    # Add the extrusion feature
+                    extrusion_feature = self.app.comp_def.Features.ExtrudeFeatures.Add(ext_def)
+                    extruded_shapes.append(InventorShape(obj=extrusion_feature.SurfaceBody, app=self.app))
+                except Exception as e:
+                    print(f"Warning: Skipping profile {profile_idx} in sketch {sketch_idx}: {e}")
+                    continue
+        
         # After extrusion, create a new sketch for future operations
-
-        # Return the shape representing the extruded body
-        return InventorShape(obj=extrusion_feature.SurfaceBody, app=self.app)
+        self._create_new_sketch()
+        
+        # Return the last extruded shape (which should contain all joined bodies)
+        if not extruded_shapes:
+            raise RuntimeError("No shapes were successfully extruded")
+        return extruded_shapes[-1]
 
     def revolve(
         self,
@@ -280,7 +357,7 @@ class InventorWorkPlane(Workplane):
         # Check if sketch has any geometry
         if self.sketch.SketchLines.Count == 0 and self.sketch.SketchArcs.Count == 0:
             raise RuntimeError("Sketch is empty - cannot create revolve feature")
-        
+
         # Create profile from the sketch
         try:
             profile = self.sketch.Profiles.AddForSolid()
@@ -290,7 +367,7 @@ class InventorWorkPlane(Workplane):
                 profile = self.sketch.Profiles.Item(1)
             else:
                 raise RuntimeError(f"Failed to create profile for revolve: {e}")
-        
+
         # Map operation string to Inventor constants
         rev_op = {
             "JoinBodyFeatureOperation": constants.kJoinOperation,
@@ -333,7 +410,7 @@ class InventorWorkPlane(Workplane):
                 )
         except Exception as e:
             # Provide more detailed error information
-            error_msg = f"Failed to create revolve feature. "
+            error_msg = "Failed to create revolve feature. "
             error_msg += f"Profile count: {self.sketch.Profiles.Count}, "
             error_msg += f"Work axis: {work_axis}, "
             error_msg += f"Operation: {operation} ({rev_op}), "

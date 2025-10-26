@@ -53,26 +53,20 @@ class Workplane(ABC):
     # ========== Factory methods for standard planes ==========
 
     @abstractmethod
-    def xy_plane(
-        cls, app: "App", *args, **kwargs
-    ) -> "Workplane":
+    def xy_plane(cls, app: "App", *args, **kwargs) -> "Workplane":
         """Create a workplane in the XY orientation at the given origin."""
         ...
 
     @abstractmethod
-    def xz_plane(
-        cls, app:"App", *args, **kwargs
-    ) -> "Workplane":
+    def xz_plane(cls, app: "App", *args, **kwargs) -> "Workplane":
         """Create a workplane in the XZ orientation at the given origin."""
         ...
 
     @abstractmethod
-    def yz_plane(
-        cls, app: "App", *args, **kwargs
-    ) -> "Workplane":
+    def yz_plane(cls, app: "App", *args, **kwargs) -> "Workplane":
         """Create a workplane in the YZ orientation at the given origin."""
         ...
-    
+
     @abstractmethod
     def create_offset_plane(
         cls, app: "App", name: str = "XY", offset: float = 0.0
@@ -90,24 +84,27 @@ class Workplane(ABC):
 
     @classmethod
     def from_origin_normal(
-        cls, app: "App", origin: VectorLike, normal: VectorLike,
+        cls,
+        app: "App",
+        origin: VectorLike,
+        normal: VectorLike,
     ) -> "Workplane":
         """Create a workplane from origin and normal vector.
-        
+
         Args:
             origin: Origin point of the workplane
             normal: Normal vector (z-axis direction)
             app: Optional app instance
-            
+
         Returns:
             New workplane with specified origin and normal
         """
         from rapidcadpy.cad_types import Vector
-        
+
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
         normal_vec = Vector(*normal) if not isinstance(normal, Vector) else normal
-        
+
         # Use default x and y directions for now
         return cls(
             origin=origin_vec,

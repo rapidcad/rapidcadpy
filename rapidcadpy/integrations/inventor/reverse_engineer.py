@@ -127,9 +127,7 @@ class InventorReverseEngineer:
 
         self.generated_code.append("")
 
-    def _get_workplane_info(
-        self, planar_entity
-    ):
+    def _get_workplane_info(self, planar_entity):
         """Extract workplane origin and orientation."""
         if planar_entity.DefinitionType == constants.kPlaneAndOffsetWorkPlane:
             offset = planar_entity.Definition.Offset.Value
@@ -149,12 +147,11 @@ class InventorReverseEngineer:
             plane = planar_entity.Geometry
             origin = plane.RootPoint
             normal = plane.Normal
-            
+
             return {
                 "origin": (round(origin.X, 6), round(origin.Y, 6), round(origin.Z, 6)),
                 "normal": (round(normal.X, 6), round(normal.Y, 6), round(normal.Z, 6)),
             }
-
 
     def _get_connected_paths(self, sketch) -> List[List[Dict]]:
         """Get sketch elements organized into connected paths."""
@@ -167,14 +164,14 @@ class InventorReverseEngineer:
                 # Check if the line has valid start and end points
                 if line.StartSketchPoint is None or line.EndSketchPoint is None:
                     continue  # Skip invalid lines
-                
+
                 start_pt = line.StartSketchPoint.Geometry
                 end_pt = line.EndSketchPoint.Geometry
-                
+
                 # Additional check for valid geometry
                 if start_pt is None or end_pt is None:
                     continue
-                
+
                 elements.append(
                     {
                         "type": "line",
@@ -193,28 +190,34 @@ class InventorReverseEngineer:
             arc = sketch.SketchArcs.Item(i)
             try:
                 # Check if the arc has valid start, end, and center points
-                if (arc.StartSketchPoint is None or 
-                    arc.EndSketchPoint is None or 
-                    arc.CenterSketchPoint is None):
+                if (
+                    arc.StartSketchPoint is None
+                    or arc.EndSketchPoint is None
+                    or arc.CenterSketchPoint is None
+                ):
                     continue  # Skip invalid arcs
-                
+
                 start_pt = arc.StartSketchPoint.Geometry
                 end_pt = arc.EndSketchPoint.Geometry
                 center_pt = arc.CenterSketchPoint.Geometry
-                
+
                 # Additional check for valid geometry
                 if start_pt is None or end_pt is None or center_pt is None:
                     continue
-                
+
                 # Try to get angles, but calculate them if not available
                 try:
                     start_angle = arc.StartAngle
                     end_angle = arc.EndAngle
                 except AttributeError:
                     # Calculate angles from points if properties not available
-                    start_angle = math.atan2(start_pt.Y - center_pt.Y, start_pt.X - center_pt.X)
-                    end_angle = math.atan2(end_pt.Y - center_pt.Y, end_pt.X - center_pt.X)
-                
+                    start_angle = math.atan2(
+                        start_pt.Y - center_pt.Y, start_pt.X - center_pt.X
+                    )
+                    end_angle = math.atan2(
+                        end_pt.Y - center_pt.Y, end_pt.X - center_pt.X
+                    )
+
                 # Try to get radius, calculate if not available
                 try:
                     radius = round(arc.Radius, 6)
@@ -222,8 +225,8 @@ class InventorReverseEngineer:
                     # Calculate radius from center to start point
                     dx = start_pt.X - center_pt.X
                     dy = start_pt.Y - center_pt.Y
-                    radius = round(math.sqrt(dx*dx + dy*dy), 6)
-                
+                    radius = round(math.sqrt(dx * dx + dy * dy), 6)
+
                 elements.append(
                     {
                         "type": "arc",
@@ -281,21 +284,23 @@ class InventorReverseEngineer:
                 # Check if the circle has valid center point
                 if circle.CenterSketchPoint is None:
                     continue  # Skip invalid circles
-                
+
                 center_pt = circle.CenterSketchPoint.Geometry
-                
+
                 # Additional check for valid geometry
                 if center_pt is None:
                     continue
-                
+
                 # Try to get radius, use default if not available
                 try:
                     radius = round(circle.Radius, 6)
                 except AttributeError:
                     # Default radius if property not available
                     radius = 1.0
-                    print(f"Warning: Could not get radius for circle {i}, using default: {radius}")
-                
+                    print(
+                        f"Warning: Could not get radius for circle {i}, using default: {radius}"
+                    )
+
                 paths.append(
                     [
                         {
@@ -379,7 +384,6 @@ class InventorReverseEngineer:
             else:
                 symmetric = "symmetric=False"
 
-            
             # Get operation type
             operation_map = {
                 constants.kNewBodyOperation: "NewBodyFeatureOperation",
@@ -399,8 +403,6 @@ class InventorReverseEngineer:
         except Exception as e:
             raise RuntimeError(f"Failed to analyze extrude feature: {e}")
 
-        
-
     def _analyze_revolve_feature(self, feature, wp_var: str, feature_num: int):
         """Analyze a revolve feature."""
         extent = feature.Extent
@@ -418,15 +420,15 @@ class InventorReverseEngineer:
 
         # Get axis
         axis_entity = feature.AxisEntity
-        
+
         # Determine which basis vector (X, Y, or Z) the axis is aligned with
         # Get the axis direction vector
-        if hasattr(axis_entity, 'Geometry'):
+        if hasattr(axis_entity, "Geometry"):
             axis_geom = axis_entity.Geometry
             # For a line, get direction vector
-            if hasattr(axis_geom, 'Direction'):
+            if hasattr(axis_geom, "Direction"):
                 direction = axis_geom.Direction
-                
+
                 if abs(direction.X) == 1.0:
                     axis = "X"
                 elif abs(direction.Y) == 1.0:
@@ -438,13 +440,13 @@ class InventorReverseEngineer:
                 axis = "Z"
         else:
             # Check if it's a work axis by name
-            if hasattr(axis_entity, 'Name'):
+            if hasattr(axis_entity, "Name"):
                 name = axis_entity.Name.upper()
-                if 'X' in name:
+                if "X" in name:
                     axis = "X"
-                elif 'Y' in name:
+                elif "Y" in name:
                     axis = "Y"
-                elif 'Z' in name:
+                elif "Z" in name:
                     axis = "Z"
                 else:
                     axis = "Z"  # Default
