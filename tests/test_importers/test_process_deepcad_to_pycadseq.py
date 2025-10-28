@@ -30,7 +30,6 @@ def sample_deepcad_json_2():
 def sample_deepcad_json_3():
     """Fixture to provide path to sample DeepCAD JSON file."""
     path = pathlib.Path(__file__).parent / "test_files" / "00000767.json"
-<<<<<<< HEAD
     if not path.exists():
         pytest.skip(f"Test file not found: {path}")
     return str(path.resolve())
@@ -47,9 +46,6 @@ def sample_deepcad_json_shield():
 def sample_deepcad_json_flash():
     """Fixture to provide path to sample DeepCAD JSON file."""
     path = pathlib.Path(__file__).parent / "test_files" / "00561068_flash.json"
-=======
-    print(path)
->>>>>>> 9e00eb6038d9b2e245d6633e89df806763c7f46f
     if not path.exists():
         pytest.skip(f"Test file not found: {path}")
     return str(path.resolve())
@@ -133,7 +129,6 @@ class TestDeepCadToPyCadSeqGenerator:
 
         print(generated_code)
         assert "shape1 = wp1.extrude(0.0889, 'NewBodyFeatureOperation')" in generated_code
-<<<<<<< HEAD
 
     
     def test_generate_code_inventor_backend_4(self, sample_deepcad_json_shield):
@@ -151,8 +146,6 @@ class TestDeepCadToPyCadSeqGenerator:
         )
 
         print(generated_code)
-=======
->>>>>>> 9e00eb6038d9b2e245d6633e89df806763c7f46f
         
     
     def test_generate_code_occ_backend(self, sample_deepcad_json):

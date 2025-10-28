@@ -78,7 +78,6 @@ class TestFluentAPIInventorBackend:
         # wp1.extrude(0.1)  # Thin extrusion to create a profile
         wp1.revolve(6.283185307179586, "Z", "JoinBodyFeatureOperation")
 
-
     def test_offset_sketch_plane(self):
         from rapidcadpy import InventorApp
 
@@ -89,21 +88,24 @@ class TestFluentAPIInventorBackend:
         # Sketch 1
         wp1 = app.work_plane("XY")
 
-        wp1.move_to(0.0, 0.0).line_to(0.0, 2.2).line_to(10.7, 2.2).line_to(10.7, 3.0).line_to(13.165, 3.0).line_to(13.165, 3.65).line_to(15.365, 3.65).line_to(15.365, 3.0).line_to(17.83, 3.0).line_to(17.83, 0.0).line_to(0.0, 0.0)
+        wp1.move_to(0.0, 0.0).line_to(0.0, 2.2).line_to(10.7, 2.2).line_to(
+            10.7, 3.0
+        ).line_to(13.165, 3.0).line_to(13.165, 3.65).line_to(15.365, 3.65).line_to(
+            15.365, 3.0
+        ).line_to(17.83, 3.0).line_to(17.83, 0.0).line_to(0.0, 0.0)
 
         # Revolve feature 1
-        shape1 = wp1.revolve(6.283185307179586, 'X', 'NewBodyFeatureOperation')
+        shape1 = wp1.revolve(6.283185307179586, "X", "NewBodyFeatureOperation")
 
         # Sketch 2
         wp2 = app.work_plane("XY", offset=2.2)
 
         wp2.move_to(0.85, 0.0).line_to(9.85, 0.0)
-        wp2.move_to(1.45, -0.6).line_to(9.25, -0.6).three_point_arc((9.85, 0.0), (9.25, 0.6)).line_to(1.45, 0.6).three_point_arc((0.85, 0.0), (1.45, -0.6))
+        wp2.move_to(1.45, -0.6).line_to(9.25, -0.6).three_point_arc(
+            (9.85, 0.0), (9.25, 0.6)
+        ).line_to(1.45, 0.6).three_point_arc((0.85, 0.0), (1.45, -0.6))
 
         # Extrude feature 2
-<<<<<<< Updated upstream
-        shape2 = wp2.extrude(-0.5, 'Cut', symmetric=False)
-=======
         shape2 = wp2.extrude(-0.5, "Cut", symmetric=False)
 
     def test_shield_cad(self):
@@ -116,9 +118,17 @@ class TestFluentAPIInventorBackend:
         # Sketch 1
         wp1 = app.work_plane("XY")
 
-        wp1.move_to(-0.1692273, -0.06081982).three_point_arc((-0.113369, -0.185601), (0.00293384, -0.25746143)).three_point_arc((0.118158, -0.186268), (0.1692273, -0.06081982)).line_to(0.1692273, 0.16610546).three_point_arc((0.079251, 0.182199), (-0.00043091, 0.22698241)).three_point_arc((-0.079712, 0.181706), (-0.1692273, 0.16375488)).line_to(-0.1692273, -0.06081982)
+        wp1.move_to(-0.1692273, -0.06081982).three_point_arc(
+            (-0.113369, -0.185601), (0.00293384, -0.25746143)
+        ).three_point_arc((0.118158, -0.186268), (0.1692273, -0.06081982)).line_to(
+            0.1692273, 0.16610546
+        ).three_point_arc(
+            (0.079251, 0.182199), (-0.00043091, 0.22698241)
+        ).three_point_arc((-0.079712, 0.181706), (-0.1692273, 0.16375488)).line_to(
+            -0.1692273, -0.06081982
+        )
         # Extrude feature 1
-        shape1 = wp1.extrude(0.03175, 'NewBodyFeatureOperation')
+        shape1 = wp1.extrude(0.03175, "NewBodyFeatureOperation")
 
     def test_flash_cad(self):
         from rapidcadpy import InventorApp
@@ -130,9 +140,28 @@ class TestFluentAPIInventorBackend:
         # Sketch 1
         wp1 = app.work_plane("XY")
 
-        wp1.move_to(-0.06272749, 0.07966536).line_to(-0.03073996, 0.05362793).line_to(-0.02266331, 0.04705364).line_to(0.03514306, 0.0).line_to(0.00856945, 0.0).line_to(0.04752207, -0.03956649).line_to(0.02309416, -0.03956649).line_to(0.03900109, -0.05955874).line_to(0.04503432, -0.06714148).line_to(0.06788577, -0.09586179).line_to(0.03801842, -0.07127586).line_to(0.02978309, -0.06449677).line_to(-0.02933965, -0.01582865).line_to(-0.00266195, -0.01582865).line_to(-0.04099881, 0.02310104).line_to(-0.01728528, 0.02310104).line_to(-0.03188096, 0.04126905).line_to(-0.03792803, 0.04879616).line_to(-0.06272749, 0.07966536)
-        wp1.move_to(-0.03792803, 0.04879616).three_point_arc((-0.054894, -0.045989), (0.03801842, -0.07127586)).line_to(0.02978309, -0.06449677).three_point_arc((-0.047894, -0.038926), (-0.03188096, 0.04126905)).line_to(-0.03792803, 0.04879616)
-        wp1.move_to(-0.03073996, 0.05362793).line_to(-0.02266331, 0.04705364).three_point_arc((0.058757, 0.023008), (0.03900109, -0.05955874)).line_to(0.04503432, -0.06714148).three_point_arc((0.065789, 0.030037), (-0.03073996, 0.05362793))
+        wp1.move_to(-0.06272749, 0.07966536).line_to(-0.03073996, 0.05362793).line_to(
+            -0.02266331, 0.04705364
+        ).line_to(0.03514306, 0.0).line_to(0.00856945, 0.0).line_to(
+            0.04752207, -0.03956649
+        ).line_to(0.02309416, -0.03956649).line_to(0.03900109, -0.05955874).line_to(
+            0.04503432, -0.06714148
+        ).line_to(0.06788577, -0.09586179).line_to(0.03801842, -0.07127586).line_to(
+            0.02978309, -0.06449677
+        ).line_to(-0.02933965, -0.01582865).line_to(-0.00266195, -0.01582865).line_to(
+            -0.04099881, 0.02310104
+        ).line_to(-0.01728528, 0.02310104).line_to(-0.03188096, 0.04126905).line_to(
+            -0.03792803, 0.04879616
+        ).line_to(-0.06272749, 0.07966536).close()
+        wp1.move_to(-0.03792803, 0.04879616).three_point_arc(
+            (-0.054894, -0.045989), (0.03801842, -0.07127586)
+        ).line_to(0.02978309, -0.06449677).three_point_arc(
+            (-0.047894, -0.038926), (-0.03188096, 0.04126905)
+        ).line_to(-0.03792803, 0.04879616).close()
+        wp1.move_to(-0.03073996, 0.05362793).line_to(
+            -0.02266331, 0.04705364
+        ).three_point_arc((0.058757, 0.023008), (0.03900109, -0.05955874)).line_to(
+            0.04503432, -0.06714148
+        ).three_point_arc((0.065789, 0.030037), (-0.03073996, 0.05362793)).close()
         # Extrude feature 1
-        shape1 = wp1.extrude(0.00508, 'NewBodyFeatureOperation')
->>>>>>> Stashed changes
+        shape1 = wp1.extrude(0.00508, "NewBodyFeatureOperation")
