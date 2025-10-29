@@ -12,9 +12,10 @@ import argparse
 
 ###########
 # May need to update this if your data is stored elsewhere
-H5_VEC_FOLDER = '/mnt/data/data/deepcad_h5/'
+H5_VEC_FOLDER = '/mnt/data/deepcad_h5/'
+RAPIDCAD_FOLDER = '/mnt/data/rapidcadpy'
 UNQUANTIZE = True # TODO: support unquantized?
-generate_stls = True
+generate_stls = False
 ###########
 
 def extract_h5_file(h5_file_path):
@@ -176,7 +177,7 @@ def convert_h5_to_cadquery(vecs, save_python_dir, save_mesh_path, use_fixed_deci
         else:
             return NotImplementedError("Circle with other things in loop")
     
-    def rapidcad_close_loop(loop_operations, sketch_num):
+    def rapidcad_close_loop(loop_operations, loop_num, sketch_num):
         if len(loop_operations) > 1:
             loop_string = "".join(loop_operations) + ".close()"
             return f"loop{loop_num}=wp_sketch{sketch_num}" + loop_string + "\n"
@@ -341,9 +342,12 @@ def convert_h5_to_cadquery(vecs, save_python_dir, save_mesh_path, use_fixed_deci
     def join_loops(loops, sketch_num):
         loops_expanded = [f".add(loop{l})" for l in loops]
         return "".join(loops_expanded)
-    
+
+    if os.path.exists(os.path.dirname(save_python_dir)):
+        return # skip if file already exists
+
     # Initiate python program string
-    python_cadquery = "import cadquery as cq\n"
+    python_rapidcad = ["from rapidcadpy import InventorApp\n", "app = InventorApp()\n", "app.new_document()\n"]
     
     # print(f"Original numpy array:\n{vecs}")
     
@@ -372,7 +376,7 @@ def convert_h5_to_cadquery(vecs, save_python_dir, save_mesh_path, use_fixed_deci
         python_rapidcad.append(wp_decl)
         
         loops = split_by_loops(sketch)
-        
+        loops_in_this_sketch = []
         loop_chunk = ""  # store emitted loop commands for possible repetition
         
         for loop in loops:
@@ -403,75 +407,17 @@ def convert_h5_to_cadquery(vecs, save_python_dir, save_mesh_path, use_fixed_deci
                 else:
                     raise NotImplementedError("Command not implemented")
             # Close the loop and append to program text
-            loop_cmd = rapidcad_close_loop(loop_ops, i)
+            loop_cmd = rapidcad_close_loop(loop_ops, total_loop_count, i)
             python_rapidcad.append(loop_cmd)
             loop_chunk += loop_cmd
+            loops_in_this_sketch.append(total_loop_count)
             total_loop_count += 1
-        
-        # Map operation
-        op_str = map_operation(op)
-        
-        # Handle the extrude for this sketch
-        if type == EXTENT_TYPE.index("OneSideFeatureExtentType"):
-            if use_fixed_decimal is True:
-                python_rapidcad.append(f"wp_sketch{i}.extrude({dir1:.{truncate}f}, '{op_str}')\n")
-            else:
-                python_rapidcad.append(f"wp_sketch{i}.extrude({dir1}, '{op_str}')\n")
-        elif type == EXTENT_TYPE.index("SymmetricFeatureExtentType"):
-            # Symmetric not implemented in backend; approximate by two passes
-            pos = dir1
-            neg = -dir1
-            # First side
-            if use_fixed_decimal is True:
-                python_rapidcad.append(f"wp_sketch{i}.extrude({pos:.{truncate}f}, '{op_str}')\n")
-            else:
-                python_rapidcad.append(f"wp_sketch{i}.extrude({pos}, '{op_str}')\n")
-            # Repeat sketch geometry for the opposite side
-            python_rapidcad.append(wp_decl)
-            python_rapidcad.append(loop_chunk)
-            if use_fixed_decimal is True:
-                python_rapidcad.append(f"wp_sketch{i}.extrude({neg:.{truncate}f}, '{op_str}')\n")
-            else:
-                python_rapidcad.append(f"wp_sketch{i}.extrude({neg}, '{op_str}')\n")
-        else:  # TwoSidesFeatureExtentType
-            # Normalize directions similar to previous implementation
-            if (dir2==0):
-                # Should not happen due to earlier guard, but fallback as one-sided
-                if use_fixed_decimal is True:
-                    python_rapidcad.append(f"wp_sketch{i}.extrude({dir1:.{truncate}f}, '{op_str}')\n")
-                else:
-                    python_rapidcad.append(f"wp_sketch{i}.extrude({dir1}, '{op_str}')\n")
-            else:
-                if (dir1>0) and (dir2>0):
-                    dir_with_normal = dir1
-                    dir_against_normal = -dir2
-                elif (dir1<0) and (dir2>0):
-                    dir_with_normal = dir1
-                    dir_against_normal = -dir2
-                elif (dir1>0) and (dir2<0):
-                    dir_with_normal = dir1
-                    dir_against_normal = -dir2
-                elif (dir1<0) and (dir2<0):
-                    dir_with_normal = dir1
-                    dir_against_normal = -dir2
-                else:
-                    raise NotImplementedError(f"Unhandled dir cases: {dir1}, {dir2}")
-                # First side
-                if use_fixed_decimal is True:
-                    python_rapidcad.append(f"wp_sketch{i}.extrude({dir_with_normal:.{truncate}f}, '{op_str}')\n")
-                else:
-                    python_rapidcad.append(f"wp_sketch{i}.extrude({dir_with_normal}, '{op_str}')\n")
-                # Repeat sketch geometry for the opposite side
-                python_rapidcad.append(wp_decl)
-                python_rapidcad.append(loop_chunk)
-                if use_fixed_decimal is True:
-                    python_rapidcad.append(f"wp_sketch{i}.extrude({dir_against_normal:.{truncate}f}, '{op_str}')\n")
-                else:
-                    python_rapidcad.append(f"wp_sketch{i}.extrude({dir_against_normal}, '{op_str}')\n")
+        loops_joined = join_loops(loops_in_this_sketch, i)
+
+            
+        extrude_command = cadquery_extrude(loops_joined, op, type, dir1, dir2, i, sketch_plane.normal, wp_decl, loop_chunk)
+        python_rapidcad.append(extrude_command)
     
-    # Export STL if requested
-    if generate_stls:
-        python_rapidcad.append(f"app.to_stl(\"{save_mesh_path}\")")
 
     # Write the python string to a python file
     os.makedirs(save_python_dir.rsplit("/", 1)[0], exist_ok=True)
@@ -503,7 +449,7 @@ if __name__ == "__main__":
         shutil.rmtree(os.path.dirname(H5_VEC_FOLDER) + "/cadquery_stl/")
         shutil.rmtree(os.path.dirname(H5_VEC_FOLDER) + "/cadquery/")
     # Set up save cadquery save directory
-    root_save_dir = create_save_dir(H5_VEC_FOLDER)
+    root_save_dir = create_save_dir(RAPIDCAD_FOLDER)
 
    
 #file_path_ques = str(input("What file path would you like to save the generated python files to? (default: deepcad_derived/data/cad_vec/cadquery): "))
@@ -542,7 +488,7 @@ if __name__ == "__main__":
             print(f"Num: {i}")
             print(f"Path: {h5_vec_path}")
             
-            python_file_save_path = root_save_dir + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".py"
+            python_file_save_path = RAPIDCAD_FOLDER + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".py"
             stl_file_save_path = f"{H5_VEC_FOLDER[:-5]}/cadquery_stl/" + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".stl"
             unique_id = python_file_save_path.split(".")[0].removeprefix(os.path.dirname(H5_VEC_FOLDER) + "/cadquery")
             
@@ -595,24 +541,6 @@ if __name__ == "__main__":
         print(f"STLs NOT generated: {stls_not_generated}")
         print (f"Total number of generated files: {gen_file}")
     
-    
-        with open(f"{prefix}/logs/code_issues_" + sub_dir + ".txt", "w") as f:
-            f.write("\n".join(no_code))
-        
-        with open(f"{prefix}/logs/stl_issues" + sub_dir + ".txt", "w") as f:
-            f.write("\n".join(no_stl))
-        
-        with open(f"{prefix}/logs/log_files_" + sub_dir + ".txt", "w") as f:
-            f.write("\n".join(file_difference_from_deepcad))
-
-        # Log the truncation level and the accuracy it brings
-        trunc_path = f"{prefix}/trunc_logs.txt"
-        if os.path.exists(trunc_path):
-            append_write = 'a' # append if already exists
-        else:
-            append_write = 'w' # make a new file if not
-        with open (f"{prefix}/trunc_logs.txt", append_write) as f:
-            f.write(f"{args.decimal_points}, {gen_file}\n")
         
     
     # for i, h5_vec_path in enumerate(h5_files):
