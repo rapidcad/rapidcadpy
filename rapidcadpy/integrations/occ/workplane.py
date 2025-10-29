@@ -7,9 +7,9 @@ from OCP.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCP.gp import gp_Pnt, gp_Vec
 from OCP.TopoDS import TopoDS_Compound
 
-from rapidcadpy.workplane import  Workplane
 from rapidcadpy.cad_types import VectorLike
 from rapidcadpy.integrations.occ.shape import OccShape
+from rapidcadpy.workplane import Workplane
 
 
 class OccWorkplane(Workplane):

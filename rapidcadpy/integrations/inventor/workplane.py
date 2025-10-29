@@ -398,7 +398,7 @@ class InventorWorkPlane(Workplane):
                 print(f"Warning: Failed to extrude sketch {sketch_idx}: {e}")
                 continue
 
-        # After extrusion, create a new sketch for future operations
+        # After extrusion, optionally start a new empty sketch for subsequent operations
         self._create_new_sketch()
         # Clear previously extruded sketches; keep only the new empty sketch
         self.sketches = [self.sketch]

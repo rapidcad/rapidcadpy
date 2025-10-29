@@ -84,7 +84,7 @@ class InventorApp(App):
 
         if origin is not None and normal is not None:
             # Create custom workplane from origin and normal
-            return InventorWorkPlane.from_origin_normal(origin, normal, app=self)
+            return InventorWorkPlane.from_origin_normal(app=self, origin=origin, normal=normal)
         elif offset is not None and name in ["XY", "XZ", "YZ"]:
             # Create standard named workplane with offset
             return InventorWorkPlane.create_offset_plane(

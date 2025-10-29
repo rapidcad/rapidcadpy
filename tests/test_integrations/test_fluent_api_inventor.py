@@ -165,3 +165,20 @@ class TestFluentAPIInventorBackend:
         ).three_point_arc((0.065789, 0.030037), (-0.03073996, 0.05362793)).close()
         # Extrude feature 1
         shape1 = wp1.extrude(0.00508, "NewBodyFeatureOperation")
+
+    def test_internal_holes(self):
+        from rapidcadpy import InventorApp
+
+        # Initialize Inventor application
+        app = InventorApp()
+        app.new_document()
+
+        # Sketch 1
+        wp1 = app.work_plane("XZ")
+
+        wp1.move_to(-0.015, 0.0).circle(0.0075).close()
+        wp1.move_to(0.015, 0.0).circle(0.0075).close()
+        wp1.move_to(-0.015, -0.01).line_to(0.015, -0.01).three_point_arc((0.015, 0.01), (0.015, 0.01)).line_to(-0.015, 0.01).three_point_arc((-0.015, 0.01), (-0.015, -0.01)).close()
+        wp1.move_to(0.0, 0.0).circle(0.0035).close()
+        # Extrude feature 1
+        shape1 = wp1.extrude(0.003, 'NewBodyFeatureOperation')
