@@ -103,7 +103,7 @@ class InventorWorkPlane(Workplane):
     @classmethod
     def create_offset_plane(
         cls, app: Any, name: str = "XY", offset: float = 0.0, *args, **kwargs
-    ) -> "Workplane":
+    ) -> "InventorWorkPlane":
         """Create a standard named workplane with an offset.
 
         Args:
@@ -111,7 +111,7 @@ class InventorWorkPlane(Workplane):
             offset: Offset distance from the standard plane
             app: Optional app instance
         Returns:
-            Workplane instance at the specified offset
+            InventorWorkPlane instance at the specified offset
         """
         if name == "XY":
             plane = app.comp_def.WorkPlanes.AddByPlaneAndOffset(
@@ -168,7 +168,18 @@ class InventorWorkPlane(Workplane):
 
         Useful for segmenting geometry into separate sketches before an extrude.
         """
+        # add a line from current position to loop start if they are not the same
+        if self._loop_start is not None:
+            if (
+                abs(self._current_position.x - self._loop_start.x) > 1e-9
+                or abs(self._current_position.y - self._loop_start.y) > 1e-9
+            ):
+                self.line_to(self._loop_start.x, self._loop_start.y)
         self._create_new_sketch()
+        return self
+
+    def add(self, loops) -> "InventorWorkPlane":
+        """ " not needed yet"""
         return self
 
     def move_to(self, x: float, y: float) -> "InventorWorkPlane":

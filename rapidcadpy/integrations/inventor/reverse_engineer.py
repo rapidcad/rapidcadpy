@@ -66,6 +66,7 @@ class InventorReverseEngineer:
             wp_var = f"wp{i+1}"
             self._analyze_sketch(pair["sketch"], wp_var, i + 1)
             self._analyze_feature(pair["feature"], pair["type"], wp_var, i + 1)
+        self._analyze_chamfer_feature()
 
     def _get_sketch_index(self, target_sketch) -> int:
         """Get the index of a sketch in the sketches collection."""
@@ -469,3 +470,50 @@ class InventorReverseEngineer:
                 "",
             ]
         )
+
+    def _analyze_chamfer_feature(self):
+        # Identify chamfered edges
+        chamfer_features = self.comp_def.Features.ChamferFeatures
+        original_edges_col = self.comp_def.SurfaceBodies.Item(1).Edges
+        n_chamfers = chamfer_features.Count
+        n_edges_chamfered = original_edges_col.Count
+
+        edges_chamfered = []
+        edges_unchamfered = []
+        chamfer_parameters = []
+
+        for e in range(1, n_edges_chamfered + 1):  # edges im gefasten modell
+            edges_chamfered.append(original_edges_col.Item(e))
+
+        for i in range(1, n_chamfers + 1):  # suppress all chamfer features
+            chamfer_features.Item(i).Suppressed = True
+            angle = chamfer_features.Item(i).Definition.Angle.Value
+            distance = chamfer_features.Item(i).Definition.Distance.Value
+            chamfer_parameters.append({"angle": angle, "distance": distance})
+
+        new_edges_col = self.comp_def.SurfaceBodies.Item(1).Edges
+        n_edges_unchamfered = new_edges_col.Count
+
+        for e in range(1, n_edges_unchamfered + 1):  # edges im ungefasten modell
+            edges_unchamfered.append(new_edges_col.Item(e))
+
+        for i in range(1, n_chamfers + 1):
+            chamfer_features.Item(i).Suppressed = False
+
+        chamfered_params = {
+            (e.Geometry.Center.X * 10, e.Geometry.Radius * 10)
+            for e in edges_chamfered
+            if e.CurveType == 5124
+        }
+        unchamfered_params = {
+            (e.Geometry.Center.X * 10, e.Geometry.Radius * 10)
+            for e in edges_unchamfered
+            if e.CurveType == 5124
+        }
+        lost_edges = unchamfered_params - chamfered_params
+        print(f"Chamfered Edges (X, Radius): {lost_edges}")
+        self.generated_code.append("# Chamfered Edges")
+        for (center_x, radius), params in zip(lost_edges, chamfer_parameters):
+            self.generated_code.append(
+                f"app.chamfer_edge(x={round(center_x/10, 2)}, radius={round(radius/10, 2)}, angle={round(params['angle'], 2)}, distance={round(params['distance'], 2)})"
+            )
