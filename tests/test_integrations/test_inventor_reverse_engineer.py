@@ -52,6 +52,11 @@ def sample_ipt_simple_shaft():
 
 
 @pytest.fixture
+def sample_ipt_simple_shaft_with_chamfer():
+    path = pathlib.Path(__file__).parent.parent / "test_files" / "simple_shaft_with_chamfer.ipt"
+    return path.resolve()
+
+@pytest.fixture
 def sample_ipt_complex_shaft():
     path = pathlib.Path(__file__).parent.parent / "test_files" / "generated_shaft.ipt"
     return path.resolve()
@@ -59,7 +64,7 @@ def sample_ipt_complex_shaft():
 
 @pytest.fixture
 def sample_ipt_complex_shaft_6():
-    path = pathlib.Path(__file__).parent.parent / "test_files" / "shaft_6.ipt"
+    path = pathlib.Path(__file__).parent.parent / "test_files" / "shaft_5.ipt"
     return path.resolve()
 
 
@@ -130,6 +135,19 @@ class TestInventorReverseEngineer:
         assert (
             "from rapidcadpy.integrations.inventor import InventorApp" in generated_code
         )
+        assert "app = InventorApp()" in generated_code
+        assert "line_to" in generated_code
+        assert "revolve" in generated_code
+
+    def test_reverse_engineer_simple_shaft_with_chamfer(self, sample_ipt_simple_shaft_with_chamfer):
+        """Test reverse engineering a simple shaft with chamfer."""
+        print(sample_ipt_simple_shaft_with_chamfer)
+        assert os.path.exists(sample_ipt_simple_shaft_with_chamfer)
+        generated_code = reverse_engineer_ipt(sample_ipt_simple_shaft_with_chamfer)
+
+        # Verify the generated code contains expected elements
+        print(generated_code)
+        assert "from rapidcadpy.integrations.inventor import InventorApp" in generated_code
         assert "app = InventorApp()" in generated_code
         assert "line_to" in generated_code
         assert "revolve" in generated_code
