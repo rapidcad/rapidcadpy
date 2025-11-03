@@ -1,7 +1,10 @@
 from typing import TYPE_CHECKING
+
 from rapidcadpy.app import App
+
 if TYPE_CHECKING:
     from rapidcadpy.integrations.occ.workplane import OccWorkplane
+
 from rapidcadpy.integrations.occ.workplane import OccWorkplane
 
 

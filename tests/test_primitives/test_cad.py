@@ -11,9 +11,9 @@ from matplotlib import pyplot as plt
 
 from rapidcadpy.cad import Cad
 from rapidcadpy.cad_types import Vertex
+from rapidcadpy.functions import visualize_lines
 from rapidcadpy.json_importer.process_deepcad import DeepCadJsonParser
 from rapidcadpy.json_importer.process_f360 import Fusion360GalleryParser
-from rapidcadpy.functions import visualize_lines
 from rapidcadpy.primitive import Arc, Circle, Line
 
 DATA_ROOT = "/Users/elias.berger/cadgpt/data"

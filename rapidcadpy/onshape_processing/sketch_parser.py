@@ -4,8 +4,8 @@ from rapidcadpy.cad_types import Vertex
 from rapidcadpy.cadseq import Sketch
 from rapidcadpy.constraint import CoincidenceConstraint
 from rapidcadpy.onshape_processing.custom_onshape_client import CustomOnshapeClient
-from rapidcadpy.workplane import Workplane as PlaneOld
 from rapidcadpy.primitive import Primitive
+from rapidcadpy.workplane import Workplane as PlaneOld
 
 
 class SketchParser:

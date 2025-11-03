@@ -1,7 +1,4 @@
-import math
-
 import numpy.testing as npt
-import pytest
 
 from rapidcadpy.cad_types import Vector
 from rapidcadpy.workplane import Workplane
@@ -34,12 +31,12 @@ def test_workplane_translation():
     """Test workplane translation functionality."""
     wp = Workplane()
     translated = wp.translate_plane((5, 5, 5))
-    
+
     # Original should be unchanged
     assert wp.origin.x == 0.0
     assert wp.origin.y == 0.0
     assert wp.origin.z == 0.0
-    
+
     # Translated should be moved
     assert translated.origin.x == 5.0
     assert translated.origin.y == 5.0
@@ -49,10 +46,10 @@ def test_workplane_translation():
 def test_workplane_json_serialization():
     """Test workplane JSON serialization and deserialization."""
     wp = Workplane((1, 2, 3), (1, 0, 0), (0, 1, 0), (0, 0, 1))
-    
+
     json_data = wp.to_json()
     wp_reconstructed = Workplane.from_json(json_data)
-    
+
     assert wp_reconstructed.origin.x == wp.origin.x
     assert wp_reconstructed.origin.y == wp.origin.y
     assert wp_reconstructed.origin.z == wp.origin.z
@@ -67,9 +64,17 @@ def test_workplane_to_from_vector():
 
     # Test workplane with custom coordinate system
     wp = Workplane(origin, x_dir, y_dir, z_dir)
-    
+
     # Test that the workplane maintains the coordinate system
-    npt.assert_allclose([wp.origin.x, wp.origin.y, wp.origin.z], [1.0, 2.0, 3.0], atol=1e-6)
-    npt.assert_allclose([wp.x_dir.x, wp.x_dir.y, wp.x_dir.z], [1.0, 0.0, 0.0], atol=1e-6)
-    npt.assert_allclose([wp.y_dir.x, wp.y_dir.y, wp.y_dir.z], [0.0, 1.0, 0.0], atol=1e-6)
-    npt.assert_allclose([wp.z_dir.x, wp.z_dir.y, wp.z_dir.z], [0.0, 0.0, 1.0], atol=1e-6)
+    npt.assert_allclose(
+        [wp.origin.x, wp.origin.y, wp.origin.z], [1.0, 2.0, 3.0], atol=1e-6
+    )
+    npt.assert_allclose(
+        [wp.x_dir.x, wp.x_dir.y, wp.x_dir.z], [1.0, 0.0, 0.0], atol=1e-6
+    )
+    npt.assert_allclose(
+        [wp.y_dir.x, wp.y_dir.y, wp.y_dir.z], [0.0, 1.0, 0.0], atol=1e-6
+    )
+    npt.assert_allclose(
+        [wp.z_dir.x, wp.z_dir.y, wp.z_dir.z], [0.0, 0.0, 1.0], atol=1e-6
+    )

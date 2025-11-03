@@ -1,9 +1,9 @@
 from rapidcadpy.cad_types import Vector, Vertex
 from rapidcadpy.cadseq import Cad, SketchExtrude, Wire
 from rapidcadpy.extrude import Extrude
-from rapidcadpy.workplane import Workplane as PlaneOld
 from rapidcadpy.primitive import Circle, Line
 from rapidcadpy.sketch import Sketch
+from rapidcadpy.workplane import Workplane as PlaneOld
 
 vertex_0 = Vertex(x=2.0, y=-2.0)
 vertex_1 = Vertex(x=0.0, y=-2.0)

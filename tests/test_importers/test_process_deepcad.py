@@ -6,16 +6,13 @@ import pytest
 
 from rapidcadpy.json_importer.process_deepcad import DeepCadJsonParser
 
-DATA_FOLDER = (
-    pathlib.Path(__file__).parent / "test_files"
-)
+DATA_FOLDER = pathlib.Path(__file__).parent / "test_files"
 
 
 random_files = []
 files = os.listdir(DATA_FOLDER)
 selected_files = random.sample(files, 1)
 random_files.extend(selected_files)
-
 
 
 @pytest.mark.parametrize("file", random_files)
