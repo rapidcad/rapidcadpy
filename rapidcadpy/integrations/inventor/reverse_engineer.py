@@ -9,12 +9,19 @@ class InventorReverseEngineer:
     def __init__(self, doc):
         self.doc = doc
         self.generated_code = []
-        self.decimal_precision = 2
+        self.decimal_precision = 4
 
     # Formatting helpers that respect self.decimal_precision
     def _fmt(self, v):
         try:
-            return f"{round(float(v), self.decimal_precision):.{self.decimal_precision}f}"
+            f = round(float(v), self.decimal_precision)
+            # Normalize tiny values to zero to avoid "-0.0"
+            if abs(f) < 10 ** (-self.decimal_precision):
+                f = 0.0
+            s = str(f)
+            if s in ("-0.0", "-0"):
+                s = "0"
+            return s
         except Exception:
             return str(v)
 
@@ -480,6 +487,9 @@ class InventorReverseEngineer:
             angle = 6.283185307179586  # 2*pi
         else:
             raise ValueError("Unsupported revolve extent type.")
+
+        # Convert angle from radians to revolutions for numeric stability
+        angle = angle / (2*math.pi)
 
         # Get axis (default to Z)
         axis = "Z"

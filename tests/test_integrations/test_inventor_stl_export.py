@@ -89,7 +89,9 @@ class TestInventorSTLExport:
 
             # Verify file was created with .stl extension
             expected_file = base_name + ".stl"
-            assert os.path.exists(expected_file), "STL file with auto extension was not created"
+            assert os.path.exists(
+                expected_file
+            ), "STL file with auto extension was not created"
             assert os.path.getsize(expected_file) > 0, "STL file is empty"
 
     @pytest.mark.skipif(
@@ -112,5 +114,7 @@ class TestInventorSTLExport:
             app.to_stl(stl_file)
 
             # Verify the file was created and has content
-            assert os.path.exists(stl_file), "STL file was not created from existing IPT"
+            assert os.path.exists(
+                stl_file
+            ), "STL file was not created from existing IPT"
             assert os.path.getsize(stl_file) > 0, "STL file is empty"

@@ -230,141 +230,101 @@ class TestFluentAPIInventorBackend:
         # Sketch 1
         wp1 = app.work_plane("XY")
 
-        wp1.move_to(0.0, 0.0).line_to(0.0, 1.7).line_to(9.6, 1.7).line_to(
-            9.6, 2.5
-        ).line_to(13.465, 2.5).line_to(13.465, 3.2).line_to(15.465, 3.2).line_to(
-            15.465, 2.5
-        ).line_to(17.73, 2.5).line_to(17.73, 2.1).line_to(19.33, 2.1).line_to(
-            19.33, 1.3
-        ).line_to(26.33, 1.3).line_to(26.33, 0.0).line_to(0.0, 0.0)
+        wp1.move_to(0.0, 0.0).line_to(0.0, 1.7).line_to(9.6, 1.7).line_to(9.6, 2.5).line_to(13.465, 2.5).line_to(13.465, 3.2).line_to(15.465, 3.2).line_to(15.465, 2.5).line_to(17.73, 2.5).line_to(17.73, 2.1).line_to(19.33, 2.1).line_to(19.33, 1.3).line_to(26.33, 1.3).line_to(26.33, 0.0).line_to(0.0, 0.0)
 
         # Revolve feature 1
-        shape1 = wp1.revolve(6.283185307179586, "X", "NewBodyFeatureOperation")
+        shape1 = wp1.revolve(1.0, 'X', 'NewBodyFeatureOperation')
 
         # Sketch 2
-        wp2 = app.work_plane("XY", offset=1.7000000000000002)
+        wp2 = app.work_plane("XY", offset=1.7)
 
         wp2.move_to(0.8, 0.0).line_to(8.8, 0.0)
-        wp2.move_to(1.3, -0.5).line_to(8.3, -0.5).three_point_arc(
-            (8.8, 0.0), (8.3, 0.5)
-        ).line_to(1.3, 0.5).three_point_arc((0.8, 0.0), (1.3, -0.5))
+        wp2.move_to(1.3, -0.5).line_to(8.3, -0.5).three_point_arc((8.8, 0.0), (8.3, 0.5)).line_to(1.3, 0.5).three_point_arc((0.8, 0.0), (1.3, -0.5))
 
         # Extrude feature 2
-        shape2 = wp2.extrude(-0.5, "Cut", symmetric=False)
+        shape2 = wp2.extrude(-0.5, 'Cut', symmetric=False)
 
         # Sketch 3
         wp3 = app.work_plane("XY")
 
-        wp3.move_to(9.6, 1.9).line_to(9.619516, 1.761134)
-        wp3.move_to(9.540295, 1.67).line_to(9.472494, 1.67)
-        wp3.move_to(9.451788, 1.672726).line_to(9.35, 1.7).line_to(9.35, 1.9).line_to(
-            9.6, 1.9
-        )
-        wp3.move_to(9.540295, 1.67).three_point_arc(
-            (9.600672, 1.697515), (9.619516, 1.761134)
-        )
-        wp3.move_to(9.451788, 1.672726).three_point_arc(
-            (9.462052, 1.670684), (9.472494, 1.67)
-        )
+        wp3.move_to(9.6, 1.9).line_to(9.6195, 1.7611)
+        wp3.move_to(9.5403, 1.67).line_to(9.4725, 1.67)
+        wp3.move_to(9.4518, 1.6727).line_to(9.35, 1.7).line_to(9.35, 1.9).line_to(9.6, 1.9)
+        wp3.move_to(9.5403, 1.67).three_point_arc((9.6007, 1.6975), (9.6195, 1.7611))
+        wp3.move_to(9.4518, 1.6727).three_point_arc((9.4621, 1.6707), (9.4725, 1.67))
 
         # Revolve feature 3
-        shape3 = wp3.revolve(6.283185307179586, "X", "Cut")
+        shape3 = wp3.revolve(1.0, 'X', 'Cut')
 
         # Sketch 4
         wp4 = app.work_plane("XY")
 
-        wp4.move_to(13.465, 2.7).line_to(13.484516, 2.561134)
-        wp4.move_to(13.405295, 2.47).line_to(13.337494, 2.47)
-        wp4.move_to(13.316788, 2.472726).line_to(13.215, 2.5).line_to(
-            13.215, 2.7
-        ).line_to(13.465, 2.7)
-        wp4.move_to(13.405295, 2.47).three_point_arc(
-            (13.465672, 2.497515), (13.484516, 2.561134)
-        )
-        wp4.move_to(13.316788, 2.472726).three_point_arc(
-            (13.327052, 2.470684), (13.337494, 2.47)
-        )
+        wp4.move_to(13.465, 2.7).line_to(13.4845, 2.5611)
+        wp4.move_to(13.4053, 2.47).line_to(13.3375, 2.47)
+        wp4.move_to(13.3168, 2.4727).line_to(13.215, 2.5).line_to(13.215, 2.7).line_to(13.465, 2.7)
+        wp4.move_to(13.4053, 2.47).three_point_arc((13.4657, 2.4975), (13.4845, 2.5611))
+        wp4.move_to(13.3168, 2.4727).three_point_arc((13.3271, 2.4707), (13.3375, 2.47))
 
         # Revolve feature 4
-        shape4 = wp4.revolve(6.283185307179586, "X", "Cut")
+        shape4 = wp4.revolve(1.0, 'X', 'Cut')
 
         # Sketch 5
         wp5 = app.work_plane("XY", offset=2.5)
 
         wp5.move_to(9.3, 0.0).line_to(10.9, 0.0)
-        wp5.move_to(9.6, -0.3).line_to(10.6, -0.3).three_point_arc(
-            (10.9, 0.0), (10.6, 0.3)
-        ).line_to(9.6, 0.3).three_point_arc((9.3, 0.0), (9.6, -0.3))
+        wp5.move_to(9.6, -0.3).line_to(10.6, -0.3).three_point_arc((10.9, 0.0), (10.6, 0.3)).line_to(9.6, 0.3).three_point_arc((9.3, 0.0), (9.6, -0.3))
 
         # Extrude feature 5
-        shape5 = wp5.extrude(-0.25, "Cut", symmetric=False)
+        shape5 = wp5.extrude(-0.25, 'Cut', symmetric=False)
 
         # Sketch 6
         wp6 = app.work_plane("XY")
 
-        wp6.move_to(17.28, 2.35).line_to(17.065, 2.35).line_to(17.065, 2.5).line_to(
-            17.28, 2.5
-        ).line_to(17.28, 2.35)
+        wp6.move_to(17.28, 2.35).line_to(17.065, 2.35).line_to(17.065, 2.5).line_to(17.28, 2.5).line_to(17.28, 2.35)
 
         # Revolve feature 6
-        shape6 = wp6.revolve(6.283185307179586, "X", "Cut")
+        shape6 = wp6.revolve(1.0, 'X', 'Cut')
 
         # Sketch 7
         wp7 = app.work_plane("XY")
 
-        wp7.move_to(15.465, 2.7).line_to(15.445484, 2.561134).three_point_arc(
-            (15.464328, 2.497515), (15.524705, 2.47)
-        ).line_to(15.592506, 2.47).three_point_arc(
-            (15.602948, 2.470684), (15.613212, 2.472726)
-        ).line_to(15.715, 2.5).line_to(15.715, 2.7).line_to(15.465, 2.7)
+        wp7.move_to(15.465, 2.7).line_to(15.4455, 2.5611).three_point_arc((15.4643, 2.4975), (15.5247, 2.47)).line_to(15.5925, 2.47).three_point_arc((15.6029, 2.4707), (15.6132, 2.4727)).line_to(15.715, 2.5).line_to(15.715, 2.7).line_to(15.465, 2.7)
 
         # Revolve feature 7
-        shape7 = wp7.revolve(6.283185307179586, "X", "Cut")
+        shape7 = wp7.revolve(1.0, 'X', 'Cut')
 
         # Sketch 8
         wp8 = app.work_plane("XY")
 
-        wp8.move_to(17.73, 2.3).line_to(17.710484, 2.161134).three_point_arc(
-            (17.729328, 2.097515), (17.789705, 2.07)
-        ).line_to(17.857506, 2.07).three_point_arc(
-            (17.867948, 2.070684), (17.878212, 2.072726)
-        ).line_to(17.98, 2.1).line_to(17.98, 2.3).line_to(17.73, 2.3)
+        wp8.move_to(17.73, 2.3).line_to(17.7105, 2.1611).three_point_arc((17.7293, 2.0975), (17.7897, 2.07)).line_to(17.8575, 2.07).three_point_arc((17.8679, 2.0707), (17.8782, 2.0727)).line_to(17.98, 2.1).line_to(17.98, 2.3).line_to(17.73, 2.3)
 
         # Revolve feature 8
-        shape8 = wp8.revolve(6.283185307179586, "X", "Cut")
+        shape8 = wp8.revolve(1.0, 'X', 'Cut')
 
         # Sketch 9
         wp9 = app.work_plane("XY", offset=1.3)
 
         wp9.move_to(19.68, 0.0).line_to(25.98, 0.0)
-        wp9.move_to(20.08, -0.4).line_to(25.58, -0.4).three_point_arc(
-            (25.98, 0.0), (25.58, 0.4)
-        ).line_to(20.08, 0.4).three_point_arc((19.68, 0.0), (20.08, -0.4))
+        wp9.move_to(20.08, -0.4).line_to(25.58, -0.4).three_point_arc((25.98, 0.0), (25.58, 0.4)).line_to(20.08, 0.4).three_point_arc((19.68, 0.0), (20.08, -0.4))
 
         # Extrude feature 9
-        shape9 = wp9.extrude(-0.4, "Cut", symmetric=False)
+        shape9 = wp9.extrude(-0.4, 'Cut', symmetric=False)
 
         # Sketch 10
         wp10 = app.work_plane("XY")
 
-        wp10.move_to(19.33, 1.5).line_to(19.310484, 1.361134).three_point_arc(
-            (19.329328, 1.297515), (19.389705, 1.27)
-        ).line_to(19.457506, 1.27).three_point_arc(
-            (19.467948, 1.270684), (19.478212, 1.272726)
-        ).line_to(19.58, 1.3).line_to(19.58, 1.5).line_to(19.33, 1.5)
+        wp10.move_to(19.33, 1.5).line_to(19.3105, 1.3611).three_point_arc((19.3293, 1.2975), (19.3897, 1.27)).line_to(19.4575, 1.27).three_point_arc((19.4679, 1.2707), (19.4782, 1.2727)).line_to(19.58, 1.3).line_to(19.58, 1.5).line_to(19.33, 1.5)
 
         # Revolve feature 10
-        shape10 = wp10.revolve(6.283185307179586, "X", "Cut")
+        shape10 = wp10.revolve(1.0, 'X', 'Cut')
 
         # Sketch 11
         wp11 = app.work_plane("XY")
 
-        wp11.move_to(19.33, 0.0).line_to(19.33, 0.4).line_to(19.252058, 0.265).line_to(
-            19.009571, 0.125
-        ).line_to(18.602169, 0.125).line_to(18.53, 0.0).line_to(19.33, 0.0)
+        wp11.move_to(19.33, 0.0).line_to(19.33, 0.4).line_to(19.2521, 0.265).line_to(19.0096, 0.125).line_to(18.6022, 0.125).line_to(18.53, 0.0).line_to(19.33, 0.0)
 
         # Revolve feature 11
-        shape11 = wp11.revolve(6.283185307179586, "X", "Cut")
+        shape11 = wp11.revolve(1.0, 'X', 'Cut')
 
         # Chamfered Edges
-        app.chamfer_edge(x=19.33, radius=2.1, angle=1.83, distance=0.18)
+        app.chamfer_edge(x=19.33, radius=2.1, angle=1.8326, distance=0.175)

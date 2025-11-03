@@ -470,7 +470,7 @@ class InventorWorkPlane(Workplane):
                 work_axis = self.app.comp_def.WorkAxes.Item(1)
             else:
                 raise RuntimeError("No work axes available for revolve operation")
-
+        angle = angle * 2 * math.pi
         try:
             if abs(angle - 2 * math.pi) < 1e-6 or abs(angle - 360) < 1e-3:
                 # Full revolve (360 degrees)
