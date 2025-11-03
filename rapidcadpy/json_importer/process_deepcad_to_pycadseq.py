@@ -295,7 +295,11 @@ class DeepCadToPyCadSeqGenerator:
             )
             ordered = [curves[left_idx]]
             used[left_idx] = True
-            last_pt = points[left_idx][1] if points[left_idx][1] is not None else points[left_idx][0]
+            last_pt = (
+                points[left_idx][1]
+                if points[left_idx][1] is not None
+                else points[left_idx][0]
+            )
 
             # Keep scanning unused curves until we cannot add more
             while True:
@@ -319,7 +323,10 @@ class DeepCadToPyCadSeqGenerator:
                             curves[j].get("start_point", curves[j].get("end_point")),
                         )
                         # Update cached points
-                        points[j] = (get_point(curves[j], "start_point"), get_point(curves[j], "end_point"))
+                        points[j] = (
+                            get_point(curves[j], "start_point"),
+                            get_point(curves[j], "end_point"),
+                        )
                         start, end = points[j]
                         ordered.append(curves[j])
                         used[j] = True

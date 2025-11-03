@@ -1,19 +1,22 @@
-import numpy as np
 import math
 
+import numpy as np
+
 ## The code in this file is taken from the DeepCAD repo
+
 
 class CoordSystem(object):
     """
     Local coordinate system for sketch plane.
     Code taken from the DeepCAD repo.
     """
+
     def __init__(self, origin, theta, phi, gamma, y_axis=None, is_numerical=False):
         self.origin = origin
-        self._theta = theta # 0~pi
-        self._phi = phi     # -pi~pi
-        self._gamma = gamma # -pi~pi
-        self._y_axis = y_axis # (theta, phi)
+        self._theta = theta  # 0~pi
+        self._phi = phi  # -pi~pi
+        self._gamma = gamma  # -pi~pi
+        self._y_axis = y_axis  # (theta, phi)
         self.is_numerical = is_numerical
 
     @property
@@ -22,7 +25,9 @@ class CoordSystem(object):
 
     @property
     def x_axis(self):
-        normal_3d, x_axis_3d = polar_parameterization_inverse(self._theta, self._phi, self._gamma)
+        normal_3d, x_axis_3d = polar_parameterization_inverse(
+            self._theta, self._phi, self._gamma
+        )
         return x_axis_3d
 
     @property
@@ -33,10 +38,18 @@ class CoordSystem(object):
 
     @staticmethod
     def from_dict(stat):
-        origin = np.array([stat["origin"]["x"], stat["origin"]["y"], stat["origin"]["z"]])
-        normal_3d = np.array([stat["z_axis"]["x"], stat["z_axis"]["y"], stat["z_axis"]["z"]])
-        x_axis_3d = np.array([stat["x_axis"]["x"], stat["x_axis"]["y"], stat["x_axis"]["z"]])
-        y_axis_3d = np.array([stat["y_axis"]["x"], stat["y_axis"]["y"], stat["y_axis"]["z"]])
+        origin = np.array(
+            [stat["origin"]["x"], stat["origin"]["y"], stat["origin"]["z"]]
+        )
+        normal_3d = np.array(
+            [stat["z_axis"]["x"], stat["z_axis"]["y"], stat["z_axis"]["z"]]
+        )
+        x_axis_3d = np.array(
+            [stat["x_axis"]["x"], stat["x_axis"]["y"], stat["x_axis"]["z"]]
+        )
+        y_axis_3d = np.array(
+            [stat["y_axis"]["x"], stat["y_axis"]["y"], stat["y_axis"]["z"]]
+        )
         theta, phi, gamma = polar_parameterization(normal_3d, x_axis_3d)
         return CoordSystem(origin, theta, phi, gamma, y_axis=cartesian2polar(y_axis_3d))
 
@@ -51,7 +64,11 @@ class CoordSystem(object):
 
     def __str__(self):
         return "origin: {}, normal: {}, x_axis: {}, y_axis: {}".format(
-            self.origin.round(4), self.normal.round(4), self.x_axis.round(4), self.y_axis.round(4))
+            self.origin.round(4),
+            self.normal.round(4),
+            self.x_axis.round(4),
+            self.y_axis.round(4),
+        )
 
     def transform(self, translation, scale):
         self.origin = (self.origin + translation) * scale
@@ -59,10 +76,13 @@ class CoordSystem(object):
     def numericalize(self, n=256):
         """NOTE: shall only be called after normalization"""
         # assert np.max(self.origin) <= 1.0 and np.min(self.origin) >= -1.0 # TODO: origin can be out-of-bound!
-        self.origin = ((self.origin + 1.0) / 2 * n).round().clip(min=0, max=n-1).astype(np.int)
+        self.origin = (
+            ((self.origin + 1.0) / 2 * n).round().clip(min=0, max=n - 1).astype(np.int)
+        )
         tmp = np.array([self._theta, self._phi, self._gamma])
-        self._theta, self._phi, self._gamma = ((tmp / np.pi + 1.0) / 2 * n).round().clip(
-            min=0, max=n-1).astype(np.int)
+        self._theta, self._phi, self._gamma = (
+            ((tmp / np.pi + 1.0) / 2 * n).round().clip(min=0, max=n - 1).astype(np.int)
+        )
         self.is_numerical = True
 
     def denumericalize(self, n=256):
@@ -107,8 +127,10 @@ def cartesian2polar(vec, with_radius=False):
     """convert a vector in cartesian coordinates to polar(spherical) coordinates"""
     vec = vec.round(6)
     norm = np.linalg.norm(vec)
-    theta = np.arccos(vec[2] / norm) # (0, pi)
-    phi = np.arctan(vec[1] / (vec[0] + 1e-15)) # (-pi, pi) # FIXME: -0.0 cannot be identified here
+    theta = np.arccos(vec[2] / norm)  # (0, pi)
+    phi = np.arctan(
+        vec[1] / (vec[0] + 1e-15)
+    )  # (-pi, pi) # FIXME: -0.0 cannot be identified here
     if not with_radius:
         return np.array([theta, phi])
     else:
@@ -126,23 +148,31 @@ def polar2cartesian(vec):
 
 
 def rotate_by_x(vec, theta):
-    mat = np.array([[1, 0, 0],
-                    [0, np.cos(theta), -np.sin(theta)],
-                    [0, np.sin(theta), np.cos(theta)]])
+    mat = np.array(
+        [
+            [1, 0, 0],
+            [0, np.cos(theta), -np.sin(theta)],
+            [0, np.sin(theta), np.cos(theta)],
+        ]
+    )
     return np.dot(mat, vec)
 
 
 def rotate_by_y(vec, theta):
-    mat = np.array([[np.cos(theta), 0, np.sin(theta)],
-                    [0, 1, 0],
-                    [-np.sin(theta), 0, np.cos(theta)]])
+    mat = np.array(
+        [
+            [np.cos(theta), 0, np.sin(theta)],
+            [0, 1, 0],
+            [-np.sin(theta), 0, np.cos(theta)],
+        ]
+    )
     return np.dot(mat, vec)
 
 
 def rotate_by_z(vec, phi):
-    mat = np.array([[np.cos(phi), -np.sin(phi), 0],
-                    [np.sin(phi), np.cos(phi), 0],
-                    [0, 0, 1]])
+    mat = np.array(
+        [[np.cos(phi), -np.sin(phi), 0], [np.sin(phi), np.cos(phi), 0], [0, 0, 1]]
+    )
     return np.dot(mat, vec)
 
 
@@ -154,7 +184,7 @@ def polar_parameterization(normal_3d, x_axis_3d):
         x_axis_3d (np.array): unit vector for x-axis
 
     Returns:
-        theta, phi, gamma: axis-angle rotation 
+        theta, phi, gamma: axis-angle rotation
     """
     normal_polar = cartesian2polar(normal_3d)
     theta = normal_polar[0]
@@ -200,12 +230,16 @@ def get_arc(x, y, curr_x, curr_y, alpha, flag, is_numerical=True):
     else:
         ref_vec = start_point - center_point
     ref_vec = ref_vec / np.linalg.norm(ref_vec)
-    
+
     # Get the midangle
     mid_angle = (start_angle + end_angle) / 2
-    rot_mat = np.array([[np.cos(mid_angle), -np.sin(mid_angle)],
-                        [np.sin(mid_angle), np.cos(mid_angle)]])
+    rot_mat = np.array(
+        [
+            [np.cos(mid_angle), -np.sin(mid_angle)],
+            [np.sin(mid_angle), np.cos(mid_angle)],
+        ]
+    )
     mid_vec = rot_mat @ ref_vec
-    mid_point =  center_point + mid_vec * radius
+    mid_point = center_point + mid_vec * radius
 
     return start_point, mid_point, end_point
