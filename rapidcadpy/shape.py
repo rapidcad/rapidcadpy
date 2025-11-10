@@ -19,6 +19,18 @@ class Shape(ABC):
         pass
 
     @abstractmethod
+    def to_png(
+        self,
+        file_name: str,
+        view: str = "iso",
+        width: int = 800,
+        height: int = 600,
+        backend: str = "auto",
+    ) -> None:
+        pass
+
+
+    @abstractmethod
     def cut(self, other: "Shape") -> "Shape":
         pass
 

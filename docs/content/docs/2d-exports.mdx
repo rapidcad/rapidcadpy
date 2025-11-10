@@ -66,9 +66,9 @@ def to_png(self, file_name: str, view: str = "X") -> None:
 
 The method tries backends in this order (unless specified):
 
-1. **pyribbit** (High quality, physically-based - updated fork of pyrender)
+1. **pyvista** (Recommended - fast, simple, and lightweight)
    ```bash
-   pip install pyribbit trimesh pillow
+   pip install pyvista
    ```
 
 2. **vedo** (Feature-rich, scientific viz)
@@ -77,9 +77,8 @@ The method tries backends in this order (unless specified):
    ```
 
 **Backend Selection:**
-- `backend="auto"` - Try pyribbit → vedo (default)
-- `backend="trimesh"` - Use trimesh (requires pyribbit)
-- `backend="pyribbit"` - Use pyribbit only  
+- `backend="auto"` - Try pyvista → vedo (default)
+- `backend="pyvista"` - Use pyvista only (fastest)
 - `backend="vedo"` - Use vedo only
 
 ### View Options
