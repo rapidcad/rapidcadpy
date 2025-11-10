@@ -1,0 +1,118 @@
+---
+title: 2D Exports
+description: Export CAD shapes to PNG images with technical drawings or 3D shaded renders
+---
+
+# PNG Rendering Feature
+
+## Overview
+
+RapidCADpy provides PNG rendering capabilities for the OCC backend with two distinct methods:
+
+1. **`to_png()`** - Technical drawings using Hidden Line Removal (HLR)
+
+## Quick Start
+
+### Technical Drawing (HLR)
+```python
+shape.to_png("output.png", "Z")  # Top view, technical drawing
+```
+
+### 3D Rendered Image
+```python
+shape.to_png_rendered("output.png", "iso")  # Isometric view, shaded
+```
+
+Uses OpenCascade's Hidden Line Removal algorithm for engineering-style orthographic projections.
+
+### Usage
+
+```python
+from rapidcadpy.integrations.occ.app import OpenCascadeApp
+
+app = OpenCascadeApp()
+wp = app.work_plane("XY")
+
+# Create a shape
+shape = wp.rect(10, 10).extrude(5)
+
+# Render from different views
+shape.to_png("output_x.png", "X")  # Right view (YZ plane)
+shape.to_png("output_y.png", "Y")  # Front view (XZ plane)
+shape.to_png("output_z.png", "Z")  # Top view (XY plane)
+```
+
+### Method Signature
+
+```python
+def to_png(self, file_name: str, view: str = "X") -> None:
+    """
+    Render the shape to a PNG file from a specified camera angle.
+
+    Args:
+        file_name: Path to save the PNG file
+        view: Camera view direction - "X", "Y", or "Z" (default: "X")
+             - "X": Looking along X-axis (YZ plane view, similar to RIGHT view)
+             - "Y": Looking along Y-axis (XZ plane view, similar to FRONT view)
+             - "Z": Looking along Z-axis (XY plane view, similar to TOP view)
+
+    Raises:
+        ValueError: If view is not one of "X", "Y", or "Z"
+    """
+```
+
+
+### Backends
+
+The method tries backends in this order (unless specified):
+
+1. **pyribbit** (High quality, physically-based - updated fork of pyrender)
+   ```bash
+   pip install pyribbit trimesh pillow
+   ```
+
+2. **vedo** (Feature-rich, scientific viz)
+   ```bash
+   pip install vedo
+   ```
+
+**Backend Selection:**
+- `backend="auto"` - Try pyribbit → vedo (default)
+- `backend="trimesh"` - Use trimesh (requires pyribbit)
+- `backend="pyribbit"` - Use pyribbit only  
+- `backend="vedo"` - Use vedo only
+
+### View Options
+
+| View Name | Aliases | Description |
+|-----------|---------|-------------|
+| "iso" | "isometric" | 3D isometric view (45° angles) |
+| "front" | "Y" | Front view (looking along Y-axis) |
+| "top" | "Z" | Top view (looking down Z-axis) |
+| "right" | "X" | Right view (looking along X-axis) |
+
+
+---
+
+## View Directions
+
+| View | Direction Vector | What You See | Similar To |
+|------|-----------------|--------------|------------|
+| "X"  | (1, 0, 0)       | YZ plane     | Right view |
+| "Y"  | (0, 1, 0)       | XZ plane     | Front view |
+| "Z"  | (0, 0, 1)       | XY plane     | Top view   |
+
+---
+
+## Testing
+
+Run the test suite:
+```bash
+pytest tests/test_integrations/test_fluent_api_occ.py::TestFluentAPIOCCBackend::test_to_png_rendering
+```
+
+Or run the example script:
+```bash
+python example_png_rendering.py
+```
+
