@@ -25,7 +25,14 @@ class OccShape(Shape):
         return writer.Write(self.obj, file_name)
 
     def to_step(self, file_name: str) -> None:
-        raise NotImplementedError("STEP export not implemented yet.")
+        from OCP.STEPControl import STEPControl_Writer, STEPControl_StepModelType
+        from OCP.IFSelect import IFSelect_RetDone
+
+        step_writer = STEPControl_Writer()
+        step_writer.Transfer(self.obj, STEPControl_StepModelType.STEPControl_AsIs)
+        status = step_writer.Write(file_name)
+        if status != IFSelect_RetDone:
+            raise RuntimeError("Failed to write STEP file.")
 
     def to_png(
         self,
