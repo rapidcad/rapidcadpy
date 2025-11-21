@@ -19,3 +19,5 @@ class App:
             return self.work_plane_class.yz_plane(app=self)
         else:
             raise ValueError(f"Unknown workplane: {name}")
+
+    def new_document(self): ...

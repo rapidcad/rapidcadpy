@@ -7,7 +7,6 @@ including creating simple geometries and exporting to STEP format.
 
 import pytest
 
-import rapidcadpy as rc
 from rapidcadpy.integrations.occ.app import OpenCascadeApp
 
 
@@ -22,254 +21,215 @@ class TestFluentAPIOCCBackend:
         # Create a simple cube using fluent API
         app = OpenCascadeApp()
         workplane = app.work_plane("XY")
-        cube = workplane.rect(10, 10).extrude(10)
-        cube.to_stl("test_simple_cube_occ.stl")
-
-    # @pytest.mark.skipif(
-    #     not pytest.importorskip("OCC", reason="OCC not available"),
-    #     reason="OCC not available",
-    # )
-    # def test_circle_extrusion_step_export(self):
-    #     """Test creating a cylindrical shape and exporting to STEP."""
-    #     if not self.occ_available:
-    #         pytest.skip("OCC backend not available")
-    #
-    #     # Create a cylinder using your exact requested syntax
-    #     wp_sketch0 = rc.Workplane(
-    #         rc.Plane(rc.Vector(-0.2, 0.06, 0), rc.Vector(1, 0, 0), rc.Vector(0, 0, 1))
-    #     )
-    #     loop0 = wp_sketch0.moveTo(0.01, 0).circle(0.01)
-    #     solid0 = wp_sketch0.add(loop0).extrude(0.75)
-    #     solid = solid0
-    #
-    #     # Verify the CAD object
-    #     assert isinstance(solid, rc.Cad)
-    #     assert len(solid.construction_history) == 1
-    #
-    #     feature = solid.construction_history[0]
-    #     assert feature.extrude.extent_one == 0.75
-    #
-    #     # Verify it's a circle
-    #     sketch = feature.sketch[0]
-    #     assert len(sketch.outer_wire.edges) == 1
-    #     assert isinstance(sketch.outer_wire.edges[0], rc.Circle)
-    #
-    #     # Test export to STEP
-    #     with tempfile.NamedTemporaryFile(
-    #         suffix=".step", delete=False, dir="."
-    #     ) as tmp_file:
-    #         step_filename = tmp_file.name
-    #
-    #     try:
-    #         solid.export(step_filename)
-    #         assert os.path.exists(step_filename)
-    #         assert os.path.getsize(step_filename) > 0
-    #
-    #         print(f"✓ Successfully exported cylinder to {step_filename}")
-    #
-    #     finally:
-    #         if os.path.exists(step_filename):
-    #             os.unlink(step_filename)
-    #
-    # @pytest.mark.skipif(
-    #     not pytest.importorskip("OCC", reason="OCC not available"),
-    #     reason="OCC not available",
-    # )
-    # def test_backend_switching_with_export(self):
-    #     """Test switching between backends and exporting."""
-    #     if not self.occ_available:
-    #         pytest.skip("OCC backend not available")
-    #
-    #     # Create a model
-    #     wp = rc.Workplane(
-    #         rc.Plane(rc.Vector(0, 0, 0), rc.Vector(1, 0, 0), rc.Vector(0, 1, 0))
-    #     )
-    #     model = wp.circle(5).extrude(3)
-    #
-    #     # Test backend switching syntax
-    #     original_backend = rc.backend
-    #
-    #     # Switch to OCC explicitly
-    #     rc.backend = "occ"
-    #     assert rc.backend == "occ"
-    #
-    #     # Export using OCC backend
-    #     with tempfile.NamedTemporaryFile(
-    #         suffix=".step", delete=False, dir="."
-    #     ) as tmp_file:
-    #         step_filename = tmp_file.name
-    #
-    #     try:
-    #         model.export(step_filename)
-    #         assert os.path.exists(step_filename)
-    #         print("✓ Successfully exported using OCC backend")
-    #
-    #     finally:
-    #         if os.path.exists(step_filename):
-    #             os.unlink(step_filename)
-    #
-    #         # Restore original backend
-    #         if original_backend:
-    #             rc.backend = original_backend
-    #
-    # @pytest.mark.skipif(
-    #     not pytest.importorskip("OCC", reason="OCC not available"),
-    #     reason="OCC not available",
-    # )
-    # def test_complex_shape_with_lines(self):
-    #     """Test creating a complex shape with multiple lines."""
-    #     if not self.occ_available:
-    #         pytest.skip("OCC backend not available")
-    #
-    #     # Create a complex shape using lines
-    #     wp = rc.Workplane(
-    #         rc.Plane(rc.Vector(0, 0, 0), rc.Vector(1, 0, 0), rc.Vector(0, 1, 0))
-    #     )
-    #     shape = wp.moveTo(0, 0).line(3, 0).line(0, 3).line(-3, 0).line(0, -3).extrude(2)
-    #
-    #     # Verify the model
-    #     assert isinstance(shape, rc.Cad)
-    #     feature = shape.construction_history[0]
-    #     sketch = feature.sketch[0]
-    #
-    #     # Should have 4 lines forming a square
-    #     assert len(sketch.outer_wire.edges) == 4
-    #     for edge in sketch.outer_wire.edges:
-    #         assert isinstance(edge, rc.Line)
-    #
-    #     # Test export
-    #     with tempfile.NamedTemporaryFile(
-    #         suffix=".step", delete=False, dir="."
-    #     ) as tmp_file:
-    #         step_filename = tmp_file.name
-    #
-    #     try:
-    #         shape.export(step_filename)
-    #         assert os.path.exists(step_filename)
-    #         print("✓ Successfully exported complex shape")
-    #
-    #     finally:
-    #         if os.path.exists(step_filename):
-    #             os.unlink(step_filename)
-    #
-    # @pytest.mark.skipif(
-    #     not pytest.importorskip("OCC", reason="OCC not available"),
-    #     reason="OCC not available",
-    # )
-    # def test_direct_occ_backend_method(self):
-    #     """Test using the direct OCC backend methods."""
-    #     if not self.occ_available:
-    #         pytest.skip("OCC backend not available")
-    #
-    #     # Create a simple model
-    #     wp = rc.Workplane(
-    #         rc.Plane(rc.Vector(0, 0, 0), rc.Vector(1, 0, 0), rc.Vector(0, 1, 0))
-    #     )
-    #     model = wp.rect(4, 4).extrude(1)
-    #
-    #     # Test direct backend method
-    #     with tempfile.NamedTemporaryFile(
-    #         suffix=".step", delete=False, dir="."
-    #     ) as tmp_file:
-    #         step_filename = tmp_file.name
-    #
-    #     try:
-    #         # Use the to_backend method directly
-    #         model.to_backend("occ", step_filename)
-    #         assert os.path.exists(step_filename)
-    #         print("✓ Direct OCC backend method works")
-    #
-    #     finally:
-    #         if os.path.exists(step_filename):
-    #             os.unlink(step_filename)
-    #
-    # def test_occ_backend_availability_check(self):
-    #     """Test checking OCC backend availability."""
-    #     available_backends = rc.get_available_backends()
-    #
-    #     # Check that the backends dictionary contains OCC
-    #     assert "occ" in available_backends
-    #     assert "opencascade" in available_backends
-    #
-    #     # OCC should be an alias for opencascade
-    #     assert available_backends["occ"] == available_backends["opencascade"]
-    #
-    #     print(f"OCC backend available: {available_backends['occ']}")
-    #
-    # def test_fluent_api_methods_exist(self):
-    #     """Test that all fluent API methods are available."""
-    #     # Create a simple model to test method availability
-    #     wp = rc.Workplane(
-    #         rc.Plane(rc.Vector(0, 0, 0), rc.Vector(1, 0, 0), rc.Vector(0, 1, 0))
-    #     )
-    #     model = wp.circle(1).extrude(1)
-    #
-    #     # Check that backend methods exist on CAD objects
-    #     assert hasattr(model, "export")
-    #     assert hasattr(model, "to_backend")
-    #     assert hasattr(model, "to_inventor")
-    #
-    #     # Check that backend management functions exist
-    #     assert callable(rc.set_backend)
-    #     assert callable(rc.get_current_backend)
-    #     assert callable(rc.get_available_backends)
-    #
-    #     # Check that the backend property exists
-    #     assert hasattr(rc, "backend")
-    #
-    #     print("✓ All fluent API methods are available")
-
-
-class TestOCCBackendFallback:
-    """Test cases for when OCC backend is not available."""
-
-    def test_graceful_degradation_when_occ_unavailable(self):
-        """Test that the system works gracefully when OCC is not available."""
-        # This test will always run regardless of OCC availability
-
-        # Check that we can still create models with fluent API
-        wp = rc.Workplane(
-            rc.Plane(rc.Vector(0, 0, 0), rc.Vector(1, 0, 0), rc.Vector(0, 1, 0))
+        cube = (
+            workplane.line_to(10, 0)
+            .line_to(10, 10)
+            .line_to(0, 10)
+            .line_to(0, 0)
+            .extrude(10)
         )
-        model = wp.circle(1).extrude(1)
 
-        assert isinstance(model, rc.Cad)
-        assert len(model.construction_history) == 1
+    def test_simple_cylinder(self):
+        # Create a simple cylinder using fluent API
+        app = OpenCascadeApp()
+        workplane = app.work_plane("XY")
+        cylinder = workplane.circle(5).extrude(20)
 
-        # Check that backend functions exist even if backends aren't available
-        available = rc.get_available_backends()
-        assert isinstance(available, dict)
-        assert "occ" in available
+    def test_three_point_arc_simple(self):
+        """Test that three_point_arc creates a valid arc and can be extruded."""
+        app = OpenCascadeApp()
+        wp = app.work_plane("XY")
 
-        print("✓ System works gracefully even when backends are unavailable")
+        # Create a simple shape with a three-point arc
+        # Starting at (0, 0), arc through (5, 5) to (10, 0), then close with lines
+        shape = (
+            wp.move_to(0, 0)
+            .three_point_arc((5, 5), (10, 0))  # Arc from (0,0) through (5,5) to (10,0)
+            .line_to(10, -5)  # Line down
+            .line_to(0, -5)  # Line left
+            .line_to(0, 0)  # Line back to start
+            .extrude(10)  # Extrude to create 3D shape
+        )
 
+        # Verify the shape was created successfully
+        assert shape is not None
+        assert shape.obj is not None
 
-if __name__ == "__main__":
-    # Simple test runner for manual testing
-    test_instance = TestFluentAPIOCCBackend()
-    test_instance.setup_occ_backend()
+    def test_drop_arm(self):
+        arm_thick = 5
 
-    print("=== Testing Fluent API with OCC Backend ===")
+        app = OpenCascadeApp()
+        app.new_document()
+        wp = app.work_plane("XY")
 
-    try:
-        test_instance.test_occ_backend_availability_check()
-        test_instance.test_fluent_api_methods_exist()
+        # arm: loft rectangle at hub to rectangle at dropped tip
+        arm = (
+            wp.move_to(-4.5, 0)
+            .line_to(-4.5, 20)
+            .line_to(-8, 45)
+            .three_point_arc((0, 53), (8, 45))
+            .line_to(4.5, 20)
+            .line_to(4.5, 0)
+            .three_point_arc((0, -4.5), (-4.5, 0))
+            .extrude(arm_thick)
+        )
 
-        if test_instance.occ_available:
-            print("\nOCC backend is available - running full tests...")
-            test_instance.test_simple_cube_creation_and_export()
-            test_instance.test_circle_extrusion_step_export()
-            test_instance.test_complex_shape_with_lines()
-            test_instance.test_direct_occ_backend_method()
-            test_instance.test_backend_switching_with_export()
-        else:
-            print("\nOCC backend not available - running fallback tests...")
-            TestOCCBackendFallback().test_graceful_degradation_when_occ_unavailable()
+        hole = wp.move_to(0, 45).circle(4).extrude(arm_thick)
 
-    except Exception as e:
-        print(f"Test failed: {e}")
-        import traceback
+        arm.cut(hole)
+        arm.to_stl("test_drop_arm_occ.stl")
 
-        traceback.print_exc()
+    # PNG Rendering Tests
+    # These tests verify the to_png() method which renders 3D shapes to 2D images
+    # from different orthographic camera angles using OpenCascade's HLR algorithm.
 
-    print("\n=== Tests completed ===")
+    def test_to_png_rendering(self):
+        """Test PNG rendering from different camera angles."""
+        import os
+
+        app = OpenCascadeApp()
+        wp = app.work_plane("XY")
+
+        # Create a simple L-shaped object
+        shape = (
+            wp.move_to(0, 0)
+            .line_to(10, 0)
+            .line_to(10, 5)
+            .line_to(5, 5)
+            .line_to(5, 15)
+            .line_to(0, 15)
+            .line_to(0, 0)
+            .extrude(3)
+        )
+
+        test_files = [
+            "test_render_x.png",
+            "test_render_y.png",
+            "test_render_z.png",
+        ]
+
+        try:
+            # Test rendering from different views
+            shape.to_png("test_render_x.png", "X", backend="pyvista")  # Right view
+            shape.to_png("test_render_y.png", "Y", backend="pyvista")  # Front view
+            shape.to_png("test_render_z.png", "Z", backend="pyvista")  # Top view
+
+            # Verify at least one output file was created for each view
+            # (either PNG if cairosvg is available, or SVG as fallback)
+            assert os.path.exists("test_render_x.png") or os.path.exists(
+                "test_render_x.svg"
+            ), "X view output file should exist"
+            assert os.path.exists("test_render_y.png") or os.path.exists(
+                "test_render_y.svg"
+            ), "Y view output file should exist"
+            assert os.path.exists("test_render_z.png") or os.path.exists(
+                "test_render_z.svg"
+            ), "Z view output file should exist"
+
+            # Test case-insensitive view parameter
+            shape.to_png("test_render_x.png", "x")  # lowercase should work
+
+            # Test invalid view parameter
+            with pytest.raises(ValueError, match="View must be"):
+                shape.to_png("test_invalid.png", "Invalid")
+
+            with pytest.raises(ValueError, match="View must be"):
+                shape.to_png("test_invalid.png", "W")
+
+        finally:
+            # Clean up test files
+            for file in test_files:
+                if os.path.exists(file):
+                    os.remove(file)
+
+    def test_to_png_cube(self):
+        """Test PNG rendering with a simple cube."""
+        import os
+
+        app = OpenCascadeApp()
+        wp = app.work_plane("XY")
+
+        # Create a simple 10x10x10 cube
+        cube = (
+            wp.move_to(0, 0)
+            .line_to(10, 0)
+            .line_to(10, 10)
+            .line_to(0, 10)
+            .line_to(0, 0)
+            .extrude(10)
+        )
+
+        test_file = "test_cube_top_view.png"
+        fallback_file = "test_cube_top_view.svg"
+
+        try:
+            # Render top view
+            cube.to_png(test_file, "Z")
+
+            # Verify output file exists (PNG or SVG fallback)
+            assert os.path.exists(test_file) or os.path.exists(
+                fallback_file
+            ), "Output file should be created"
+
+            # If PNG was created, check it has reasonable size
+            if os.path.exists(test_file):
+                file_size = os.path.getsize(test_file)
+                assert file_size > 100, "PNG file should have reasonable size"
+
+        finally:
+            # Clean up
+            for file in [test_file, fallback_file]:
+                if os.path.exists(file):
+                    os.remove(file)
+
+    def test_to_png_with_hole(self):
+        """Test PNG rendering with a shape that has a hole (cut operation)."""
+        import os
+
+        app = OpenCascadeApp()
+        wp = app.work_plane("XY")
+
+        # Create a rectangle with a circular hole
+        outer = wp.rect(20, 20).extrude(5)
+        hole = wp.move_to(10, 10).circle(3).extrude(5)
+        outer.cut(hole)
+
+        test_file = "test_shape_with_hole.png"
+        fallback_file = "test_shape_with_hole.svg"
+
+        try:
+            # Render from top view to see the hole
+            outer.to_png(test_file, "Z")
+
+            # Verify output exists
+            assert os.path.exists(test_file) or os.path.exists(
+                fallback_file
+            ), "Output file should be created for shape with hole"
+
+        finally:
+            # Clean up
+            for file in [test_file, fallback_file]:
+                if os.path.exists(file):
+                    os.remove(file)
+
+    def test_shield_cad(self):
+        from rapidcadpy import OpenCascadeApp
+
+        # Initialize Inventor application
+        app = OpenCascadeApp()
+        app.new_document()
+
+        # Sketch 1
+        wp1 = app.work_plane("XY")
+
+        wp1.move_to(-0.1692273, -0.06081982).three_point_arc(
+            (-0.113369, -0.185601), (0.00293384, -0.25746143)
+        ).three_point_arc((0.118158, -0.186268), (0.1692273, -0.06081982)).line_to(
+            0.1692273, 0.16610546
+        ).three_point_arc(
+            (0.079251, 0.182199), (-0.00043091, 0.22698241)
+        ).three_point_arc((-0.079712, 0.181706), (-0.1692273, 0.16375488)).line_to(
+            -0.1692273, -0.06081982
+        )
+        # Extrude feature 1
+        shape1 = wp1.extrude(0.03175, "NewBodyFeatureOperation")
