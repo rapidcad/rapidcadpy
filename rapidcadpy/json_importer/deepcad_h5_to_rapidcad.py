@@ -678,6 +678,12 @@ if __name__ == "__main__":
         default=0,
         help="Number of decimal points to give floating point values. Can only use this with --use_fixed_decimal",
     )
+    parser.add_argument(
+        "--file_id",
+        type=str,
+        default=None,
+        help="DeepCAD ID of a single file to convert (e.g., '00004255'). The subdir is determined from the first 4 characters.",
+    )
     args = parser.parse_args()
 
     if args.delete_existing:
@@ -689,6 +695,44 @@ if __name__ == "__main__":
     # file_path_ques = str(input("What file path would you like to save the generated python files to? (default: deepcad_derived/data/cad_vec/cadquery): "))
 
     prefix = "/".join(H5_VEC_FOLDER.split("/", 2)[:2])
+
+    # Handle single file conversion if --file_id is provided
+    if args.file_id:
+        # Extract subdir from first 4 characters of the file ID
+        sub_dir = args.file_id[:4]
+        h5_file_path = f"{H5_VEC_FOLDER}/{sub_dir}/{args.file_id}.h5"
+        
+        if not os.path.exists(h5_file_path):
+            print(f"Error: File not found: {h5_file_path}")
+            exit(1)
+        
+        print(f"Converting single file: {h5_file_path}")
+        
+        python_file_save_path = RAPIDCAD_FOLDER + h5_file_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".py"
+        stl_file_save_path = f"{H5_VEC_FOLDER[:-5]}/cadquery_stl/" + h5_file_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".stl"
+        
+        h5_vec = extract_h5_file(h5_file_path)
+        
+        try:
+            convert_h5_to_cadquery(
+                h5_vec,
+                python_file_save_path,
+                stl_file_save_path,
+                args.use_fixed_decimal,
+                args.decimal_points,
+            )
+            print(f"Successfully generated: {python_file_save_path}")
+            
+            if generate_stls:
+                try:
+                    subprocess.run(["python", python_file_save_path], check=True)
+                    print(f"Successfully generated STL: {stl_file_save_path}")
+                except subprocess.CalledProcessError as e:
+                    print(f"Error generating STL: {e}")
+        except Exception as e:
+            print(f"Error converting file: {e}")
+        
+        exit(0)
 
     sub_dirs = [str(i).zfill(4) for i in range(100)]
     # sub_dirs = ["0000"]
