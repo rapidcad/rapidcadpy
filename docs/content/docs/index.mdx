@@ -1,72 +1,42 @@
 ---
-title: Quick Start
-description: Get started with RapidCADpy quickly
+title: RapidCAD.py Documentation
+description: Python library for parametric CAD modeling and FEA analysis
 ---
 
-# Quick Start
+# RapidCAD.py Documentation
 
-Welcome to RapidCADpy! This guide will help you get up and running quickly.
+Welcome to RapidCAD.py - a powerful Python library for creating parametric 3D CAD models and performing structural analysis.
 
-## Installation
+## What is RapidCAD.py?
 
-Install RapidCADpy using pip:
+RapidCAD.py provides a fluent, intuitive API for:
 
-```bash
-pip install rapidcadpy
-```
+- **Parametric CAD Modeling** - Create complex 3D models with simple Python code
+- **FEA Analysis** - Perform structural analysis with torch-fem integration
+- **Multiple Backends** - Support for Autodesk Inventor and Open CASCADE
+- **Export Formats** - Export to STEP, STL, and other standard formats
 
-## Basic Usage
-
-Here's a simple example to create a basic 3D model using the new App approach:
+## Quick Example
 
 ```python
 from rapidcadpy.integrations.inventor import InventorApp
 
-# Initialize Inventor application
+# Initialize application
 app = InventorApp()
 app.new_document()
 
-# Create a workplane on the XY plane
+# Create a simple beam
 wp = app.work_plane("XY")
+beam = wp.move_to(0, 0).rect(10, 20).extrude(100)
 
-# Create a simple cube
-cube = wp.move_to(-5, -5).rect(10, 10).extrude(10)
-
-# Export to STEP format
-cube.export("my_cube.step")
-```
-
-## More Advanced Example
-
-Here's how you can create and cut a feature using the fluent API and the Inventor backend:
-
-```python
-app = InventorApp()
-app.new_document()
-wp = app.work_plane("XY")
-
-arm_thick = 5
-
-# Create an arm shape
-arm = (
-    wp.move_to(-4.5, 0)
-    .line_to(-4.5, 20)
-    .line_to(-8, 45)
-    .three_point_arc((0, 53), (8, 45))
-    .line_to(4.5, 20)
-    .line_to(4.5, 0)
-    .three_point_arc((0, -4.5), (-4.5, 0))
-    .extrude(arm_thick)
-)
-
-# Create a hole and cut it from the arm
-hole = wp.move_to(0, 45).circle(4).extrude(arm_thick)
-arm.cut(hole)
+# Export the model
+beam.export("beam.step")
 ```
 
 ## Next Steps
 
-- Learn about [Basic Modeling](/docs/tutorials/basic-modeling)
-- Fluent API guide: [Fluent API Examples](/docs/fluent-api)
-- Explore the [API Reference](/docs/api)
-- Check out more [Examples](/docs/examples)
+Choose a topic to get started:
+
+- [Get Started](/docs/get-started) - Installation and basic usage
+- [FEA Analysis](/docs/analysis/fea-analysis) - Structural analysis and simulation
+- [Advanced Topics](/docs/advanced) - Deep dives and integrations
