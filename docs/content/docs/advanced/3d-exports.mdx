@@ -1,0 +1,28 @@
+---
+title: 3D Exports
+description: Export CAD shapes to PNG images with technical drawings or 3D shaded renders
+---
+
+# 3D Export Formats
+RapidCADpy supports exporting 3D models to several standard formats, including:
+- **STEP (.step, .stp)** - Standard for the Exchange of Product model data
+- **STL (.stl)** - Stereolithography format for 3D printing
+- **IPT (.ipt)** - Autodesk Inventor Part file
+
+Exports functions are available on objects inheriting from 'Shape'.
+
+## Exporting to STEP
+
+```python
+shape.export("model.step")
+# alternative
+shape.to_step("model.step")
+```
+
+## Exporting to STL
+
+```python
+shape.export("model.stl")
+# alternative
+shape.to_stl("model.stl")
+```

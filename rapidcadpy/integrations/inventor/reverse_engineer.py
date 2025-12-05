@@ -9,6 +9,35 @@ class InventorReverseEngineer:
     def __init__(self, doc):
         self.doc = doc
         self.generated_code = []
+        self.decimal_precision = 4
+
+    # Formatting helpers that respect self.decimal_precision
+    def _fmt(self, v):
+        try:
+            f = round(float(v), self.decimal_precision)
+            # Normalize tiny values to zero to avoid "-0.0"
+            if abs(f) < 10 ** (-self.decimal_precision):
+                f = 0.0
+            s = str(f)
+            if s in ("-0.0", "-0"):
+                s = "0"
+            return s
+        except Exception:
+            return str(v)
+
+    def _fmt2(self, pt):
+        try:
+            x, y = pt
+            return f"({self._fmt(x)}, {self._fmt(y)})"
+        except Exception:
+            return str(pt)
+
+    def _fmt3(self, pt):
+        try:
+            x, y, z = pt
+            return f"({self._fmt(x)}, {self._fmt(y)}, {self._fmt(z)})"
+        except Exception:
+            return str(pt)
 
     def analyze_ipt_file(self) -> str:
         """
@@ -79,34 +108,47 @@ class InventorReverseEngineer:
         """Analyze a sketch and generate workplane and geometry code."""
         # Get workplane info
         sketch = win32.CastTo(sketch, "PlanarSketch")
-        workplane_info = self._get_workplane_info(sketch.PlanarEntity)
+        workplane_info = self._get_workplane_info(sketch.PlanarEntity) or {}
+        plane_name = workplane_info.get("plane_name")
+        offset = workplane_info.get("offset")
+        origin = workplane_info.get("origin")
+        normal = workplane_info.get("normal")
 
         # Create workplane code
-        if "plane_name" in workplane_info and "offset" in workplane_info:
+        if plane_name and offset is not None:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f"{wp_var} = app.work_plane(\"{workplane_info['plane_name']}\", offset={workplane_info['offset']})",
+                    f"{wp_var} = app.work_plane(\"{plane_name}\", offset={self._fmt(offset)})",
                     "",
                 ]
             )
-        elif "plane_name" in workplane_info:
+        elif plane_name:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f"{wp_var} = app.work_plane(\"{workplane_info['plane_name']}\")",
+                    f"{wp_var} = app.work_plane(\"{plane_name}\")",
                     "",
                 ]
             )
-        else:
+        elif origin is not None and normal is not None:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
                     f"{wp_var} = app.work_plane(",
-                    f"    origin={workplane_info['origin']},",
-                    f"    normal={workplane_info['normal']},",
-                    "     app=app",
+                    f"    origin={self._fmt3(origin)},",
+                    f"    normal={self._fmt3(normal)},",
+                    "    app=app",
                     ")",
+                    "",
+                ]
+            )
+        else:
+            # Fallback to XY workplane
+            self.generated_code.extend(
+                [
+                    f"# Sketch {sketch_num}",
+                    f"{wp_var} = app.work_plane(\"XY\")",
                     "",
                 ]
             )
@@ -120,7 +162,7 @@ class InventorReverseEngineer:
                 # Single circle
                 circle = path[0]
                 self.generated_code.append(
-                    f"{wp_var}.move_to({circle['center'][0]}, {circle['center'][1]}).circle({circle['radius']})"
+                    f"{wp_var}.move_to({self._fmt(circle['center'][0])}, {self._fmt(circle['center'][1])}).circle({self._fmt(circle['radius'])})"
                 )
             else:
                 # Connected path of lines and arcs
@@ -128,31 +170,58 @@ class InventorReverseEngineer:
 
         self.generated_code.append("")
 
-    def _get_workplane_info(self, planar_entity):
-        """Extract workplane origin and orientation."""
-        if planar_entity.DefinitionType == constants.kPlaneAndOffsetWorkPlane:
-            offset = planar_entity.Definition.Offset.Value
-            base_plane_name = planar_entity.Definition.Plane.Name
-            if "XY" in base_plane_name:
-                return {"plane_name": "XY", "offset": offset}
-        elif hasattr(planar_entity, "Name"):
-            name = planar_entity.Name
-            if "XY" in name:
-                return {"plane_name": "XY"}
-            elif "XZ" in name:
-                return {"plane_name": "XZ"}
-            elif "YZ" in name:
-                return {"plane_name": "YZ"}
+    def _get_workplane_info(self, planar_entity) -> Dict[str, object]:
+        """Extract workplane origin and orientation. Always return a dict with keys: plane_name, offset, origin, normal."""
+        info: Dict[str, object] = {"plane_name": None, "offset": None, "origin": None, "normal": None}
+        try:
+            # Offset from base planes
+            if getattr(planar_entity, "DefinitionType", None) == constants.kPlaneAndOffsetWorkPlane:
+                try:
+                    offset = planar_entity.Definition.Offset.Value
+                except Exception:
+                    offset = None
+                base_plane_name = getattr(planar_entity.Definition.Plane, "Name", "") or ""
+                if "XY" in base_plane_name:
+                    info["plane_name"] = "XY"
+                elif "XZ" in base_plane_name:
+                    info["plane_name"] = "XZ"
+                elif "YZ" in base_plane_name:
+                    info["plane_name"] = "YZ"
+                info["offset"] = offset
+                return info
 
-            # For custom workplanes, extract geometry
-            plane = planar_entity.Geometry
-            origin = plane.RootPoint
-            normal = plane.Normal
+            # Named base planes
+            if hasattr(planar_entity, "Name"):
+                name = planar_entity.Name or ""
+                if "XY" in name:
+                    info["plane_name"] = "XY"
+                    return info
+                if "XZ" in name:
+                    info["plane_name"] = "XZ"
+                    return info
+                if "YZ" in name:
+                    info["plane_name"] = "YZ"
+                    return info
 
-            return {
-                "origin": (round(origin.X, 6), round(origin.Y, 6), round(origin.Z, 6)),
-                "normal": (round(normal.X, 6), round(normal.Y, 6), round(normal.Z, 6)),
-            }
+            # Custom workplanes - derive from geometry
+            if hasattr(planar_entity, "Geometry"):
+                plane = planar_entity.Geometry
+                if hasattr(plane, "RootPoint") and hasattr(plane, "Normal"):
+                    origin = plane.RootPoint
+                    normal = plane.Normal
+                    info["origin"] = (
+                        round(origin.X, 6),
+                        round(origin.Y, 6),
+                        round(origin.Z, 6),
+                    )
+                    info["normal"] = (
+                        round(normal.X, 6),
+                        round(normal.Y, 6),
+                        round(normal.Z, 6),
+                    )
+        except Exception:
+            pass
+        return info
 
     def _get_connected_paths(self, sketch) -> List[List[Dict]]:
         """Get sketch elements organized into connected paths."""
@@ -330,12 +399,12 @@ class InventorReverseEngineer:
             return
 
         first_element = path[0]
-        code_line = f"{wp_var}.move_to({first_element['start'][0]}, {first_element['start'][1]})"
+        code_line = f"{wp_var}.move_to({self._fmt(first_element['start'][0])}, {self._fmt(first_element['start'][1])})"
 
         # Chain all elements
         for element in path:
             if element["type"] == "line":
-                code_line += f".line_to({element['end'][0]}, {element['end'][1]})"
+                code_line += f".line_to({self._fmt(element['end'][0])}, {self._fmt(element['end'][1])})"
             elif element["type"] == "arc":
                 # Calculate middle point for three_point_arc
                 center = element["center"]
@@ -355,7 +424,7 @@ class InventorReverseEngineer:
                 mid_x = center[0] + radius * math.cos(mid_angle)
                 mid_y = center[1] + radius * math.sin(mid_angle)
 
-                code_line += f".three_point_arc(({round(mid_x, 6)}, {round(mid_y, 6)}), ({end[0]}, {end[1]}))"
+                code_line += f".three_point_arc({self._fmt2((mid_x, mid_y))}, {self._fmt2((end[0], end[1]))})"
 
         self.generated_code.append(code_line)
 
@@ -397,7 +466,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Extrude feature {feature_num}",
-                    f"shape{feature_num} = {wp_var}.extrude({distance}, '{operation}', {symmetric})",
+                    f"shape{feature_num} = {wp_var}.extrude({self._fmt(distance)}, '{operation}', {symmetric})",
                     "",
                 ]
             )
@@ -419,40 +488,35 @@ class InventorReverseEngineer:
         else:
             raise ValueError("Unsupported revolve extent type.")
 
-        # Get axis
+        # Convert angle from radians to revolutions for numeric stability
+        angle = angle / (2*math.pi)
+
+        # Get axis (default to Z)
+        axis = "Z"
         axis_entity = feature.AxisEntity
 
         # Determine which basis vector (X, Y, or Z) the axis is aligned with
-        # Get the axis direction vector
         if hasattr(axis_entity, "Geometry"):
             axis_geom = axis_entity.Geometry
-            # For a line, get direction vector
             if hasattr(axis_geom, "Direction"):
                 direction = axis_geom.Direction
-
-                if abs(direction.X) == 1.0:
-                    axis = "X"
-                elif abs(direction.Y) == 1.0:
-                    axis = "Y"
-                elif abs(direction.Z) == 1.0:
-                    axis = "Z"
-            else:
-                # Default to Z axis
+                try:
+                    if abs(direction.X) == 1.0:
+                        axis = "X"
+                    elif abs(direction.Y) == 1.0:
+                        axis = "Y"
+                    elif abs(direction.Z) == 1.0:
+                        axis = "Z"
+                except Exception:
+                    pass
+        elif hasattr(axis_entity, "Name"):
+            name = (axis_entity.Name or "").upper()
+            if "X" in name:
+                axis = "X"
+            elif "Y" in name:
+                axis = "Y"
+            elif "Z" in name:
                 axis = "Z"
-        else:
-            # Check if it's a work axis by name
-            if hasattr(axis_entity, "Name"):
-                name = axis_entity.Name.upper()
-                if "X" in name:
-                    axis = "X"
-                elif "Y" in name:
-                    axis = "Y"
-                elif "Z" in name:
-                    axis = "Z"
-                else:
-                    axis = "Z"  # Default
-            else:
-                axis = "Z"  # Default
 
         # Get operation type
         operation_map = {
@@ -466,7 +530,7 @@ class InventorReverseEngineer:
         self.generated_code.extend(
             [
                 f"# Revolve feature {feature_num}",
-                f"shape{feature_num} = {wp_var}.revolve({angle}, '{axis}', '{operation}')",
+                f"shape{feature_num} = {wp_var}.revolve({self._fmt(angle)}, '{axis}', '{operation}')",
                 "",
             ]
         )
@@ -515,5 +579,5 @@ class InventorReverseEngineer:
         self.generated_code.append("# Chamfered Edges")
         for (center_x, radius), params in zip(lost_edges, chamfer_parameters):
             self.generated_code.append(
-                f"app.chamfer_edge(x={round(center_x/10, 2)}, radius={round(radius/10, 2)}, angle={round(params['angle'], 2)}, distance={round(params['distance'], 2)})"
+                f"app.chamfer_edge(x={self._fmt(center_x/10)}, radius={self._fmt(radius/10)}, angle={self._fmt(params['angle'])}, distance={self._fmt(params['distance'])})"
             )

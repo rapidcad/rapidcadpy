@@ -10,6 +10,7 @@ venv/
 
 # VSCode settings
 .vscode/
+.history/
 
 # PyCharm settings
 .idea/
