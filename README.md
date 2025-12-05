@@ -1,230 +1,87 @@
 # RapidCAD-Py
 
-A new Python library under heavy development for CAD modeling and manipulation. Designed with a primary focus on seamless integration with industry-grade CAD software like AutoDesk Inventor, enabling professional-level parametric 3D modeling, sketches, and construction history management.
+A Python library for parametric CAD modeling with built-in FEA and 3D visualization. Integrates with Autodesk Inventor and OpenCASCADE.
 
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
-
 ## 🚀 Features
 
-- **Industry-Grade CAD Integration**: Integration with AutoDesk Inventor for professional CAD workflows
-- **Parametric CAD Modeling**: Create and manipulate 3D models using construction sequences
-- **Professional Sketch-based Design**: Work with 2D sketches containing lines, arcs, circles, and constraints
-- **Enterprise CAD System Support**: Built-in support for Autodesk Inventor and OpenCASCADE
-- **Advanced Data Processing**: Parse and process CAD data from Fusion 360 Gallery and DeepCAD datasets
-
-## Roadmap
-- **Multiple Export Formats**: Export to STEP, STL, and native CAD formats
-- **Visualization**: Built-in plotting and 3D visualization capabilities
-- **Comprehensive Constraint System**: Handle geometric constraints like coincidence, perpendicularity, and parallelism
-
-> **Note**: This library is currently under heavy development. Features and APIs may change as we continue to add features.
+- **Fluent API** for intuitive CAD modeling
+- **Finite Element Analysis** powered by torch-fem
+- **3D Visualization** with PyVista
+- **CAD Integration** with Autodesk Inventor and OpenCASCADE
+- **Export** to STEP, STL, and native CAD formats
 
 ## 📦 Installation
 
-### From source
 ```bash
 git clone https://github.com/rapidcad/rapidcadpy.git
 cd rapidcadpy
-pip install -e .
+pip install -e .          # Basic install
+pip install -e ".[fea]"   # With FEA support
 ```
-
-
-## 🛠️ Dependencies
-
-### Core Dependencies
-- Python 3.8+
-- NumPy 1.20+
-- PyTorch 1.10+
-- Plotly 5.0+
-- Matplotlib 3.5+
-
-### Optional Dependencies
-- **OpenCASCADE**: For 3D geometry operations and STEP/STL export
-- **win32com** (Windows): For Autodesk Inventor integration
-- **Build123d**: For advanced 3D modeling capabilities
 
 ## 🏁 Quick Start
 
-### Creating a Simple CAD Model (App-based approach)
+### Build a Model
 
 ```python
-from rapidcadpy.integrations.inventor import InventorApp
+from rapidcadpy.integrations.occ import OpenCascadeApp
 
-# Initialize Inventor application
-app = InventorApp()
-app.new_document()
-
-# Create a workplane on the XY plane
+app = OpenCascadeApp()
 wp = app.work_plane("XY")
 
-# Create a simple cube
-cube = wp.move_to(-5, -5).rect(10, 10).extrude(10)
+# Create a box with a hole
+box = wp.rect(30, 30, centered=True).extrude(10)
+hole = wp.circle(5).extrude(15)
+result = box.cut(hole)
 
-# Export to STEP format
-cube.export("my_cube.step")
+# Visualize
+app.show_3d(camera_angle="iso", screenshot="model.png")
 ```
 
-### More Advanced Example: Arm with Cut
+![3D Model](readme/test_camera_iso.png)
+
+### Run FEA Analysis
 
 ```python
-app = InventorApp()
-app.new_document()
-wp = app.work_plane("XY")
+from rapidcadpy.integrations.occ import OpenCascadeApp
+from rapidcadpy.fea import Material, FixedConstraint, DistributedLoad
 
-arm_thick = 5
+app = OpenCascadeApp()
+beam = app.work_plane("XY").rect(10, 100).extrude(10)
 
-# Create an arm shape
-arm = (
-    wp.move_to(-4.5, 0)
-    .line_to(-4.5, 20)
-    .line_to(-8, 45)
-    .three_point_arc((0, 53), (8, 45))
-    .line_to(4.5, 20)
-    .line_to(4.5, 0)
-    .three_point_arc((0, -4.5), (-4.5, 0))
-    .extrude(arm_thick)
+results = app.fea(
+    material=Material.STEEL,
+    mesh_size=2.0,
+    constraints=[FixedConstraint(location="x_min")],
+    loads=[DistributedLoad(location="z_max", force=-1000.0, direction="z")],
 )
 
-# Create a hole and cut it from the arm
-hole = wp.move_to(0, 45).circle(4).extrude(arm_thick)
-arm.cut(hole)
+print(results.summary())
+results.show(display='displacement')
 ```
 
-### Exporting Models
+![FEA Results](readme/fea_displacement_top.png)
+
+### Export Models
 
 ```python
-# Export to STEP format
-cube.export("model.step")
-
-# Export to STL format  
-cube.export("model.stl")
-
-# Export to Autodesk Inventor (Windows only)
-cube.export("model.ipt")
-```
-
-### Loading from CAD Systems
-
-```python
-# Load from Autodesk Inventor file
-app = InventorApp()
-doc = app.open_document(your_ipt_file_path)
-
-# Create reverse engineer instance
-engineer = InventorReverseEngineer(doc)
-
-# Generate code
-rapid_cad_code = engineer.analyze_ipt_file()
-```
-
-## 🎯 Core Concepts
-
-### Construction Sequences
-RapidCADpy models CAD objects as sequences of construction operations:
-- **Sketches**: 2D profiles containing geometric primitives
-- **Extrudes**: 3D operations that create solid bodies from sketches
-- **Operations**: Join, Cut, Intersect operations for boolean modeling
-
-### Geometric Primitives
-- **Line**: Defined by start and end points
-- **Circle**: Defined by center point and radius
-- **Arc**: Defined by start, end, and mid points
-
-### Constraints
-- **Geometric Constraints**: Coincidence, perpendicular, parallel, horizontal, vertical
-- **Dimensional Constraints**: Distance, angle, radius constraints
-
-### Coordinate Systems
-- **Sketch Planes**: Local 2D coordinate systems for sketches
-- **Global Coordinates**: 3D world coordinate system
-- **Transformations**: Automatic conversion between coordinate systems
-
-## 🔧 Advanced Usage
-
-### Custom Integrations
-```python
-from rapidcadpy.integrations import BaseIntegration
-
-class CustomCADIntegration(BaseIntegration):
-    def export(self, cad, filename, **kwargs):
-        # Implement custom export logic
-        pass
-    
-    def import_file(self, file_path):
-        # Implement custom import logic
-        pass
-```
-
-### Data Cleaning and Normalization
-```python
-# Apply data cleaning operations
-cad.apply_data_cleaning(visualize_steps=True)
-
-# Normalize to unit scale
-cad.normalize()
-
-# Round coordinates to specified precision
-cad.round(decimals=6)
-```
-
-### Working with Graph Representations
-```python
-# Convert to graph format for machine learning
-# graph_data = cad.to_graph_format(with_constraints=True)
-
-# Numericalize for neural networks
-cad.numericalize(n=256)
-
-# Restore original values
-cad.denumericalize(n=256)
-```
-
-## 🧪 Testing
-
-Run the test suite:
-```bash
-pytest tests/
-```
-
-Run with coverage:
-```bash
-pytest --cov=rapidcadpy tests/
+result.export("model.step")  # STEP format
+result.export("model.stl")   # STL format
+result.export("model.ipt")   # Autodesk Inventor (Windows)
 ```
 
 ## 📚 Documentation
 
 ```bash
-# Install documentation dependencies
-cd docs
-npm install
-
-# Start the development server
-npm run dev
-# or
-npm run build && npm run start
-
-# Open in browser
-open http://localhost:3000/docs  # Development server
+cd docs && npm install && npm run dev
 ```
 
-The documentation is built with [Fuma Docs](https://fumadocs.vercel.app/) and Next.js.
+Open http://localhost:3000/docs
 
+## 🧪 Testing
 
-## 📋 Project Structure
-
-```
-rapidcadpy/
-├── rapidcadpy/              # Main package
-│   ├── cad.py              # Core CAD class
-│   ├── sketch.py           # 2D sketch handling
-│   ├── primitive.py        # Geometric primitives
-│   ├── extrude.py          # Extrude operations
-│   ├── constraint.py       # Geometric constraints
-│   ├── integrations/       # CAD system integrations
-│   ├── f360gallery_processing/  # Fusion 360 data processing
-│   └── onshape_processing/ # OnShape data processing
-├── tests/                  # Test suite
-├── examples/              # Example scripts
-└── docs/                  # Documentation
+```bash
+pytest tests/
 ```
