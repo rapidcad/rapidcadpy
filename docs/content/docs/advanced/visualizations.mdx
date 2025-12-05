@@ -1,0 +1,33 @@
+---
+title: Visualizations
+description: Learn about visualization options in RapidCADpy
+---
+
+# 3D Visualizations in RapidCADpy
+
+<PythonFunction
+  name="show_3d"
+  signature="show_3d"
+  description="Visualize all shapes and sketches in 3D space using PyVista."
+  params={{
+    width: { type: 'int', description: 'Window width in pixels', default: '1200' },
+    height: { type: 'int', description: 'Window height in pixels', default: '800' },
+    show_axes: { type: 'bool', description: 'Whether to show coordinate axes', default: 'True' },
+    shape_opacity: { type: 'float', description: 'Opacity of 3D shapes (0-1)', default: '0.8' },
+    sketch_color: { type: 'str', description: 'Color for 2D sketches', default: '"red"' },
+    screenshot: { type: 'Optional[str]', description: 'Optional path to save screenshot instead of showing interactively', default: 'None' },
+    show_edges: { type: 'bool', description: 'Whether to show mesh edges/tessellation lines', default: 'False' },
+    camera_angle: { type: 'str', description: 'Camera view angle - "iso" for isometric, "x", "y", or "z" for orthogonal plane views', default: '"iso"' },
+  }}
+  returns="None"
+  returnType="None"
+/>
+
+Example:
+
+```python
+from rapidcadpy.integrations.occ.app import OpenCascadeApp
+app = OpenCascadeApp()
+...
+app.show_3d(width=1200, height=800, camera_angle="iso")
+```
