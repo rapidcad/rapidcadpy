@@ -9,6 +9,8 @@ class Shape(ABC):
     def __init__(self, obj, app: Optional["App"]) -> None:
         self.obj = obj
         self.app = app
+        if app is not None:
+            app.register_shape(self)
 
     @abstractmethod
     def to_stl(self, file_name: str) -> None:
@@ -28,7 +30,6 @@ class Shape(ABC):
         backend: str = "auto",
     ) -> None:
         pass
-
 
     @abstractmethod
     def cut(self, other: "Shape") -> "Shape":

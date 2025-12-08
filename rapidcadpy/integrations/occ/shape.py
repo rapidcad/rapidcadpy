@@ -3,13 +3,12 @@ from rapidcadpy.shape import Shape
 
 class OccShape(Shape):
     def __init__(self, obj, app) -> None:
-        self.app = app
         super().__init__(obj, app)
 
     def to_stl(self, file_name: str):
         # The constructor used here automatically calls mesh.Perform(). https://dev.opencascade.org/doc/refman/html/class_b_rep_mesh___incremental_mesh.html#a3a383b3afe164161a3aa59a492180ac6
-        from OCP.BRepMesh import BRepMesh_IncrementalMesh
-        from OCP.StlAPI import StlAPI_Writer
+        from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+        from OCC.Core.StlAPI import StlAPI_Writer
 
         tolerance = 1e-3
         angular_tolerance = 0.1
@@ -25,8 +24,8 @@ class OccShape(Shape):
         return writer.Write(self.obj, file_name)
 
     def to_step(self, file_name: str) -> None:
-        from OCP.STEPControl import STEPControl_Writer, STEPControl_StepModelType
-        from OCP.IFSelect import IFSelect_RetDone
+        from OCC.Core.STEPControl import STEPControl_Writer, STEPControl_StepModelType
+        from OCC.Core.IFSelect import IFSelect_RetDone
 
         step_writer = STEPControl_Writer()
         step_writer.Transfer(self.obj, STEPControl_StepModelType.STEPControl_AsIs)
@@ -205,7 +204,7 @@ class OccShape(Shape):
         Returns:
             OccShape: Self (modified in-place) for method chaining
         """
-        from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+        from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Cut
 
         cut_result = BRepAlgoAPI_Cut(self.obj, other.obj)
         cut_result.Build()
@@ -229,7 +228,7 @@ class OccShape(Shape):
         Returns:
             OccShape: Self (modified in-place) for method chaining
         """
-        from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+        from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Fuse
 
         fuse_result = BRepAlgoAPI_Fuse(self.obj, other.obj)
         fuse_result.Build()

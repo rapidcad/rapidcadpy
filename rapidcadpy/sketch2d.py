@@ -15,14 +15,16 @@ if TYPE_CHECKING:
 class Sketch2D(ABC):
     """
     Abstract base class representing a 2D sketch with a constructed face.
-    
+
     A Sketch2D is created when a workplane's close() method is called,
     and it holds the constructed face that can be extruded into a 3D shape.
-    
+
     This represents a finalized sketch that is ready for 3D operations.
     """
 
-    def __init__(self, primitives: List["Line"], workplane: Any, app: Optional["App"] = None):
+    def __init__(
+        self, primitives: List["Line"], workplane: Any, app: Optional["App"] = None
+    ):
         """
         Initialize a sketch with a list of 2D primitives.
 
@@ -57,8 +59,7 @@ class Sketch2D(ABC):
         ...
 
     @abstractmethod
-    def pipe(self, diameter: float):
-        ...
+    def pipe(self, diameter: float): ...
 
     @abstractmethod
     def to_png(

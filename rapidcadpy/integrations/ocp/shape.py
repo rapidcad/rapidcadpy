@@ -7,8 +7,6 @@ class OccShape(Shape):
         self.app = app
         super().__init__(obj, app, material)
         # Register this shape with the app
-        if app is not None:
-            app.register_shape(self)
 
     def volume(self) -> float:
         """

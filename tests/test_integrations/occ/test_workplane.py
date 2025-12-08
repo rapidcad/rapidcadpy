@@ -16,7 +16,9 @@ def test_to_png_simple_sketch(tmp_path):
     # Create a simple rectangular sketch
     app = OpenCascadeOcpApp()
     workplane = app.work_plane("XY")
-    sketch = workplane.move_to(0, 0).line_to(10, 0).line_to(10, 10).line_to(0, 10).close()
+    sketch = (
+        workplane.move_to(0, 0).line_to(10, 0).line_to(10, 10).line_to(0, 10).close()
+    )
 
     # Render to PNG before extrusion
     output_file = tmp_path / "test_sketch.png"
@@ -25,7 +27,7 @@ def test_to_png_simple_sketch(tmp_path):
     # Verify file was created
     assert output_file.exists()
     assert output_file.stat().st_size > 0
-    
+
     # Can still extrude after rendering
     sketch.extrude(2)
 
@@ -59,14 +61,16 @@ def test_to_png_complex_sketch(tmp_path):
     app = OpenCascadeOcpApp()
     workplane = app.work_plane("XY")
     # Create and close a rectangle sketch
-    sketch = workplane.move_to(0, 0).line_to(20, 0).line_to(20, 10).line_to(0, 10).close()
-    
+    sketch = (
+        workplane.move_to(0, 0).line_to(20, 0).line_to(20, 10).line_to(0, 10).close()
+    )
+
     output_file = tmp_path / "test_complex.png"
     sketch.to_png(str(output_file), width=1000, height=800, margin=0.15)
 
     assert output_file.exists()
     assert output_file.stat().st_size > 0
-    
+
     # Can still extrude after rendering
     sketch.extrude(2)
 
@@ -81,7 +85,7 @@ def test_to_png_empty_sketch():
             workplane.close()  # This will fail because no pending shapes
         except ValueError:
             pass  # Expected - can't close without shapes
-        
+
     # Alternative: workplane with no pending shapes
     with pytest.raises(ValueError, match="Cannot create wire: no edges in sketch"):
         workplane.circle(5)  # Add a shape
@@ -136,11 +140,25 @@ def test_two_workplanes():
 
     # Create top chord beam
     wp_top = app.work_plane("XY", offset=max_height - top_chord_thickness)
-    top_chord = wp_top.move_to(0, 0).line_to(span, 0).line_to(span, width).line_to(0, width).close().extrude(top_chord_thickness)
+    top_chord = (
+        wp_top.move_to(0, 0)
+        .line_to(span, 0)
+        .line_to(span, width)
+        .line_to(0, width)
+        .close()
+        .extrude(top_chord_thickness)
+    )
 
     # Create bottom chord beam
     wp_bottom = app.work_plane("XY", offset=0)
-    bottom_chord = wp_bottom.move_to(0, 0).line_to(span, 0).line_to(span, width).line_to(0, width).close().extrude(bottom_chord_thickness)
+    bottom_chord = (
+        wp_bottom.move_to(0, 0)
+        .line_to(span, 0)
+        .line_to(span, width)
+        .line_to(0, width)
+        .close()
+        .extrude(bottom_chord_thickness)
+    )
 
     # Create vertical members
     verticals = []
@@ -148,6 +166,13 @@ def test_two_workplanes():
         x_pos = i * bay_spacing
         wp_vert = app.work_plane("XZ", offset=width / 2)
         vert_height = max_height - top_chord_thickness - bottom_chord_thickness
-        vertical = wp_vert.move_to(x_pos, bottom_chord_thickness).line_to(x_pos + vertical_thickness, bottom_chord_thickness).line_to(x_pos + vertical_thickness, bottom_chord_thickness + vert_height).line_to(x_pos, bottom_chord_thickness + vert_height).close().extrude(width, mode="center")
+        vertical = (
+            wp_vert.move_to(x_pos, bottom_chord_thickness)
+            .line_to(x_pos + vertical_thickness, bottom_chord_thickness)
+            .line_to(x_pos + vertical_thickness, bottom_chord_thickness + vert_height)
+            .line_to(x_pos, bottom_chord_thickness + vert_height)
+            .close()
+            .extrude(width, mode="center")
+        )
         verticals.append(vertical)
     app.show_3d()
