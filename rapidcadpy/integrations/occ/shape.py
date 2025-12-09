@@ -238,3 +238,33 @@ class OccShape(Shape):
         # Update the current object with the union result (in-place modification)
         self.obj = fuse_result.Shape()
         return self
+
+    def get_fea_analyzer(self, material, mesh_size, element_type="tet4"):
+        """
+        Get FEA analyzer for this OccShape.
+
+        Args:
+            material: Material properties
+            mesh_size: Target mesh element size
+            element_type: Element type
+
+        Returns:
+            FEAAnalyzer instance, or None if dependencies unavailable
+        """
+        try:
+            from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
+            from rapidcadpy.fea.kernels.base import FEAAnalyzer
+
+            if TorchFEMKernel.is_available():
+                kernel = TorchFEMKernel()
+                return FEAAnalyzer(self, material, kernel, mesh_size, element_type)
+            else:
+                import warnings
+
+                warnings.warn(
+                    "torch-fem dependencies not available. "
+                    "Install with: pip install rapidcadpy[fea]"
+                )
+                return None
+        except ImportError:
+            return None

@@ -11,7 +11,7 @@ class OccWorkplane(Workplane):
     def __init__(self, app: Optional[Any] = None, *args, **kwargs):
         super().__init__(app=app, *args, **kwargs)
         # Set up coordinate system basis vectors based on normal
-        if hasattr(self.__class__, 'normal_vector'):
+        if hasattr(self.__class__, "normal_vector"):
             self._setup_coordinate_system()
 
     @classmethod
@@ -76,11 +76,13 @@ class OccWorkplane(Workplane):
         p3 = (start_x + width, start_y + height)
         p4 = (start_x, start_y + height)
 
-        self._pending_shapes.extend([
-            Line(p1, p2),
-            Line(p2, p3),
-            Line(p3, p4),
-            Line(p4, p1),
-        ])
+        self._pending_shapes.extend(
+            [
+                Line(p1, p2),
+                Line(p2, p3),
+                Line(p3, p4),
+                Line(p4, p1),
+            ]
+        )
 
         return self

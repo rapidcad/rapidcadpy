@@ -14,17 +14,16 @@ class App:
         self._workplanes: List[Workplane] = []
         self._shapes: List["Shape"] = []
 
-
-    def work_plane(self, name: str) -> Workplane:
+    def work_plane(self, name: str, offset: Optional[float] = None) -> Workplane:
         if name.upper() == "XY":
-            return self.work_plane_class.xy_plane(app=self)
+            return self.work_plane_class.xy_plane(app=self, offset=offset)
         elif name.upper() == "XZ":
-            return self.work_plane_class.xz_plane(app=self)
+            return self.work_plane_class.xz_plane(app=self, offset=offset)
         elif name.upper() == "YZ":
-            return self.work_plane_class.yz_plane(app=self)
+            return self.work_plane_class.yz_plane(app=self, offset=offset)
         else:
             raise ValueError(f"Unknown workplane: {name}")
-        
+
     def register_workplane(self, workplane: Workplane) -> None:
         """Register a workplane with this app for tracking."""
         if workplane not in self._workplanes:
@@ -98,8 +97,7 @@ class App:
 
         # Create plotter - use off-screen mode if saving screenshot
         plotter = pv.Plotter(
-            window_size=[width, height],
-            off_screen=(screenshot is not None)
+            window_size=[width, height], off_screen=(screenshot is not None)
         )
         plotter.set_background("white")
 
@@ -118,7 +116,7 @@ class App:
         # Add shapes to the plotter
         for idx, shape in enumerate(shapes):
             color = shape_colors[idx % len(shape_colors)]
-            
+
             # Export shape to temporary STL file
             with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
                 tmp_stl = tmp.name
@@ -144,15 +142,23 @@ class App:
             # Add pending (not yet extruded) sketches
             if hasattr(workplane, "_pending_shapes") and workplane._pending_shapes:
                 self._add_sketch_to_plotter(
-                    plotter, workplane, workplane._pending_shapes, sketch_color, f"Sketch {sketch_counter}"
+                    plotter,
+                    workplane,
+                    workplane._pending_shapes,
+                    sketch_color,
+                    f"Sketch {sketch_counter}",
                 )
                 sketch_counter += 1
-            
+
             # Add extruded sketches (sketches that were extruded but we want to show)
             if hasattr(workplane, "_extruded_sketches"):
                 for extruded_sketch in workplane._extruded_sketches:
                     self._add_sketch_to_plotter(
-                        plotter, workplane, extruded_sketch, sketch_color, f"Sketch {sketch_counter}"
+                        plotter,
+                        workplane,
+                        extruded_sketch,
+                        sketch_color,
+                        f"Sketch {sketch_counter}",
                     )
                     sketch_counter += 1
 
@@ -165,7 +171,7 @@ class App:
         # Set camera position based on camera_angle parameter
         if camera_angle.lower() == "iso":
             # Isometric view - view from corner
-            plotter.camera_position = 'iso'
+            plotter.camera_position = "iso"
         elif camera_angle.lower() == "x":
             # Looking along X axis (YZ plane view)
             plotter.view_yz()
@@ -177,7 +183,7 @@ class App:
             plotter.view_xy()
         else:
             # Default to isometric if invalid angle provided
-            plotter.camera_position = 'iso'
+            plotter.camera_position = "iso"
 
         # Show or save
         if screenshot:
@@ -210,13 +216,15 @@ class App:
                 # Convert 2D line to 3D points using workplane transformation
                 start_3d = workplane._to_3d(primitive.start[0], primitive.start[1])
                 end_3d = workplane._to_3d(primitive.end[0], primitive.end[1])
-                
-                points = np.array([
-                    [start_3d[0], start_3d[1], start_3d[2]],
-                    [end_3d[0], end_3d[1], end_3d[2]]
-                ])
+
+                points = np.array(
+                    [
+                        [start_3d[0], start_3d[1], start_3d[2]],
+                        [end_3d[0], end_3d[1], end_3d[2]],
+                    ]
+                )
                 polyline = pv.Line(points[0], points[1])
-                
+
                 plotter.add_mesh(
                     polyline,
                     color=color,
@@ -224,24 +232,24 @@ class App:
                     label=label,
                     render_lines_as_tubes=True,
                 )
-            
+
             elif isinstance(primitive, Circle):
                 # Sample points around the circle and convert to 3D
                 num_points = 100
                 theta = np.linspace(0, 2 * np.pi, num_points)
                 cx, cy = primitive.center
                 r = primitive.radius
-                
+
                 points = []
                 for angle in theta:
                     x_2d = cx + r * np.cos(angle)
                     y_2d = cy + r * np.sin(angle)
                     point_3d = workplane._to_3d(x_2d, y_2d)
                     points.append([point_3d[0], point_3d[1], point_3d[2]])
-                
+
                 points_array = np.array(points)
                 polyline = pv.Spline(points_array, num_points)
-                
+
                 plotter.add_mesh(
                     polyline,
                     color=color,
@@ -249,12 +257,12 @@ class App:
                     label=label,
                     render_lines_as_tubes=True,
                 )
-            
+
             elif isinstance(primitive, Arc):
                 # Sample points along the arc and convert to 3D
                 num_points = 50
                 points = []
-                
+
                 for i in range(num_points + 1):
                     t = i / num_points
                     if t < 0.5:
@@ -265,13 +273,13 @@ class App:
                         t2 = (t - 0.5) * 2
                         x_2d = primitive.mid[0] * (1 - t2) + primitive.end[0] * t2
                         y_2d = primitive.mid[1] * (1 - t2) + primitive.end[1] * t2
-                    
+
                     point_3d = workplane._to_3d(x_2d, y_2d)
                     points.append([point_3d[0], point_3d[1], point_3d[2]])
-                
+
                 points_array = np.array(points)
                 polyline = pv.Spline(points_array, num_points)
-                
+
                 plotter.add_mesh(
                     polyline,
                     color=color,

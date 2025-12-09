@@ -11,16 +11,16 @@ class OccShape(Shape):
     def volume(self) -> float:
         """
         Calculate the volume of the shape using OpenCASCADE's GProp_GProps.
-        
+
         Returns:
             float: Volume in cubic units
-            
+
         Raises:
             RuntimeError: If volume calculation fails
         """
         from OCP.GProp import GProp_GProps
         from OCP.BRepGProp import BRepGProp
-        
+
         props = GProp_GProps()
         BRepGProp.VolumeProperties_s(self.obj, props)
         return props.Mass()
@@ -46,7 +46,7 @@ class OccShape(Shape):
     def to_step(self, file_name: str, heal: bool = False) -> None:
         """
         Export shape to STEP file.
-        
+
         Args:
             file_name: Path to save the STEP file
             heal: If True, heal/fix geometry before export (useful for FEA meshing)
@@ -55,20 +55,20 @@ class OccShape(Shape):
         from OCP.IFSelect import IFSelect_RetDone
 
         shape_to_export = self.obj
-        
+
         if heal and False:
             # Light healing - just fix shape issues without destroying topology
             from OCP.ShapeFix import ShapeFix_Shape, ShapeFix_Solid
             from OCP.TopoDS import TopoDS
             from OCP.TopAbs import TopAbs_SOLID
             from OCP.TopExp import TopExp_Explorer
-            
+
             # Fix solid issues
             fixer = ShapeFix_Shape(shape_to_export)
             fixer.SetPrecision(1e-6)
             fixer.Perform()
             shape_to_export = fixer.Shape()
-            
+
             # Fix each solid individually
             explorer = TopExp_Explorer(shape_to_export, TopAbs_SOLID)
             while explorer.More():
@@ -78,7 +78,9 @@ class OccShape(Shape):
                 explorer.Next()
 
         step_writer = STEPControl_Writer()
-        step_writer.Transfer(shape_to_export, STEPControl_StepModelType.STEPControl_AsIs)
+        step_writer.Transfer(
+            shape_to_export, STEPControl_StepModelType.STEPControl_AsIs
+        )
         status = step_writer.Write(file_name)
         if status != IFSelect_RetDone:
             raise RuntimeError("Failed to write STEP file.")
@@ -191,7 +193,9 @@ class OccShape(Shape):
         mesh = pv.read(stl_file)
 
         # Create plotter
-        plotter = pv.Plotter(off_screen=(output is not None), window_size=[width, height])
+        plotter = pv.Plotter(
+            off_screen=(output is not None), window_size=[width, height]
+        )
         plotter.add_mesh(mesh, color="lightgray", show_edges=False)
         plotter.background_color = "white"
 
@@ -255,16 +259,16 @@ class OccShape(Shape):
         else:
             # Interactive mode
             plotter = vedo.Plotter(size=(width, height))
-            
+
             # Set camera view
             if view == "iso":
-                plotter.show(mesh, viewup="z", camera={'azimuth': 45, 'elevation': 30})
+                plotter.show(mesh, viewup="z", camera={"azimuth": 45, "elevation": 30})
             elif view == "front":
-                plotter.show(mesh, viewup="z", camera={'azimuth': 0, 'elevation': 0})
+                plotter.show(mesh, viewup="z", camera={"azimuth": 0, "elevation": 0})
             elif view == "top":
-                plotter.show(mesh, viewup="z", camera={'azimuth': 0, 'elevation': 90})
+                plotter.show(mesh, viewup="z", camera={"azimuth": 0, "elevation": 90})
             elif view == "right":
-                plotter.show(mesh, viewup="z", camera={'azimuth': 90, 'elevation': 0})
+                plotter.show(mesh, viewup="z", camera={"azimuth": 90, "elevation": 0})
             else:
                 plotter.show(mesh, viewup="z")
 
@@ -304,11 +308,11 @@ class OccShape(Shape):
 
         Returns:
             OccShape: Self (modified in-place) for method chaining
-            
+
         Examples:
             # Union with a single shape
             result = shape1.union(shape2)
-            
+
             # Union with multiple shapes
             result = shape1.union([shape2, shape3, shape4])
         """
@@ -316,38 +320,41 @@ class OccShape(Shape):
 
         # Convert single shape to list for uniform handling
         shapes_to_union = [other] if not isinstance(other, list) else other
-        
+
         # Perform union with each shape sequentially
         for shape in shapes_to_union:
             fuse_result = BRepAlgoAPI_Fuse(self.obj, shape.obj)
             fuse_result.Build()
             if not fuse_result.IsDone():
                 raise RuntimeError("Union operation failed.")
-            
+
             # Update the current object with the union result (in-place modification)
             self.obj = fuse_result.Shape()
-        
+
         return self
 
-    def get_fea_analyzer(self, material, mesh_size=2.0, element_type='tet4'):
+    def get_fea_analyzer(self, material, mesh_size=2.0, element_type="tet4"):
         """
-        Get torch-fem analyzer for this OccShape.
-        
+        Get FEA analyzer for this OccShape.
+
         Args:
             material: Material properties
             mesh_size: Target mesh element size
             element_type: Element type
-        
+
         Returns:
-            OccTorchFEMAnalyzer instance, or None if dependencies unavailable
+            FEAAnalyzer instance, or None if dependencies unavailable
         """
         try:
-            from rapidcadpy.fea.fea_analyzer import OccTorchFEMAnalyzer
-            
-            if OccTorchFEMAnalyzer.is_available():
-                return OccTorchFEMAnalyzer(self, material, mesh_size, element_type)
+            from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
+            from rapidcadpy.fea.kernels.base import FEAAnalyzer
+
+            if TorchFEMKernel.is_available():
+                kernel = TorchFEMKernel()
+                return FEAAnalyzer(self, material, kernel, mesh_size, element_type)
             else:
                 import warnings
+
                 warnings.warn(
                     "torch-fem dependencies not available. "
                     "Install with: pip install rapidcadpy[fea]"

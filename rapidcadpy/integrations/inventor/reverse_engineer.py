@@ -119,7 +119,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f"{wp_var} = app.work_plane(\"{plane_name}\", offset={self._fmt(offset)})",
+                    f'{wp_var} = app.work_plane("{plane_name}", offset={self._fmt(offset)})',
                     "",
                 ]
             )
@@ -127,7 +127,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f"{wp_var} = app.work_plane(\"{plane_name}\")",
+                    f'{wp_var} = app.work_plane("{plane_name}")',
                     "",
                 ]
             )
@@ -148,7 +148,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f"{wp_var} = app.work_plane(\"XY\")",
+                    f'{wp_var} = app.work_plane("XY")',
                     "",
                 ]
             )
@@ -172,15 +172,25 @@ class InventorReverseEngineer:
 
     def _get_workplane_info(self, planar_entity) -> Dict[str, object]:
         """Extract workplane origin and orientation. Always return a dict with keys: plane_name, offset, origin, normal."""
-        info: Dict[str, object] = {"plane_name": None, "offset": None, "origin": None, "normal": None}
+        info: Dict[str, object] = {
+            "plane_name": None,
+            "offset": None,
+            "origin": None,
+            "normal": None,
+        }
         try:
             # Offset from base planes
-            if getattr(planar_entity, "DefinitionType", None) == constants.kPlaneAndOffsetWorkPlane:
+            if (
+                getattr(planar_entity, "DefinitionType", None)
+                == constants.kPlaneAndOffsetWorkPlane
+            ):
                 try:
                     offset = planar_entity.Definition.Offset.Value
                 except Exception:
                     offset = None
-                base_plane_name = getattr(planar_entity.Definition.Plane, "Name", "") or ""
+                base_plane_name = (
+                    getattr(planar_entity.Definition.Plane, "Name", "") or ""
+                )
                 if "XY" in base_plane_name:
                     info["plane_name"] = "XY"
                 elif "XZ" in base_plane_name:
@@ -489,7 +499,7 @@ class InventorReverseEngineer:
             raise ValueError("Unsupported revolve extent type.")
 
         # Convert angle from radians to revolutions for numeric stability
-        angle = angle / (2*math.pi)
+        angle = angle / (2 * math.pi)
 
         # Get axis (default to Z)
         axis = "Z"
