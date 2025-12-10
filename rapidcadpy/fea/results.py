@@ -438,6 +438,7 @@ class OptimizationResult:
         interactive: bool = True,
         window_size: Tuple[int, int] = (1200, 800),
         show_colorbar: bool = True,
+        filename: Optional[str] = None,
     ):
         """
         Display optimization results interactively.
@@ -448,18 +449,32 @@ class OptimizationResult:
             interactive: Use interactive viewer. Default: True
             window_size: Window dimensions (width, height)
             show_colorbar: Show colorbar for density. Default: True
+            filename: Optional path to save the plot. If set, saves to file instead of showing.
 
         Returns:
             PyVista plotter object (for 'density'/'binary') or matplotlib figure (for 'convergence')
         """
+        if filename:
+            interactive = False
+
         if display == "convergence":
-            return self._show_convergence()
+            fig = self._show_convergence()
+            if filename:
+                fig.savefig(filename)
+            return fig
         elif display == "solid":
-            return self._show_solid(threshold=threshold)
+            plotter = self._show_solid(
+                threshold=threshold, interactive=interactive, window_size=window_size
+            )
         else:
-            return self._show_density(
+            plotter = self._show_density(
                 display, threshold, interactive, window_size, show_colorbar
             )
+
+        if filename and plotter is not None:
+            plotter.screenshot(filename)
+
+        return plotter
 
     def _show_convergence(self):
         """Plot compliance convergence history."""
