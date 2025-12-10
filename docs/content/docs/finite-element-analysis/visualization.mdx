@@ -1,0 +1,41 @@
+---
+title: Visualization
+---
+### Interactive Visualization
+
+```python
+# Display modes
+results.show(display='stress')          # Von Mises stress
+results.show(display='displacement')    # Deformation (scaled)
+results.show(display='both')            # Side-by-side (default)
+results.show(display='conditions')      # Boundary conditions
+
+# Customize
+results.show(
+    display='displacement',
+    displacement_scale=10.0,   # Exaggerate deformation
+    window_size=(1920, 1080)   # Custom window size
+)
+```
+
+![FEA Results - Stress and Displacement](display_both_example.png)
+
+### Boundary Condition Visualization
+
+Visualize constraints and loads before solving using the analyzer's `show()` method:
+
+```python
+# After setting up boundary conditions
+analyzer.add_constraint(FixedConstraint("x_min"))
+analyzer.add_load(DistributedLoad("top", force=-1000.0))
+
+# Preview the setup
+analyzer.show()
+```
+
+Shows:
+- 🔴 **Red spheres** - Fixed/constrained nodes
+- 🟢 **Green spheres** - Loaded nodes
+- ➡️ **Green arrows** - Force direction and magnitude
+
+![Boundary Conditions Visualization](plot_boundary_conditions.png)

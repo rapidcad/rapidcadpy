@@ -1,0 +1,65 @@
+---
+title: Constraints
+description: Define supports for Finite Element Analysis (FEA) simulations in RapidCAD-Py.
+---
+
+In RapidCAD-Py FEA, boundary conditions are separated into two categories:
+- **Constraints** - Define supports that prevent movement (added via `analyzer.add_constraint()`)
+- **Loads** - Define forces applied to the model (added via `analyzer.add_load()`)
+
+# FixedConstraint
+
+Prevents all movement (translations and rotations):
+
+```python
+from rapidcadpy.fea import FixedConstraint
+
+# Fix entire surface
+FixedConstraint(location='x_min')       # Fix surface at x minimum
+FixedConstraint(location='y_max')       # Fix surface at y maximum
+FixedConstraint(location='bottom')      # Fix bottom surface (z_min)
+
+# Fix specific point
+FixedConstraint(location=(10, 50, 0))   # Fix point at coordinates
+
+# Partial constraint (specific DOFs)
+FixedConstraint(
+    location='x_min',
+    dofs=(True, True, False)  # Fix X and Y, allow Z movement
+)
+```
+
+<PythonFunction
+  name="FixedConstraint"
+  signature="FixedConstraint"
+  description="Apply a fixed constraint to a surface or point."
+  params={{
+    location: { type: 'Union[str, Tuple[float, float, float]]', description: 'Surface identifier (`top`, `bottom`, `x_min`, `x_max`, etc.) or point coordinates' },
+    dofs: { type: 'Optional[Tuple[bool, bool, bool]]', description: 'Degrees of freedom to constrain (Tx, Ty, Tz). Default is all True', default: '(True, True, True)' }
+  }}
+  returns="None"
+  returnType="None"
+    />
+
+# PinnedConstraint
+
+Prevents translation but allows rotation:
+
+```python
+from rapidcadpy.fea import PinnedConstraint
+
+PinnedConstraint(location='x_min')
+```
+
+# RollerConstraint
+
+Restricts movement in one direction only:
+
+```python
+from rapidcadpy.fea import RollerConstraint
+
+RollerConstraint(
+    location='bottom',
+    direction='z'  # Only prevent Z movement
+)
+```

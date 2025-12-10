@@ -179,9 +179,11 @@ class FEAAnalyzer:
         self,
         shape: "Shape",
         material: "MaterialProperties",
-        kernel: FEAKernel,
+        kernel: str,
         mesh_size: float = 2.0,
         element_type: str = "tet4",
+        loads: Optional[List["Load"]] = None,
+        constraints: Optional[List["BoundaryCondition"]] = None,
     ):
         """
         Initialize FEA analyzer with dependency injection.
@@ -195,11 +197,20 @@ class FEAAnalyzer:
         """
         self.shape = shape
         self.material = material
-        self.kernel = kernel
+        if kernel=="torch-fem":
+            from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
+
+            self.kernel = TorchFEMKernel()
         self.mesh_size = mesh_size
         self.element_type = element_type
-        self.loads: List["Load"] = []
-        self.constraints: List["BoundaryCondition"] = []
+        if loads is not None:
+            self.loads = loads
+        else:
+            self.loads: List["Load"] = []
+        if constraints is not None:
+            self.constraints = constraints
+        else:
+            self.constraints: List["BoundaryCondition"] = []
 
     def add_load(self, load: "Load") -> "FEAAnalyzer":
         """

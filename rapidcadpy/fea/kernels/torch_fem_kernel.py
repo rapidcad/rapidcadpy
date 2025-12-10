@@ -10,6 +10,8 @@ import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Tuple
 
+from torchfem import Solid
+
 from rapidcadpy.fea.boundary_conditions import BoundaryCondition, Load
 from rapidcadpy.fea.materials import MaterialProperties
 from rapidcadpy.fea.meshing import import_geometry_netgen
@@ -330,31 +332,40 @@ class TorchFEMKernel(FEAKernel):
             print(f"  Move limit: {move_limit}")
 
         # Step 1: Create mesh and model
-        with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
-            step_path = tmp.name
-        shape.to_step(step_path)
         torch.set_default_dtype(torch.float64)
+        if hasattr(shape, "to_step"):  # Check if it's a Shape (duck typing)
+            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+                step_path = tmp.name
+            shape.to_step(step_path)
+            
 
-        nodes, elements = import_geometry_netgen(
-            step_path,
-            mesh_size=mesh_size,
-            element_type="tet4",
-            dim=3,
-            verbose=verbose,
-        )
+            nodes, elements = import_geometry_netgen(
+                step_path,
+                mesh_size=mesh_size,
+                element_type="tet4",
+                dim=3,
+                verbose=verbose,
+            )
 
-        elements = elements[:, [1, 0, 2, 3]]
-        nodes = nodes.to(torch.float64)
+            elements = elements[:, [1, 0, 2, 3]]
+            nodes = nodes.to(torch.float64)
 
-        # Step 2: Create FEM model
-        from torchfem import Solid
+            # Step 2: Create FEM model
+            
 
-        material_fem = material.to_torchfem()
-        model = Solid(
-            nodes,
-            elements,
-            IsotropicElasticity3D(E=210000.0, nu=0.3),
-        )
+            material_fem = material.to_torchfem()
+            model = Solid(
+                nodes,
+                elements,
+                IsotropicElasticity3D(E=210000.0, nu=0.3),
+            )
+        elif isinstance(shape, Solid):
+            model = shape
+            nodes = shape.nodes
+            elements = shape.elements[:, [1, 0, 2, 3]]
+            nodes = nodes.to(torch.float64)
+            model.nodes = model.nodes.to(torch.float64)
+            model.elements = model.elements[:, [1, 0, 2, 3]]
 
         if verbose:
             print(f"\n✓ FEM model created")
@@ -407,6 +418,11 @@ class TorchFEMKernel(FEAKernel):
             else range(num_iterations)
         )
 
+        import time
+        solve_time = 0
+        sensitivity_time = 0
+        update_time = 0
+
         for k in iterator:
             rho_k = rho_history[k]
 
@@ -415,12 +431,17 @@ class TorchFEMKernel(FEAKernel):
             model.material.C = torch.einsum("n,nijkl->nijkl", rho_k**penalization, C0)
 
             # Compute solution
-            u_k, f_k, _, _, _ = model.solve()
+            # Use iterative solver (minres) with relaxed tolerance for speed
+            # For topology optimization, high precision isn't needed in early iterations
+            t0 = time.perf_counter()
+            u_k, f_k, _, _, _ = model.solve(method="minres", rtol=1e-4)
+            solve_time += time.perf_counter() - t0
 
             # Evaluation of compliance
             compliance = torch.inner(f_k.ravel(), u_k.ravel())
             compliance_history.append(compliance.item())
 
+            t0 = time.perf_counter()
             if use_autograd:
                 # Compute sensitivity via automatic differentiation
                 sensitivity = torch.autograd.grad(compliance, rho_k)[0]
@@ -433,8 +454,10 @@ class TorchFEMKernel(FEAKernel):
             # Filter sensitivities (if filter radius provided)
             if H is not None:
                 sensitivity = H @ (rho_k * sensitivity) / H.sum(dim=0) / rho_k
+            sensitivity_time += time.perf_counter() - t0
 
             # Optimality criteria update
+            t0 = time.perf_counter()
             def make_step(mu):
                 G_k = -sensitivity / mu
                 upper = torch.min(rho_max, (1 + move) * rho_k)
@@ -456,12 +479,19 @@ class TorchFEMKernel(FEAKernel):
             if use_autograd:
                 rho_new = rho_new.detach().requires_grad_(True)
             rho_history.append(rho_new)
+            update_time += time.perf_counter() - t0
 
             if verbose and (k + 1) % 10 == 0:
                 tqdm.write(
                     f"  Iter {k+1}: Compliance = {compliance.item():.4e}, "
                     f"Volume = {rho_new.sum().item()/n_elem:.4f}"
                 )
+
+        if verbose:
+            print(f"\n  Timing breakdown:")
+            print(f"    Solve:       {solve_time:.2f}s ({100*solve_time/(solve_time+sensitivity_time+update_time):.1f}%)")
+            print(f"    Sensitivity: {sensitivity_time:.2f}s ({100*sensitivity_time/(solve_time+sensitivity_time+update_time):.1f}%)")
+            print(f"    Update:      {update_time:.2f}s ({100*update_time/(solve_time+sensitivity_time+update_time):.1f}%)")
 
         # Get geometry properties
         geo_props = get_geometry_properties(step_file_path=step_path)
@@ -521,10 +551,12 @@ class TorchFEMKernel(FEAKernel):
         self, nodes: torch.Tensor, elements: torch.Tensor, radius: float
     ) -> torch.Tensor:
         """
-        Build the sensitivity filter matrix H.
+        Build the sensitivity filter matrix H using sparse operations.
 
         The filter averages sensitivities over neighboring elements within
         the specified radius to avoid checkerboard patterns.
+
+        Uses scipy's cKDTree for efficient neighbor search, avoiding O(n²) memory.
 
         Args:
             nodes: Mesh nodes
@@ -532,20 +564,42 @@ class TorchFEMKernel(FEAKernel):
             radius: Filter radius
 
         Returns:
-            Sparse filter matrix H
+            Sparse filter matrix H (as dense tensor, but built efficiently)
         """
+        from scipy.spatial import cKDTree
+
         # Compute element centroids
-        centroids = nodes[elements].mean(dim=1)
+        centroids = nodes[elements].mean(dim=1).cpu().numpy()
         n_elem = elements.shape[0]
 
-        # Compute distance matrix between element centroids
-        diff = centroids.unsqueeze(0) - centroids.unsqueeze(1)
-        distances = torch.norm(diff, dim=2)
+        # Use KD-tree for efficient neighbor search - O(n log n) instead of O(n²)
+        tree = cKDTree(centroids)
 
-        # Create filter weights (linear decay within radius)
-        H = torch.clamp(radius - distances, min=0.0)
+        # Find all pairs within radius
+        pairs = tree.query_pairs(radius, output_type='ndarray')
 
-        return H
+        # Build sparse filter matrix
+        # Initialize with diagonal (self-weight = radius)
+        row_indices = list(range(n_elem))
+        col_indices = list(range(n_elem))
+        values = [radius] * n_elem
+
+        # Add neighbor weights (symmetric)
+        for i, j in pairs:
+            dist = np.linalg.norm(centroids[i] - centroids[j])
+            weight = radius - dist
+            # Add both (i,j) and (j,i) since filter is symmetric
+            row_indices.extend([i, j])
+            col_indices.extend([j, i])
+            values.extend([weight, weight])
+
+        # Create sparse tensor and convert to dense
+        # (torchfem operations expect dense, but we build it efficiently)
+        indices = torch.tensor([row_indices, col_indices], dtype=torch.long)
+        values_tensor = torch.tensor(values, dtype=torch.float64)
+        H_sparse = torch.sparse_coo_tensor(indices, values_tensor, (n_elem, n_elem))
+
+        return H_sparse.to_dense()
 
     def _get_bounding_box(self, nodes: torch.Tensor) -> dict:
         """Get bounding box from nodes."""

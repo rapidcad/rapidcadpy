@@ -443,7 +443,7 @@ class OptimizationResult:
         Display optimization results interactively.
 
         Args:
-            display: What to display - 'density', 'binary', 'convergence'
+            display: What to display - 'density', 'binary', 'convergence', 'solid'
             threshold: Minimum density to display (for 'density' and 'binary' modes)
             interactive: Use interactive viewer. Default: True
             window_size: Window dimensions (width, height)
@@ -454,6 +454,8 @@ class OptimizationResult:
         """
         if display == "convergence":
             return self._show_convergence()
+        elif display == "solid":
+            return self._show_solid(threshold=threshold)
         else:
             return self._show_density(
                 display, threshold, interactive, window_size, show_colorbar
@@ -630,6 +632,142 @@ class OptimizationResult:
             The plot object from torch-fem
         """
         return self.plot(iteration=iteration, **kwargs)
+
+    def _show_solid(
+        self,
+        threshold: float = 0.5,
+        cmap: str = "viridis",
+        show_edges: bool = False,
+        opacity: float = 1.0,
+        window_size: Tuple[int, int] = (1200, 800),
+        interactive: bool = True,
+        background: str = "white",
+    ):
+        """
+        Display only the solid (dense) material above a threshold.
+
+        This creates a clean visualization showing only elements with density
+        above the threshold, useful for visualizing the final optimized shape.
+
+        Args:
+            threshold: Minimum density to display (default: 0.5)
+            cmap: Colormap for density values (default: "viridis")
+            show_edges: Show mesh edges (default: False)
+            opacity: Mesh opacity 0-1 (default: 1.0)
+            window_size: Window dimensions (width, height)
+            interactive: Use interactive viewer (default: True)
+            background: Background color (default: "white")
+
+        Returns:
+            PyVista plotter object
+
+        Example:
+            >>> result.show_solid(threshold=0.3)  # Show elements > 30% density
+            >>> result.show_solid(threshold=0.7, cmap="gray_r")  # High density only
+        """
+        try:
+            import pyvista as pv
+        except ImportError:
+            raise ImportError(
+                "PyVista is required for visualization. "
+                "Install with: pip install pyvista"
+            )
+
+        # Convert to numpy
+        nodes_np = self.nodes.detach().cpu().numpy()
+        elements_np = self.elements.detach().cpu().numpy()
+        density_np = self.final_density.detach().cpu().numpy()
+
+        # Filter elements by threshold
+        mask = density_np >= threshold
+        solid_elements = elements_np[mask]
+        solid_density = density_np[mask]
+
+        if len(solid_elements) == 0:
+            print(f"⚠ No elements with density >= {threshold}")
+            return None
+
+        print(f"Showing {len(solid_elements)} elements with density >= {threshold}")
+        print(f"  ({100 * len(solid_elements) / len(elements_np):.1f}% of total)")
+
+        # Create unstructured grid for solid elements only
+        n_cells = len(solid_elements)
+        cell_types = np.full(n_cells, pv.CellType.TETRA, dtype=np.uint8)
+        cells = np.hstack(
+            [np.full((n_cells, 1), 4, dtype=np.int64), solid_elements]
+        ).ravel()
+
+        mesh = pv.UnstructuredGrid(cells, cell_types, nodes_np)
+        mesh.cell_data["density"] = solid_density
+
+        # Create plotter
+        plotter = pv.Plotter(window_size=window_size, off_screen=not interactive)
+        plotter.set_background(background)
+
+        plotter.add_mesh(
+            mesh,
+            scalars="density",
+            cmap=cmap,
+            clim=[threshold, 1.0],
+            show_edges=show_edges,
+            opacity=opacity,
+            scalar_bar_args={
+                "title": "Density",
+                "vertical": True,
+                "position_x": 0.85,
+            },
+        )
+
+        plotter.add_axes()
+        plotter.camera_position = "iso"
+
+        if interactive:
+            plotter.show()
+
+        self._plotter = plotter
+        return plotter
+
+    def export_mesh(
+        self,
+        filename: str,
+        threshold: float = 0.0,
+    ):
+        """
+        Export the optimization result mesh to VTU format.
+
+        This uses torchfem's export_mesh function to create a VTU file
+        that can be opened in ParaView or other visualization tools.
+
+        Args:
+            filename: Output file path (should end in .vtu)
+            threshold: Only export elements with density > threshold (default: 0.0, all)
+
+        Example:
+            >>> result.export_mesh("topology_result.vtu")
+            >>> result.export_mesh("solid_only.vtu", threshold=0.5)
+        """
+        from torchfem.io import export_mesh
+
+        if self.model is None:
+            raise ValueError(
+                "No FEA model available for export. "
+                "The model must be stored during optimization."
+            )
+
+        density = self.final_density
+
+        # Apply threshold if specified
+        if threshold > 0:
+            # Create a copy with zeroed-out low-density elements
+            density = density.clone()
+            density[density < threshold] = 0.0
+
+        export_mesh(
+            self.model,
+            filename,
+            elem_data={"density": density},
+        )
+        print(f"Mesh exported to {filename}")
 
     def plot_animation(
         self,

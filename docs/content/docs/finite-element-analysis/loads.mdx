@@ -1,0 +1,83 @@
+---
+title: Loads
+description: Define supports for Finite Element Analysis (FEA) simulations in RapidCAD-Py.
+---
+
+Loads apply forces to the model:
+
+#### DistributedLoad
+
+Force distributed evenly over a surface:
+
+<PythonFunction
+  name="DistributedLoad"
+  signature="DistributedLoad"
+  description="Apply a distributed load to a surface or volume."
+  params={{
+    location: { type: 'Union[str, Tuple[float, float, float]]', description: 'Surface identifier (`top`, `bottom`, `x_min`, `x_max`, etc.)' },
+    force: { type: 'Union[float, Tuple[float, float, float]]', description: 'Magnitude of the load (scalar or vector)' },
+    direction: { type: 'Optional[str]', description: 'Direction of the load ("x", "y", "z") if force is scalar', default: 'None' }
+  }}
+  returns="None"
+  returnType="None"
+/>
+
+#### PointLoad
+
+Concentrated force at a specific location:
+
+```python
+from rapidcadpy.fea import PointLoad
+
+# Scalar force
+PointLoad(
+    point=(5, 50, 10),
+    force=-500.0,
+    direction='z'
+)
+
+# Vector force
+PointLoad(
+    point=(5, 50, 10),
+    force=(0, 0, -500)  # (Fx, Fy, Fz)
+)
+```
+
+<PythonFunction
+  name="PointLoad"
+  signature="PointLoad"
+  description="Apply a concentrated load at a specific point."
+  params={{
+    point: { type: 'Tuple[float, float, float]', description: 'Coordinates of the point where the load is applied' },
+    force: { type: 'Union[float, Tuple[float, float, float]]', description: 'Magnitude of the load (scalar or vector)' },
+    direction: { type: 'Optional[str]', description: 'Direction of the load ("x", "y", "z") if force is scalar', default: 'None' },
+    tolerance: { type: 'float', description: 'Tolerance for locating the point (mm)', default: 0.1 }
+  }}
+  returns="None"
+  returnType="None"
+  />
+
+#### PressureLoad
+
+Pressure applied to a surface:
+
+```python
+from rapidcadpy.fea import PressureLoad
+
+PressureLoad(
+    location='top',
+    pressure=-10.0  # MPa (negative for compression)
+)
+```
+
+### Location Identifiers
+
+Boundary conditions support these location identifiers:
+
+- `'x_min'` / `'end_1'` - Surface at minimum X
+- `'x_max'` / `'end_2'` - Surface at maximum X
+- `'y_min'` - Surface at minimum Y
+- `'y_max'` - Surface at maximum Y
+- `'z_min'` / `'bottom'` - Surface at minimum Z
+- `'z_max'` / `'top'` - Surface at maximum Z
+- `(x, y, z)` - Specific point coordinates

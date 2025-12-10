@@ -1,5 +1,5 @@
 ---
-title: Finite Element Analysis (FEA)
+title: FEA Example
 description: Perform structural analysis on your CAD models with integrated FEA
 ---
 
@@ -149,6 +149,8 @@ analyzer.add_constraint(FixedConstraint("x_min")) \
         .add_load(PointLoad(point=(5, 50, 10), force=(0, 0, -500)))
 ```
 
+
+
 ### Preview Boundary Conditions
 
 Visualize constraints and loads before solving:
@@ -223,140 +225,6 @@ mat = Material.ALUMINUM_6061
 print(f"E = {mat.E} MPa")
 print(f"Density = {mat.density} g/cm³")
 ```
-
-## Constraints and Loads
-
-In RapidCAD-Py FEA, boundary conditions are separated into two categories:
-- **Constraints** - Define supports that prevent movement (added via `analyzer.add_constraint()`)
-- **Loads** - Define forces applied to the model (added via `analyzer.add_load()`)
-
-This separation with the fluent API makes your analysis setup clearer and more maintainable.
-
-### Constraints (Supports)
-
-Constraints prevent movement in specified directions:
-
-#### FixedConstraint
-
-Prevents all movement (translations and rotations):
-
-```python
-from rapidcadpy.fea import FixedConstraint
-
-# Fix entire surface
-FixedConstraint(location='x_min')       # Fix surface at x minimum
-FixedConstraint(location='y_max')       # Fix surface at y maximum
-FixedConstraint(location='bottom')      # Fix bottom surface (z_min)
-
-# Fix specific point
-FixedConstraint(location=(10, 50, 0))   # Fix point at coordinates
-
-# Partial constraint (specific DOFs)
-FixedConstraint(
-    location='x_min',
-    dofs=(True, True, False)  # Fix X and Y, allow Z movement
-)
-```
-
-#### PinnedConstraint
-
-Prevents translation but allows rotation:
-
-```python
-from rapidcadpy.fea import PinnedConstraint
-
-PinnedConstraint(location='x_min')
-```
-
-#### RollerConstraint
-
-Restricts movement in one direction only:
-
-```python
-from rapidcadpy.fea import RollerConstraint
-
-RollerConstraint(
-    location='bottom',
-    direction='z'  # Only prevent Z movement
-)
-```
-
-### Loads (Forces)
-
-Loads apply forces to the model:
-
-#### DistributedLoad
-
-Force distributed evenly over a surface:
-
-```python
-from rapidcadpy.fea import DistributedLoad
-
-# Scalar force (auto-determines direction from surface)
-DistributedLoad(
-    location='top',
-    force=-1000.0  # Negative = downward for top surface
-)
-
-# With explicit direction
-DistributedLoad(
-    location='top',
-    force=-1000.0,
-    direction='z'  # Force in Z direction
-)
-
-# Vector force
-DistributedLoad(
-    location='x_max',
-    force=(100, 0, -500)  # (Fx, Fy, Fz) in Newtons
-)
-```
-
-#### PointLoad
-
-Concentrated force at a specific location:
-
-```python
-from rapidcadpy.fea import PointLoad
-
-# Scalar force
-PointLoad(
-    point=(5, 50, 10),
-    force=-500.0,
-    direction='z'
-)
-
-# Vector force
-PointLoad(
-    point=(5, 50, 10),
-    force=(0, 0, -500)  # (Fx, Fy, Fz)
-)
-```
-
-#### PressureLoad
-
-Pressure applied to a surface:
-
-```python
-from rapidcadpy.fea import PressureLoad
-
-PressureLoad(
-    location='top',
-    pressure=-10.0  # MPa (negative for compression)
-)
-```
-
-### Location Identifiers
-
-Boundary conditions support these location identifiers:
-
-- `'x_min'` / `'end_1'` - Surface at minimum X
-- `'x_max'` / `'end_2'` - Surface at maximum X
-- `'y_min'` - Surface at minimum Y
-- `'y_max'` - Surface at maximum Y
-- `'z_min'` / `'bottom'` - Surface at minimum Z
-- `'z_max'` / `'top'` - Surface at maximum Z
-- `(x, y, z)` - Specific point coordinates
 
 ## Results Analysis
 
@@ -451,47 +319,6 @@ Safety Analysis:
   Status: SAFE
 ================================================================================
 ```
-
-## Visualization
-
-### Interactive Visualization
-
-```python
-# Display modes
-results.show(display='stress')          # Von Mises stress
-results.show(display='displacement')    # Deformation (scaled)
-results.show(display='both')            # Side-by-side (default)
-results.show(display='conditions')      # Boundary conditions
-
-# Customize
-results.show(
-    display='displacement',
-    displacement_scale=10.0,   # Exaggerate deformation
-    window_size=(1920, 1080)   # Custom window size
-)
-```
-
-![FEA Results - Stress and Displacement](display_both_example.png)
-
-### Boundary Condition Visualization
-
-Visualize constraints and loads before solving using the analyzer's `show()` method:
-
-```python
-# After setting up boundary conditions
-analyzer.add_constraint(FixedConstraint("x_min"))
-analyzer.add_load(DistributedLoad("top", force=-1000.0))
-
-# Preview the setup
-analyzer.show()
-```
-
-Shows:
-- 🔴 **Red spheres** - Fixed/constrained nodes
-- 🟢 **Green spheres** - Loaded nodes
-- ➡️ **Green arrows** - Force direction and magnitude
-
-![Boundary Conditions Visualization](plot_boundary_conditions.png)
 
 ### Export Results
 

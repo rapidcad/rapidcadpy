@@ -3,7 +3,7 @@
   "pages": [
     "index",
     "get-started",
-    "analysis",
+    "finite-element-analysis",
     "advanced"
   ]
 }
