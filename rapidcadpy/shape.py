@@ -3,6 +3,7 @@ from ast import Load
 from typing import TYPE_CHECKING, List, Optional, Union
 
 from rapidcadpy.fea.boundary_conditions import BoundaryCondition
+from rapidcadpy.fea.kernels.base import FEAAnalyzer
 from rapidcadpy.fea.materials import Material, MaterialProperties
 from rapidcadpy.fea.results import FEAResults
 
@@ -14,7 +15,7 @@ class Shape(ABC):
     def __init__(self, obj, app: Optional["App"]) -> None:
         self.obj = obj
         self.app = app
-        self.material: Optional[Union[Material, str]] = None
+        self.material: Optional[Union[MaterialProperties, str]] = Material.STEEL
         if app is not None:
             app.register_shape(self)
 
@@ -43,29 +44,6 @@ class Shape(ABC):
 
     @abstractmethod
     def union(self, other: "Shape") -> "Shape":
-        pass
-
-    @abstractmethod
-    def get_fea_analyzer(
-        self,
-        material: "MaterialProperties",
-        mesh_size: float = 2.0,
-        element_type: str = "tet4",
-    ) -> Optional["FEAAnalyzer"]:
-        """
-        Get an FEA analyzer for this shape.
-
-        Concrete implementations create an FEAAnalyzer with
-        an appropriate FEAKernel (e.g., TorchFEMKernel).
-
-        Args:
-            material: Material properties
-            mesh_size: Target mesh element size
-            element_type: Element type
-
-        Returns:
-            FEAAnalyzer instance, or None if FEA not available
-        """
         pass
 
     def analyze(
@@ -120,7 +98,7 @@ class Shape(ABC):
             resolved_material = material
 
         # Get analyzer from concrete implementation
-        analyzer = self.get_fea_analyzer(resolved_material, mesh_size, element_type)
+        analyzer = FEAAnalyzer(shape=self, material=resolved_material, kernel="torch-fem")
 
         if analyzer is None:
             raise NotImplementedError(
@@ -137,3 +115,7 @@ class Shape(ABC):
 
         # Solve
         return analyzer.solve(verbose=verbose)
+
+    @abstractmethod
+    def volume(self) -> float:
+        ...

@@ -42,6 +42,14 @@ class App:
         """Get all shapes registered with this app."""
         return self._shapes.copy()
 
+    def volume(self) -> float:
+        """Get the total volume of all shapes registered with this app."""
+        total_volume = 0.0
+        for shape in self._shapes:
+            if hasattr(shape.obj, "volume"):
+                total_volume += shape.obj.volume()
+        return total_volume
+
     def workplane_count(self) -> int:
         """Get the number of workplanes registered with this app."""
         return len(self._workplanes)

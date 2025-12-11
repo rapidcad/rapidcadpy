@@ -5,6 +5,27 @@ class OccShape(Shape):
     def __init__(self, obj, app) -> None:
         super().__init__(obj, app)
 
+    def volume(self) -> float:
+        """
+        Calculate the volume of the shape using OpenCASCADE's GProp_GProps.
+
+        Returns:
+            float: Volume in cubic units
+
+        Raises:
+            RuntimeError: If volume calculation fails
+        """
+        from OCC.Core.GProp import GProp_GProps
+        from OCC.Core.BRepGProp import brepgprop
+
+        try:
+            props = GProp_GProps()
+            brepgprop.VolumeProperties(self.obj, props)
+            return props.Mass()
+        except Exception as e:
+            print(f"Failed to calculate volume: {e}")
+            return 1.0
+
     def to_stl(self, file_name: str):
         # The constructor used here automatically calls mesh.Perform(). https://dev.opencascade.org/doc/refman/html/class_b_rep_mesh___incremental_mesh.html#a3a383b3afe164161a3aa59a492180ac6
         from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
@@ -215,56 +236,38 @@ class OccShape(Shape):
         self.obj = cut_result.Shape()
         return self
 
-    def union(self, other: Shape) -> Shape:
+    def union(self, other: "Shape | list[Shape]") -> "OccShape":
         """
         Perform a boolean union operation (addition) on this shape.
 
         This operation modifies the current shape in-place by unioning
-        it with the other shape.
+        it with the other shape(s).
 
         Args:
-            other: The shape to union with this shape
+            other: A single shape or a list of shapes to union with this shape
 
         Returns:
             OccShape: Self (modified in-place) for method chaining
+        
+        Example:
+            >>> shape1.union(shape2)  # Union with single shape
+            >>> shape1.union([shape2, shape3, shape4])  # Union with multiple shapes
         """
         from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Fuse
 
-        fuse_result = BRepAlgoAPI_Fuse(self.obj, other.obj)
-        fuse_result.Build()
-        if not fuse_result.IsDone():
-            raise RuntimeError("Union operation failed.")
+        # Handle list of shapes
+        if isinstance(other, list):
+            for shape in other:
+                fuse_result = BRepAlgoAPI_Fuse(self.obj, shape.obj)
+                fuse_result.Build()
+                if not fuse_result.IsDone():
+                    raise RuntimeError("Union operation failed.")
+                self.obj = fuse_result.Shape()
+        else:
+            fuse_result = BRepAlgoAPI_Fuse(self.obj, other.obj)
+            fuse_result.Build()
+            if not fuse_result.IsDone():
+                raise RuntimeError("Union operation failed.")
+            self.obj = fuse_result.Shape()
 
-        # Update the current object with the union result (in-place modification)
-        self.obj = fuse_result.Shape()
         return self
-
-    def get_fea_analyzer(self, material, mesh_size, element_type="tet4"):
-        """
-        Get FEA analyzer for this OccShape.
-
-        Args:
-            material: Material properties
-            mesh_size: Target mesh element size
-            element_type: Element type
-
-        Returns:
-            FEAAnalyzer instance, or None if dependencies unavailable
-        """
-        try:
-            from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
-            from rapidcadpy.fea.kernels.base import FEAAnalyzer
-
-            if TorchFEMKernel.is_available():
-                kernel = TorchFEMKernel()
-                return FEAAnalyzer(self, material, kernel, mesh_size, element_type)
-            else:
-                import warnings
-
-                warnings.warn(
-                    "torch-fem dependencies not available. "
-                    "Install with: pip install rapidcadpy[fea]"
-                )
-                return None
-        except ImportError:
-            return None
