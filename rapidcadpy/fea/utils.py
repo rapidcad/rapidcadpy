@@ -150,13 +150,27 @@ def get_geometry_properties(
         try:
             from OCC.Core.STEPControl import STEPControl_Reader
             from OCC.Core.GProp import GProp_GProps
-            from OCC.Core.BRepGProp import brepgprop_VolumeProperties
+            from OCC.Core.BRepGProp import brepgprop
             from OCC.Core.IFSelect import IFSelect_RetDone
+            from OCC.Core.ShapeFix import ShapeFix_Shape
+            from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
 
             def volume_props_func(shape, props):
-                brepgprop_VolumeProperties(shape, props)
+                try:
+                    brepgprop.VolumeProperties(shape, props)
+                except RuntimeError:
+                    # Fallback to triangulation if exact calculation fails
+                    try:
+                        # Ensure mesh exists for triangulation
+                        BRepMesh_IncrementalMesh(shape, 0.1)
+                        brepgprop.VolumeProperties(shape, props)
+                    except RuntimeError:
+                        # All methods failed - this shape has geometry issues
+                        # Re-raise so outer handler can catch it
+                        raise
 
-        except Exception:
+        except Exception as e:
+            print(f"Error calculating geometry properties: {e}")
             # If neither OCP nor OCC is available, return placeholder values
             return {"volume_mm3": -1.0, "mass_kg": -1.0, "density_g_cm3": density}
 
@@ -172,8 +186,12 @@ def get_geometry_properties(
 
     # Calculate volume
     props = GProp_GProps()
-    volume_props_func(shape, props)
-    volume_mm3 = props.Mass()  # Expected in mm³
+    try:
+        volume_props_func(shape, props)
+        volume_mm3 = props.Mass()  # Expected in mm³
+    except RuntimeError as e:
+        print(f"Warning: Failed to calculate volume properties: {e}")
+        volume_mm3 = -1.0
 
     # Calculate mass: density (g/cm³) * volume (mm³) * (1 cm³ / 1000 mm³) * (1 kg / 1000 g)
     mass_kg = density * volume_mm3 / 1e6

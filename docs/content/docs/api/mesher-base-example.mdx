@@ -1,0 +1,207 @@
+---
+title: Mesher Base Class
+description: Abstract base class for FEA mesh generators
+---
+
+import { PythonClass } from '@/components/python-class';
+import { PythonFunction } from '@/components/python-function';
+
+# MesherBase
+
+The `MesherBase` class provides an abstract interface for FEA mesh generators. All mesher implementations (Netgen, GMSH, etc.) inherit from this class, enabling drop-in replacement of different meshing backends.
+
+<PythonClass
+  name="MesherBase"
+  description="Abstract base class for FEA mesh generators. Provides a common interface for different meshing backends."
+  bases={['ABC']}
+  attributes={{
+    num_threads: {
+      type: 'int',
+      description: 'Number of threads for parallel meshing',
+      default: 'auto-detected CPU count',
+    },
+  }}
+  source="https://github.com/rapidcad/rapidcadpy/blob/main/rapidcadpy/fea/mesher/base.py"
+>
+  <PythonFunction
+    name="__init__"
+    signature="__init__(num_threads: int = 0)"
+    description="Initialize the mesher with optional thread count specification."
+    params={{
+      num_threads: {
+        type: 'int',
+        description: 'Number of threads for parallel meshing. If 0, auto-detects CPU count.',
+        required: false,
+        default: '0',
+      },
+    }}
+  />
+
+  <PythonFunction
+    name="generate_mesh"
+    signature="generate_mesh(filename, mesh_size=1.0, element_type='tet4', dim=3, verbose=True, **kwargs)"
+    description="Generate mesh from geometry file. This is an abstract method that must be implemented by subclasses."
+    params={{
+      filename: {
+        type: 'str',
+        description: 'Path to geometry file (.step, .stp, .stl, etc.)',
+        required: true,
+      },
+      mesh_size: {
+        type: 'float',
+        description: 'Maximum element size',
+        required: false,
+        default: '1.0',
+      },
+      element_type: {
+        type: 'str',
+        description: 'Type of elements to generate',
+        required: false,
+        default: "'tet4'",
+      },
+      dim: {
+        type: 'int',
+        description: 'Spatial dimension (2 or 3)',
+        required: false,
+        default: '3',
+      },
+      verbose: {
+        type: 'bool',
+        description: 'Print meshing progress',
+        required: false,
+        default: 'True',
+      },
+    }}
+    returns="Tuple of (nodes, elements) as PyTorch tensors"
+    returnType="Tuple[torch.Tensor, torch.Tensor]"
+  />
+
+  <PythonFunction
+    name="get_supported_element_types"
+    signature="get_supported_element_types()"
+    description="Get list of element types supported by this mesher."
+    params={{}}
+    returns="List of supported element type strings"
+    returnType="list[str]"
+  />
+
+  <PythonFunction
+    name="get_supported_formats"
+    signature="get_supported_formats()"
+    description="Get list of geometry file formats supported by this mesher."
+    params={{}}
+    returns="List of supported file extensions"
+    returnType="list[str]"
+  />
+
+  <PythonFunction
+    name="is_available"
+    signature="is_available()"
+    description="Check if this mesher's dependencies are available. This is a class method."
+    params={{}}
+    returns="True if mesher can be used, False otherwise"
+    returnType="bool"
+  />
+
+  <PythonFunction
+    name="get_name"
+    signature="get_name()"
+    description="Get the name of this mesher. This is a class method."
+    params={{}}
+    returns="Human-readable mesher name"
+    returnType="str"
+  />
+
+  <PythonFunction
+    name="validate_inputs"
+    signature="validate_inputs(filename, element_type, dim)"
+    description="Validate input parameters before meshing. Raises exceptions if inputs are invalid."
+    params={{
+      filename: {
+        type: 'str',
+        description: 'Path to geometry file',
+        required: true,
+      },
+      element_type: {
+        type: 'str',
+        description: 'Element type to generate',
+        required: true,
+      },
+      dim: {
+        type: 'int',
+        description: 'Spatial dimension',
+        required: true,
+      },
+    }}
+    returns="None (raises exceptions on validation failure)"
+    returnType="None"
+  />
+</PythonClass>
+
+## Usage Example
+
+```python
+from rapidcadpy.fea.mesher import NetgenMesher
+
+# Create mesher with 4 threads
+mesher = NetgenMesher(num_threads=4)
+
+# Check availability
+if mesher.is_available():
+    print(f"Using {mesher.get_name()}")
+    print(f"Supported formats: {mesher.get_supported_formats()}")
+    print(f"Supported elements: {mesher.get_supported_element_types()}")
+    
+    # Generate mesh
+    nodes, elements = mesher.generate_mesh(
+        filename="part.step",
+        mesh_size=0.5,
+        element_type="tet4",
+        verbose=True
+    )
+```
+
+## Implementing a Custom Mesher
+
+To create a custom mesher, inherit from `MesherBase` and implement all abstract methods:
+
+```python
+from rapidcadpy.fea.mesher import MesherBase
+import torch
+
+class MyCustomMesher(MesherBase):
+    @classmethod
+    def get_name(cls) -> str:
+        return "MyCustomMesher"
+    
+    @classmethod
+    def is_available(cls) -> bool:
+        # Check if dependencies are installed
+        try:
+            import my_meshing_library
+            return True
+        except ImportError:
+            return False
+    
+    def get_supported_element_types(self) -> list[str]:
+        return ["tet4", "tet10", "hex8"]
+    
+    def get_supported_formats(self) -> list[str]:
+        return [".step", ".stp", ".stl", ".iges"]
+    
+    def generate_mesh(self, filename, mesh_size=1.0, element_type="tet4",
+                     dim=3, verbose=True, **kwargs):
+        # Validate inputs
+        self.validate_inputs(filename, element_type, dim)
+        
+        # Your meshing implementation here
+        # ...
+        
+        # Return PyTorch tensors
+        return nodes_tensor, elements_tensor
+```
+
+## See Also
+
+- [NetgenMesher](/docs/api/meshers/netgen) - Netgen-based mesher implementation
+- [TorchFEMKernel](/docs/api/kernels/torch-fem) - FEA kernel that uses meshers

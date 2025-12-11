@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, Tuple
 import torch
 import numpy as np
-
+import pyvista as pv
 
 @dataclass
 class FEAResults:
@@ -456,6 +456,8 @@ class OptimizationResult:
         """
         if filename:
             interactive = False
+            pv.start_xvfb()        # starts a virtual framebuffer
+            pv.OFF_SCREEN = True
 
         if display == "convergence":
             fig = self._show_convergence()

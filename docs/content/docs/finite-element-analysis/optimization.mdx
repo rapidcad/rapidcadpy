@@ -1,7 +1,15 @@
 ---
 title: Topology Optimization
 ---
-# Example
+
+import { PythonClass } from '@/components/python-class';
+import { PythonFunction } from '@/components/python-function';
+
+# Topology Optimization
+
+Topology optimization automatically finds the optimal material distribution within a design space to maximize stiffness while satisfying volume constraints using the SIMP (Solid Isotropic Material with Penalization) method.
+
+## Quick Start Example
 ```python
 from rapidcadpy.fea import (
         TorchFEMKernel,
@@ -39,3 +47,367 @@ from rapidcadpy.fea import (
 ```
 
 For faster results reduce `filter_radius` and `num_iterations`.
+
+## API Reference
+
+<PythonClass
+  name="TorchFEMKernel"
+  description="PyTorch-based FEA kernel with GPU acceleration support and topology optimization capabilities using the SIMP method."
+  bases={['FEAKernel']}
+  attributes={{
+    device: {
+      type: 'torch.device',
+      description: 'Device used for computations (CPU or CUDA)',
+      readonly: true,
+    },
+    mesher: {
+      type: 'MesherBase',
+      description: 'Mesher instance used for geometry meshing',
+      readonly: true,
+    },
+  }}
+  source="https://github.com/rapidcad/rapidcadpy/blob/main/rapidcadpy/fea/kernels/torch_fem_kernel.py"
+>
+  <PythonFunction
+    name="__init__"
+    signature="__init__(device='auto', mesher=None, num_threads=0)"
+    description="Initialize the torch-fem kernel with optional GPU support and custom mesher."
+    params={{
+      device: {
+        type: 'str',
+        description: "Device to use for computations: 'cpu', 'cuda', or 'auto'. Auto uses CUDA if available, otherwise CPU.",
+        required: false,
+        default: "'auto'",
+      },
+      mesher: {
+        type: 'Optional[MesherBase]',
+        description: 'Mesher instance to use for geometry meshing. If None, uses NetgenMesher by default.',
+        required: false,
+        default: 'None',
+      },
+      num_threads: {
+        type: 'int',
+        description: 'Number of threads for meshing (0 = auto-detect CPU cores). Only used if mesher is None.',
+        required: false,
+        default: '0',
+      },
+    }}
+  />
+
+  <PythonFunction
+    name="solve"
+    signature="solve(shape, material, loads, constraints, mesh_size, element_type, verbose=False)"
+    description="Run standard FEA analysis to compute displacements, stresses, and strains."
+    params={{
+      shape: {
+        type: 'Shape',
+        description: 'CAD shape to analyze',
+        required: true,
+      },
+      material: {
+        type: 'MaterialProperties',
+        description: 'Material properties (e.g., Material.STEEL)',
+        required: true,
+      },
+      loads: {
+        type: 'List[Load]',
+        description: 'List of loads to apply (DistributedLoad, PointLoad, etc.)',
+        required: true,
+      },
+      constraints: {
+        type: 'List[BoundaryCondition]',
+        description: 'List of boundary conditions (FixedConstraint, etc.)',
+        required: true,
+      },
+      mesh_size: {
+        type: 'float',
+        description: 'Target mesh element size in mm',
+        required: true,
+      },
+      element_type: {
+        type: 'str',
+        description: "Element type (currently supports 'tet4')",
+        required: true,
+      },
+      verbose: {
+        type: 'bool',
+        description: 'Print detailed progress information',
+        required: false,
+        default: 'False',
+      },
+    }}
+    returns="FEAResults object containing displacements, stresses, and analysis data"
+    returnType="FEAResults"
+  />
+
+  <PythonFunction
+    name="optimize"
+    signature="optimize(shape, material, loads, constraints, mesh_size, element_type, volume_fraction=0.5, num_iterations=100, penalization=3.0, filter_radius=0.0, move_limit=0.2, rho_min=1e-3, use_autograd=False, verbose=False)"
+    description="Run topology optimization using SIMP (Solid Isotropic Material with Penalization) to find optimal material distribution that maximizes stiffness subject to volume constraints."
+    params={{
+      shape: {
+        type: 'Shape',
+        description: 'Design space (initial CAD shape to optimize)',
+        required: true,
+      },
+      material: {
+        type: 'MaterialProperties',
+        description: 'Material properties for the optimization',
+        required: true,
+      },
+      loads: {
+        type: 'List[Load]',
+        description: 'List of loads to apply',
+        required: true,
+      },
+      constraints: {
+        type: 'List[BoundaryCondition]',
+        description: 'List of boundary conditions',
+        required: true,
+      },
+      mesh_size: {
+        type: 'float',
+        description: 'Target mesh element size in mm. Smaller = finer detail but slower.',
+        required: true,
+      },
+      element_type: {
+        type: 'str',
+        description: "Element type (currently 'tet4' for tetrahedral elements)",
+        required: true,
+      },
+      volume_fraction: {
+        type: 'float',
+        description: 'Target volume fraction (0 < v < 1). Lower values = lighter structures. Common range: 0.3-0.5.',
+        required: false,
+        default: '0.5',
+      },
+      num_iterations: {
+        type: 'int',
+        description: 'Number of optimization iterations. More iterations = better convergence but slower. Typical: 50-200.',
+        required: false,
+        default: '100',
+      },
+      penalization: {
+        type: 'float',
+        description: 'SIMP penalization factor (p). Pushes toward binary (solid/void) solutions. Standard value is 3.0. Higher values (4-5) give crisper boundaries.',
+        required: false,
+        default: '3.0',
+      },
+      filter_radius: {
+        type: 'float',
+        description: 'Sensitivity filter radius to prevent checkerboard patterns. 0 = no filtering (faster but may produce artifacts). Typical: 1.0-2.0 × mesh_size.',
+        required: false,
+        default: '0.0',
+      },
+      move_limit: {
+        type: 'float',
+        description: 'Maximum density change per iteration (0 < move < 1). Smaller values = more stable but slower convergence.',
+        required: false,
+        default: '0.2',
+      },
+      rho_min: {
+        type: 'float',
+        description: 'Minimum density to avoid numerical singularities. Very small value to represent void.',
+        required: false,
+        default: '1e-3',
+      },
+      use_autograd: {
+        type: 'bool',
+        description: 'Use automatic differentiation for sensitivity computation. False uses analytical sensitivities (faster).',
+        required: false,
+        default: 'False',
+      },
+      verbose: {
+        type: 'bool',
+        description: 'Print detailed progress including timing breakdown and iteration statistics',
+        required: false,
+        default: 'False',
+      },
+    }}
+    returns="OptimizationResult object containing density history, compliance history, and final optimized design"
+    returnType="OptimizationResult"
+  />
+
+  <PythonFunction
+    name="get_visualization_data"
+    signature="get_visualization_data(shape, material, loads, constraints, mesh_size, element_type)"
+    description="Prepare mesh and boundary condition data for visualization without solving. Used internally by FEAAnalyzer.show()."
+    params={{
+      shape: {
+        type: 'Shape',
+        description: 'Shape to visualize',
+        required: true,
+      },
+      material: {
+        type: 'MaterialProperties',
+        description: 'Material properties',
+        required: true,
+      },
+      loads: {
+        type: 'List[Load]',
+        description: 'List of loads to visualize',
+        required: true,
+      },
+      constraints: {
+        type: 'List[BoundaryCondition]',
+        description: 'List of constraints to visualize',
+        required: true,
+      },
+      mesh_size: {
+        type: 'float',
+        description: 'Target mesh element size in mm',
+        required: true,
+      },
+      element_type: {
+        type: 'str',
+        description: 'Element type',
+        required: true,
+      },
+    }}
+    returns="Tuple of (pv_mesh, nodes, constraint_mask, force_mask, force_vectors) for visualization"
+    returnType="Tuple[UnstructuredGrid, ndarray, ndarray, ndarray, ndarray]"
+  />
+
+  <PythonFunction
+    name="is_available"
+    signature="is_available()"
+    description="Check if torch-fem dependencies are available. Class method."
+    params={{}}
+    returns="True if torch-fem can be used, False if dependencies are missing"
+    returnType="bool"
+  />
+
+  <PythonFunction
+    name="get_solver_name"
+    signature="get_solver_name()"
+    description="Get the name of this FEA solver backend. Class method."
+    params={{}}
+    returns="'torch-fem'"
+    returnType="str"
+  />
+</PythonClass>
+
+## Understanding the Parameters
+
+### Penalization Factor (p)
+
+The penalization parameter controls how strongly the optimization pushes toward binary (solid/void) solutions:
+
+- **p = 1**: Linear interpolation - produces "gray" intermediate densities (not recommended)
+- **p = 3**: Standard value - good balance between convergence and binary solutions
+- **p = 4-5**: Higher penalization - crisper boundaries but may be harder to optimize
+
+The material stiffness scales as **ρ^p**, where ρ is the element density. With p=3, an element at 50% density (ρ=0.5) has only 12.5% of full stiffness, making intermediate densities inefficient.
+
+### Filter Radius
+
+Controls sensitivity filtering to prevent checkerboard patterns:
+
+- **0**: No filtering - fastest but may produce artifacts
+- **1.0-2.0 × mesh_size**: Recommended range for smooth results
+- Higher values: Smoother results but larger minimum feature size
+
+### Volume Fraction
+
+Target percentage of original volume to retain:
+
+- **0.3-0.4**: Very light structures, suitable for non-critical components
+- **0.5**: Balanced reduction, good starting point
+- **0.6-0.7**: Conservative reduction, maintains more material
+
+## Performance Tips
+
+1. **Start coarse**: Use larger `mesh_size` (1.0-2.0mm) for quick iterations
+2. **GPU acceleration**: Use `device='cuda'` for 10-100× speedup on large models
+3. **Reduce iterations**: Start with `num_iterations=20-50` for quick previews
+4. **Disable filtering**: Set `filter_radius=0` during development for faster iteration
+5. **Multi-threading**: Meshing uses multiple CPU cores automatically
+
+## Example: Custom Settings
+
+```python
+# High-quality optimization with GPU
+result = analyzer.optimize(
+    volume_fraction=0.4,      # Retain 40% of volume
+    num_iterations=100,       # More iterations for convergence
+    penalization=3.0,         # Standard penalization
+    filter_radius=1.5,        # Smooth results, 1.5× mesh size
+    mesh_size=0.5,           # Fine mesh for detail
+    verbose=True             # Show progress
+)
+
+# Fast preview optimization
+result = analyzer.optimize(
+    volume_fraction=0.5,      # 50% volume
+    num_iterations=20,        # Quick iteration
+    penalization=3.0,         
+    filter_radius=0.0,        # No filtering (faster)
+    mesh_size=2.0,           # Coarse mesh
+    verbose=False
+)
+```
+
+## Viewing Results
+
+The `OptimizationResult` object provides several visualization options:
+
+```python
+# Show density distribution with colormap
+result.show(display="density", threshold=0.3)
+
+# Show binary (solid/void) visualization
+result.show(display="binary", threshold=0.5)
+
+# Show only high-density elements as solid
+result.show(display="solid", threshold=0.5)
+
+# View convergence history
+result.show(display="convergence")
+
+# Save to file (headless mode)
+result.show(
+    display="solid",
+    filename="optimized_structure.png",
+    interactive=False,
+    threshold=0.5
+)
+
+# Get summary statistics
+print(result.summary())
+```
+
+## Common Issues and Solutions
+
+### Checkerboard Patterns
+
+If you see alternating solid/void patterns (checkerboard):
+- Increase `filter_radius` to 1.0-2.0 × `mesh_size`
+- Use smaller `mesh_size` for finer resolution
+
+### Gray/Mushy Results
+
+If the result has many intermediate densities:
+- Increase `penalization` to 4.0 or 5.0
+- Increase `num_iterations` for better convergence
+- Adjust `threshold` in visualization to hide low-density elements
+
+### Slow Performance
+
+- Use GPU: `device='cuda'` (requires CUDA-capable GPU)
+- Increase `mesh_size` (coarser mesh)
+- Reduce `num_iterations`
+- Set `filter_radius=0` (no filtering)
+- Reduce `volume_fraction` (fewer elements to optimize)
+
+### Memory Issues
+
+- Increase `mesh_size` (fewer elements)
+- Set `filter_radius=0` (avoids filter matrix)
+- Use CPU instead of GPU if GPU memory is limited
+
+## See Also
+
+- [FEA Analysis](/docs/finite-element-analysis/analysis) - Standard stress analysis
+- [Boundary Conditions](/docs/finite-element-analysis/boundary-conditions) - Applying loads and constraints
+- [Materials](/docs/api/materials) - Material property definitions
+- [MesherBase](/docs/api/mesher-base) - Custom mesher implementations

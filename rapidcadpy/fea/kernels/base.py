@@ -184,6 +184,7 @@ class FEAAnalyzer:
         element_type: str = "tet4",
         loads: Optional[List["Load"]] = None,
         constraints: Optional[List["BoundaryCondition"]] = None,
+        device: str = "auto",
     ):
         """
         Initialize FEA analyzer with dependency injection.
@@ -194,13 +195,14 @@ class FEAAnalyzer:
             kernel: FEAKernel implementation to use for solving
             mesh_size: Target mesh element size (mm)
             element_type: Element type (solver-dependent)
+            device: Device to use ('cpu', 'cuda', or 'auto'). Only for torch-fem kernel.
         """
         self.shape = shape
         self.material = material
         if kernel=="torch-fem":
             from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
 
-            self.kernel = TorchFEMKernel()
+            self.kernel = TorchFEMKernel(device=device)
         self.mesh_size = mesh_size
         self.element_type = element_type
         if loads is not None:
@@ -315,7 +317,12 @@ class FEAAnalyzer:
         """
         return self.kernel.get_solver_name()
 
-    def plot(self) -> None:
+    def show(
+        self,
+        interactive: bool = True,
+        window_size: Tuple[int, int] = (1400, 700),
+        filename: Optional[str] = None,
+    ) -> None:
         """
         Visualize constraints, loads, and mesh of the analyzed shape.
 
@@ -324,8 +331,21 @@ class FEAAnalyzer:
         - Fixed/constrained nodes (red spheres)
         - Loaded nodes (green spheres with force arrows)
 
+        Args:
+            interactive: Use interactive viewer. If False or filename is set, 
+                        uses off-screen rendering. Default: True
+            window_size: Window dimensions (width, height). Default: (1400, 700)
+            filename: Optional path to save the plot. If set, saves to file 
+                     instead of showing interactively.
+
         Note: This method requires the kernel to support visualization data extraction.
         """
+        # Configure for headless/non-interactive mode if needed
+        if filename:
+            interactive = False
+            pv.start_xvfb()  # Start virtual framebuffer for headless environments
+            pv.OFF_SCREEN = True
+        
         # Get visualization data from kernel
         pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
             self.kernel.get_visualization_data(
@@ -339,7 +359,7 @@ class FEAAnalyzer:
         )
 
         # Visualize boundary conditions
-        plotter = pv.Plotter(window_size=[1400, 700])
+        plotter = pv.Plotter(window_size=list(window_size), off_screen=not interactive)
 
         # Add the main mesh (semi-transparent)
         plotter.add_mesh(
@@ -409,5 +429,15 @@ class FEAAnalyzer:
         plotter.add_axes()
         plotter.camera_position = "iso"
 
-        # Show
-        plotter.show(jupyter_backend="static")
+        # Show or save
+        if filename:
+            # Save to file
+            plotter.screenshot(filename)
+            print(f"✓ Saved boundary condition visualization to: {filename}")
+            plotter.close()
+        else:
+            # Show interactively
+            if interactive:
+                plotter.show()
+            else:
+                plotter.show(jupyter_backend="static")
