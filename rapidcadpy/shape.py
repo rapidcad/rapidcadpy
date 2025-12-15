@@ -53,7 +53,6 @@ class Shape(ABC):
         constraints: Optional[List["BoundaryCondition"]] = None,
         mesh_size: float = 2.0,
         element_type: str = "tet4",
-        verbose: bool = False,
     ) -> "FEAResults":
         """
         Perform Finite Element Analysis on this shape.
@@ -98,7 +97,9 @@ class Shape(ABC):
             resolved_material = material
 
         # Get analyzer from concrete implementation
-        analyzer = FEAAnalyzer(shape=self, material=resolved_material, kernel="torch-fem")
+        analyzer = FEAAnalyzer(
+            shape=self, material=resolved_material, kernel="torch-fem"
+        )
 
         if analyzer is None:
             raise NotImplementedError(
@@ -114,8 +115,7 @@ class Shape(ABC):
             analyzer.add_constraint(constraint)
 
         # Solve
-        return analyzer.solve(verbose=verbose)
+        return analyzer.solve()
 
     @abstractmethod
-    def volume(self) -> float:
-        ...
+    def volume(self) -> float: ...

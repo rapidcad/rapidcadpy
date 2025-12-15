@@ -1,9 +1,13 @@
 import tempfile
-from typing import TYPE_CHECKING, List, Optional, Type
+from typing import TYPE_CHECKING, List, Optional, Type, Union
+
+from rapidcadpy.fea.results import FEAResults
 
 if TYPE_CHECKING:
     pass
 
+from rapidcadpy.fea.boundary_conditions import BoundaryCondition, Load
+from rapidcadpy.fea.materials import MaterialProperties
 from rapidcadpy.shape import Shape
 from rapidcadpy.workplane import Workplane
 
@@ -125,6 +129,40 @@ class App:
         for idx, shape in enumerate(shapes):
             color = shape_colors[idx % len(shape_colors)]
 
+            # If this is a wire/edge-only shape, STL export will be invalid and PyVista
+            # will fail with "Empty meshes cannot be plotted". Render as a polyline.
+            obj_type = type(getattr(shape, "obj", None)).__name__
+            if obj_type in {"TopoDS_Wire", "TopoDS_Edge"}:
+                try:
+                    import numpy as np
+                    from OCC.Core.BRepAdaptor import BRepAdaptor_CompCurve
+                    from OCC.Core.GCPnts import GCPnts_UniformAbscissa
+
+                    curve = BRepAdaptor_CompCurve(shape.obj)
+                    absc = GCPnts_UniformAbscissa(curve, 2.0)  # ~2 unit spacing
+                    if not absc.IsDone() or absc.NbPoints() < 2:
+                        raise ValueError("Wire sampling produced too few points")
+
+                    pts = []
+                    for i in range(1, absc.NbPoints() + 1):
+                        u = absc.Parameter(i)
+                        p = curve.Value(u)
+                        pts.append([p.X(), p.Y(), p.Z()])
+
+                    pts_arr = np.array(pts)
+                    polyline = pv.lines_from_points(pts_arr)
+                    plotter.add_mesh(
+                        polyline,
+                        color=color,
+                        line_width=5,
+                        label=f"Shape {idx + 1}",
+                        render_lines_as_tubes=True,
+                    )
+                    continue
+                except Exception:
+                    # Fall back to STL if the object isn't actually a valid wire.
+                    pass
+
             # Export shape to temporary STL file
             with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
                 tmp_stl = tmp.name
@@ -173,8 +211,10 @@ class App:
         # Configure view
         if show_axes:
             plotter.add_axes()
-
-        plotter.add_legend()
+        try:
+            plotter.add_legend()
+        except Exception as e:
+            print(f"Error adding legend: {e}")
 
         # Set camera position based on camera_angle parameter
         if camera_angle.lower() == "iso":
@@ -295,3 +335,19 @@ class App:
                     label=label,
                     render_lines_as_tubes=True,
                 )
+
+    def fea(
+        self,
+        material: Union["MaterialProperties", str, None] = None,
+        loads: Optional[List["Load"]] = None,
+        constraints: Optional[List["BoundaryCondition"]] = None,
+        mesh_size: float = 2.0,
+        element_type: str = "tet4",
+    ) -> "FEAResults":
+        return self._shapes[0].analyze(
+            material=material,
+            loads=loads,
+            constraints=constraints,
+            mesh_size=mesh_size,
+            element_type=element_type,
+        )

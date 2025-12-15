@@ -248,7 +248,7 @@ class OccShape(Shape):
 
         Returns:
             OccShape: Self (modified in-place) for method chaining
-        
+
         Example:
             >>> shape1.union(shape2)  # Union with single shape
             >>> shape1.union([shape2, shape3, shape4])  # Union with multiple shapes

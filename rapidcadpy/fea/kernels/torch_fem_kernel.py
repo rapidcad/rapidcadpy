@@ -2,6 +2,7 @@
 torch-fem based FEA kernel for OpenCASCADE shapes.
 """
 
+import os
 import numpy as np
 from numpy import ndarray
 from pyvista import UnstructuredGrid
@@ -94,7 +95,6 @@ class TorchFEMKernel(FEAKernel):
         constraints: List,
         mesh_size: float,
         element_type: str,
-        verbose: bool = False,
     ) -> FEAResults:
         """
         Run FEA analysis using torch-fem.
@@ -106,15 +106,10 @@ class TorchFEMKernel(FEAKernel):
             constraints: List of boundary conditions to apply
             mesh_size: Target mesh element size (mm)
             element_type: Element type
-            verbose: Print detailed progress information
 
         Returns:
             FEAResults object containing analysis results
         """
-        if verbose:
-            print("=" * 80)
-            print(f"FINITE ELEMENT ANALYSIS ({self.get_solver_name()})")
-            print("=" * 80)
 
         # Step 1: Export mesh
         with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
@@ -126,7 +121,6 @@ class TorchFEMKernel(FEAKernel):
             mesh_size=mesh_size,
             element_type="tet4",
             dim=3,
-            verbose=verbose,
         )
 
         elements = elements[:, [1, 0, 2, 3]]
@@ -147,7 +141,7 @@ class TorchFEMKernel(FEAKernel):
             ),
         )
 
-        if verbose:
+        if os.getenv("RCADPY_VERBOSE") == "1":
             print(f"✓ FEM model created")
             print(f"  Degrees of freedom: {model.n_dofs}")
             print(f"  Nodes: {model.n_nod}")
@@ -155,14 +149,8 @@ class TorchFEMKernel(FEAKernel):
 
         # Step 3: Apply boundary conditions
         self._apply_boundary_conditions(
-            model, nodes, elements, loads, constraints, verbose=verbose
+            model, nodes, elements, loads, constraints
         )
-
-        # Step 4: Solve
-        if verbose:
-            print(f"\n{'─'*80}")
-            print("Solving FEM system...")
-            print(f"{'─'*80}")
 
         solution = model.solve()
 
@@ -179,7 +167,6 @@ class TorchFEMKernel(FEAKernel):
             mesh_size,
             element_type,
             geo_props,
-            verbose=verbose,
         )
 
         return results
@@ -191,7 +178,6 @@ class TorchFEMKernel(FEAKernel):
         elements: torch.Tensor,
         loads: List,
         constraints: List,
-        verbose: bool = False,
     ) -> None:
         """
         Apply loads and constraints to torch-fem model.
@@ -202,18 +188,13 @@ class TorchFEMKernel(FEAKernel):
             elements: Mesh elements
             loads: List of loads to apply
             constraints: List of boundary conditions to apply
-            verbose: Print progress
         """
-        if verbose:
-            print(f"\n{'─'*80}")
-            print("Applying boundary conditions...")
-            print(f"{'─'*80}")
 
         from rapidcadpy.fea.utils import get_geometry_info
 
         geometry_info = get_geometry_info(nodes)
 
-        if verbose:
+        if os.getenv("RCADPY_VERBOSE") == "1":
             bbox = geometry_info["bounding_box"]
             print(
                 f"  Bounding box: X[{bbox['xmin']:.2f}, {bbox['xmax']:.2f}], "
@@ -229,7 +210,7 @@ class TorchFEMKernel(FEAKernel):
             num_nodes = constraint.apply(model, nodes, elements, geometry_info)
             if num_nodes is not None:
                 total_constrained += num_nodes
-            if verbose:
+            if os.getenv("RCADPY_VERBOSE") == "1":
                 print(
                     f"  ✓ Applied {constraint.__class__.__name__} ({num_nodes} nodes)"
                 )
@@ -239,7 +220,7 @@ class TorchFEMKernel(FEAKernel):
             num_nodes = load.apply(model, nodes, elements, geometry_info)
             if num_nodes is not None:
                 total_loaded += num_nodes
-            if verbose:
+            if os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  ✓ Applied {load.__class__.__name__} ({num_nodes} nodes)")
 
         # Warn if no constraints or loads
@@ -260,7 +241,6 @@ class TorchFEMKernel(FEAKernel):
         mesh_size: float,
         element_type: str,
         geo_props: dict,
-        verbose: bool = False,
     ) -> FEAResults:
         """
         Extract results from torch-fem solution.
@@ -274,7 +254,6 @@ class TorchFEMKernel(FEAKernel):
             mesh_size: Mesh size used
             element_type: Element type used
             geo_props: Geometry properties dict
-            verbose: Print progress
 
         Returns:
             FEAResults object
@@ -322,7 +301,6 @@ class TorchFEMKernel(FEAKernel):
         move_limit: float = 0.2,
         rho_min: float = 1e-3,
         use_autograd: bool = False,
-        verbose: bool = False,
     ) -> "OptimizationResult":
         """
         Run topology optimization using SIMP (Solid Isotropic Material with Penalization).
@@ -344,7 +322,6 @@ class TorchFEMKernel(FEAKernel):
             move_limit: Maximum change in density per iteration, default 0.2
             rho_min: Minimum density to avoid singularity, default 1e-3
             use_autograd: Use automatic differentiation for sensitivities, default False
-            verbose: Print detailed progress information
 
         Returns:
             OptimizationResult object containing optimization history and final design
@@ -352,7 +329,7 @@ class TorchFEMKernel(FEAKernel):
         from scipy.optimize import bisect
         from tqdm import tqdm
 
-        if verbose:
+        if os.getenv("RCADPY_VERBOSE") == "1":
             print("=" * 80)
             print(f"TOPOLOGY OPTIMIZATION ({self.get_solver_name()})")
             print("=" * 80)
@@ -378,7 +355,6 @@ class TorchFEMKernel(FEAKernel):
                 mesh_size=mesh_size,
                 element_type="tet4",
                 dim=3,
-                verbose=verbose,
             )
             mesh_time = time.perf_counter() - t0
 
@@ -402,7 +378,7 @@ class TorchFEMKernel(FEAKernel):
             model.nodes = model.nodes.to(torch.float64)
             model.elements = model.elements[:, [1, 0, 2, 3]]
 
-        if verbose:
+        if os.getenv("RCADPY_VERBOSE") == "1":
             print(f"\n✓ FEM model created")
             print(f"  Elements: {model.n_elem}")
             print(f"  Nodes: {model.n_nod}")
@@ -410,7 +386,7 @@ class TorchFEMKernel(FEAKernel):
 
         # Step 3: Apply boundary conditions
         self._apply_boundary_conditions(
-            model, nodes, elements, loads, constraints, verbose=verbose
+            model, nodes, elements, loads, constraints
         )
 
         # Step 4: Initialize optimization variables
@@ -438,7 +414,7 @@ class TorchFEMKernel(FEAKernel):
         # Build filter matrix if needed
         if filter_radius > 0.0:
             H = self._build_filter_matrix(nodes, elements, filter_radius)
-            if verbose:
+            if os.getenv("RCADPY_VERBOSE") == "1":
                 nnz = H._nnz()
                 total = n_elem * n_elem
                 sparsity = 100 * (1 - nnz / total)
@@ -446,7 +422,7 @@ class TorchFEMKernel(FEAKernel):
         else:
             H = None
 
-        if verbose:
+        if os.getenv("RCADPY_VERBOSE") == "1":
             print(f"\n{'─'*80}")
             print("Starting optimization iterations...")
             print(f"{'─'*80}")
@@ -454,7 +430,7 @@ class TorchFEMKernel(FEAKernel):
         # Step 5: Optimization loop
         iterator = (
             tqdm(range(num_iterations), desc="Optimizing")
-            if verbose
+            if os.getenv("RCADPY_VERBOSE") == "1"
             else range(num_iterations)
         )
 
@@ -524,13 +500,13 @@ class TorchFEMKernel(FEAKernel):
             rho_history.append(rho_new)
             update_time += time.perf_counter() - t0
 
-            if verbose and (k + 1) % 10 == 0:
+            if os.getenv("RCADPY_VERBOSE") == "1" and (k + 1) % 10 == 0:
                 tqdm.write(
                     f"  Iter {k+1}: Compliance = {compliance.item():.4e}, "
                     f"Volume = {rho_new.sum().item()/n_elem:.4f}"
                 )
 
-        if verbose:
+        if os.getenv("RCADPY_VERBOSE") == "1":
             total_time = mesh_time + solve_time + sensitivity_time + update_time
             print(f"\n  Timing breakdown:")
             print(f"    Meshing:     {mesh_time:.2f}s ({100*mesh_time/total_time:.1f}%)")
@@ -565,7 +541,7 @@ class TorchFEMKernel(FEAKernel):
             mass=geo_props["mass_kg"],
         )
 
-        if verbose:
+        if os.getenv("RCADPY_VERBOSE") == "1":
             print(f"\n{'='*80}")
             print("OPTIMIZATION COMPLETE")
             print(f"{'='*80}")
@@ -724,7 +700,7 @@ class TorchFEMKernel(FEAKernel):
 
         # Step 3: Apply boundary conditions
         self._apply_boundary_conditions(
-            model, nodes, elements, loads, constraints, verbose=False
+            model, nodes, elements, loads, constraints
         )
 
         # Step 4: Create PyVista mesh

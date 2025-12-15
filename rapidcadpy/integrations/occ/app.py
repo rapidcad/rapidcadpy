@@ -23,20 +23,9 @@ class OpenCascadeApp(App):
 
         return OccSketch2D
 
-    def fea(
-        self,
-        material: Union["MaterialProperties", str, None] = None,
-        loads: Optional[List["Load"]] = None,
-        constraints: Optional[List["BoundaryCondition"]] = None,
-        mesh_size: float = 2.0,
-        element_type: str = "tet4",
-        verbose: bool = False,
-    ):
-        return self._shapes[0].analyze(
-            material=material,
-            loads=loads,
-            constraints=constraints,
-            mesh_size=mesh_size,
-            element_type=element_type,
-            verbose=verbose,
-        )
+    @property
+    def sketch_3d(self):
+        """Entry point for building 3D path sketches (wires)."""
+        from rapidcadpy.integrations.occ.sketch3d import OccSketch3D
+
+        return OccSketch3D(self)
