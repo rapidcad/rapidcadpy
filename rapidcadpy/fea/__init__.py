@@ -58,10 +58,7 @@ except ImportError as e:
     # Provide stub implementations that raise helpful errors
     class _FEANotAvailable:
         def __init__(self, *args, **kwargs):
-            raise ImportError(
-                "FEA functionality requires additional dependencies. "
-                "Install with: pip install rapidcadpy[fea]"
-            )
+            raise ImportError(f"FEA functionality requires additional dependencies")
 
     Material = _FEANotAvailable
     MaterialProperties = _FEANotAvailable

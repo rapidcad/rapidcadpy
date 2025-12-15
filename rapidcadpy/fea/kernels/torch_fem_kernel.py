@@ -33,14 +33,19 @@ class TorchFEMKernel(FEAKernel):
     converting OCC shapes to STEP files, then meshing with Gmsh/Netgen.
     """
 
-    def __init__(self, device: str = "auto", mesher: Optional[MesherBase] = None, num_threads: int = 0):
+    def __init__(
+        self,
+        device: str = "auto",
+        mesher: Optional[MesherBase] = None,
+        num_threads: int = 0,
+    ):
         """
         Initialize torch-fem kernel.
-        
+
         Args:
             device: Device to use for computations ('cpu', 'cuda', or 'auto').
                     'auto' will use CUDA if available, otherwise CPU.
-            mesher: Mesher instance to use for geometry meshing. 
+            mesher: Mesher instance to use for geometry meshing.
                    If None, uses NetgenMesher by default.
             num_threads: Number of threads for meshing (0 = auto-detect).
                         Only used if mesher is None.
@@ -51,25 +56,25 @@ class TorchFEMKernel(FEAKernel):
                 "Install with: pip install rapidcadpy[fea]"
             )
         torch.set_default_dtype(torch.float64)
-        
+
         # Set mesher
         if mesher is None:
             self.mesher = NetgenMesher(num_threads=num_threads)
         else:
             self.mesher = mesher
-        
+
         # Set device
         if device == "auto":
             self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.device = torch.device(device)
-        
+
         if self.device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA requested but not available")
-        
+
         # Set default device for all tensor operations
         torch.set_default_device(self.device)
-        
+
         print(f"TorchFEMKernel initialized with device: {self.device}")
 
     @classmethod
@@ -148,9 +153,7 @@ class TorchFEMKernel(FEAKernel):
             print(f"  Elements: {model.n_elem}")
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(
-            model, nodes, elements, loads, constraints
-        )
+        self._apply_boundary_conditions(model, nodes, elements, loads, constraints)
 
         solution = model.solve()
 
@@ -340,15 +343,16 @@ class TorchFEMKernel(FEAKernel):
             print(f"  Move limit: {move_limit}")
 
         import time
+
         mesh_time = 0
-        
+
         # Step 1: Create mesh and model
         torch.set_default_dtype(torch.float64)
         if hasattr(shape, "to_step"):  # Check if it's a Shape (duck typing)
             with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
                 step_path = tmp.name
             shape.to_step(step_path)
-            
+
             t0 = time.perf_counter()
             nodes, elements = self.mesher.generate_mesh(
                 step_path,
@@ -362,7 +366,6 @@ class TorchFEMKernel(FEAKernel):
             nodes = nodes.to(torch.float64)
 
             # Step 2: Create FEM model
-            
 
             material_fem = material.to_torchfem()
             model = Solid(
@@ -385,18 +388,22 @@ class TorchFEMKernel(FEAKernel):
             print(f"  DOFs: {model.n_dofs}")
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(
-            model, nodes, elements, loads, constraints
-        )
+        self._apply_boundary_conditions(model, nodes, elements, loads, constraints)
 
         # Step 4: Initialize optimization variables
         n_elem = model.n_elem
         rho_max = torch.ones(n_elem, dtype=torch.float64, device=self.device)
-        rho_min_tensor = torch.full((n_elem,), rho_min, dtype=torch.float64, device=self.device)
+        rho_min_tensor = torch.full(
+            (n_elem,), rho_min, dtype=torch.float64, device=self.device
+        )
 
         # Initial uniform density to satisfy volume constraint
         rho_0 = torch.full(
-            (n_elem,), volume_fraction, dtype=torch.float64, requires_grad=use_autograd, device=self.device
+            (n_elem,),
+            volume_fraction,
+            dtype=torch.float64,
+            requires_grad=use_autograd,
+            device=self.device,
         )
         V_0 = volume_fraction * n_elem  # Target volume
 
@@ -418,7 +425,9 @@ class TorchFEMKernel(FEAKernel):
                 nnz = H._nnz()
                 total = n_elem * n_elem
                 sparsity = 100 * (1 - nnz / total)
-                print(f"  Filter matrix: {n_elem}×{n_elem}, {nnz:,} non-zeros ({sparsity:.2f}% sparse)")
+                print(
+                    f"  Filter matrix: {n_elem}×{n_elem}, {nnz:,} non-zeros ({sparsity:.2f}% sparse)"
+                )
         else:
             H = None
 
@@ -435,6 +444,7 @@ class TorchFEMKernel(FEAKernel):
         )
 
         import time
+
         solve_time = 0
         sensitivity_time = 0
         update_time = 0
@@ -470,13 +480,16 @@ class TorchFEMKernel(FEAKernel):
             # Filter sensitivities (if filter radius provided)
             if H is not None:
                 # Use sparse matrix-vector multiplication
-                numerator = torch.sparse.mm(H, (rho_k * sensitivity).unsqueeze(1)).squeeze(1)
+                numerator = torch.sparse.mm(
+                    H, (rho_k * sensitivity).unsqueeze(1)
+                ).squeeze(1)
                 denominator = torch.sparse.sum(H, dim=1).to_dense() * rho_k
                 sensitivity = numerator / denominator
             sensitivity_time += time.perf_counter() - t0
 
             # Optimality criteria update
             t0 = time.perf_counter()
+
             def make_step(mu):
                 G_k = -sensitivity / mu
                 upper = torch.min(rho_max, (1 + move) * rho_k)
@@ -509,10 +522,18 @@ class TorchFEMKernel(FEAKernel):
         if os.getenv("RCADPY_VERBOSE") == "1":
             total_time = mesh_time + solve_time + sensitivity_time + update_time
             print(f"\n  Timing breakdown:")
-            print(f"    Meshing:     {mesh_time:.2f}s ({100*mesh_time/total_time:.1f}%)")
-            print(f"    Solve:       {solve_time:.2f}s ({100*solve_time/total_time:.1f}%)")
-            print(f"    Sensitivity: {sensitivity_time:.2f}s ({100*sensitivity_time/total_time:.1f}%)")
-            print(f"    Update:      {update_time:.2f}s ({100*update_time/total_time:.1f}%)")
+            print(
+                f"    Meshing:     {mesh_time:.2f}s ({100*mesh_time/total_time:.1f}%)"
+            )
+            print(
+                f"    Solve:       {solve_time:.2f}s ({100*solve_time/total_time:.1f}%)"
+            )
+            print(
+                f"    Sensitivity: {sensitivity_time:.2f}s ({100*sensitivity_time/total_time:.1f}%)"
+            )
+            print(
+                f"    Update:      {update_time:.2f}s ({100*update_time/total_time:.1f}%)"
+            )
 
         # Get geometry properties
         if hasattr(shape, "volume"):  # If shape has volume method, use it
@@ -602,7 +623,7 @@ class TorchFEMKernel(FEAKernel):
         tree = cKDTree(centroids)
 
         # Find all pairs within radius
-        pairs = tree.query_pairs(radius, output_type='ndarray')
+        pairs = tree.query_pairs(radius, output_type="ndarray")
 
         # Build sparse filter matrix
         # Initialize with diagonal (self-weight = radius)
@@ -620,7 +641,9 @@ class TorchFEMKernel(FEAKernel):
             values.extend([weight, weight])
 
         # Create sparse tensor - KEEP IT SPARSE!
-        indices = torch.tensor([row_indices, col_indices], dtype=torch.long, device=self.device)
+        indices = torch.tensor(
+            [row_indices, col_indices], dtype=torch.long, device=self.device
+        )
         values_tensor = torch.tensor(values, dtype=torch.float64, device=self.device)
         H_sparse = torch.sparse_coo_tensor(indices, values_tensor, (n_elem, n_elem))
 
@@ -683,7 +706,6 @@ class TorchFEMKernel(FEAKernel):
             mesh_size=mesh_size,
             element_type="tet4",
             dim=3,
-            verbose=False,
         )
 
         elements = elements[:, [1, 0, 2, 3]]
@@ -699,9 +721,7 @@ class TorchFEMKernel(FEAKernel):
         )
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(
-            model, nodes, elements, loads, constraints
-        )
+        self._apply_boundary_conditions(model, nodes, elements, loads, constraints)
 
         # Step 4: Create PyVista mesh
         nodes_np = nodes.cpu().numpy()

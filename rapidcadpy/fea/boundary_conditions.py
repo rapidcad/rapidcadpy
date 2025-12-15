@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 def visualize_boundary_conditions(
-    model, nodes, elements, window_size=(1400, 700), jupyter_backend=None
+    model, nodes, elements, window_size=(1400, 700), interactive=True
 ):
     """
     Visualize boundary conditions (constraints and loads) on a mesh.
@@ -30,9 +30,10 @@ def visualize_boundary_conditions(
         window_size: Window size as (width, height). Default: (1400, 700)
         jupyter_backend: PyVista backend for Jupyter notebooks ('static', 'panel', etc.)
                         Use None (default) for interactive window, 'static' for Jupyter notebooks
+        filename: If provided, save the visualization to this file path (e.g., 'boundary_conditions.png')
 
     Returns:
-        None (displays the visualization in a new window)
+        str: Path to saved file if filename is provided, otherwise None
 
     Example:
         >>> from rapidcadpy.fea.boundary_conditions import visualize_boundary_conditions
@@ -41,6 +42,9 @@ def visualize_boundary_conditions(
 
         >>> # For Jupyter notebooks
         >>> visualize_boundary_conditions(model, nodes, elements, jupyter_backend='static')
+
+        >>> # Save to file
+        >>> visualize_boundary_conditions(model, nodes, elements, filename='bc_plot.png')
     """
     try:
         import pyvista as pv
@@ -73,8 +77,9 @@ def visualize_boundary_conditions(
 
     pv_mesh = pv.UnstructuredGrid(vtk_cells, celltypes, points)
 
-    # Create plotter
-    plotter = pv.Plotter(window_size=window_size)
+    # Create plotter - use off_screen if saving to file
+    off_screen = not interactive
+    plotter = pv.Plotter(window_size=window_size, off_screen=off_screen)
 
     # Add the main mesh (semi-transparent)
     plotter.add_mesh(
@@ -147,8 +152,7 @@ def visualize_boundary_conditions(
     plotter.add_axes()
     plotter.camera_position = "iso"
 
-    # Show
-    plotter.show(jupyter_backend=jupyter_backend)
+    return plotter
 
 
 class BoundaryCondition(ABC):
@@ -478,6 +482,12 @@ class PointLoad(Load):
         self.force = force
         self.direction = direction
         self.tolerance = tolerance
+
+    def __str__(self):
+        return (
+            f"PointLoad(point={self.point}, force={self.force}, "
+            f"direction={self.direction}, tolerance={self.tolerance})"
+        )
 
     def apply(self, model, nodes, elements, geometry_info):
         """Apply point load to the model"""

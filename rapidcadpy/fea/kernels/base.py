@@ -27,6 +27,12 @@ class FEAKernel(ABC):
     result extraction for a specific solver.
     """
 
+    def __str__(self) -> str:
+        """String representation of the FEA kernel."""
+        solver_name = self.get_solver_name()
+        available = "✓ available" if self.is_available() else "✗ not available"
+        return f"FEAKernel({solver_name}, {available})"
+
     @classmethod
     @abstractmethod
     def is_available(cls) -> bool:
@@ -199,7 +205,7 @@ class FEAAnalyzer:
         """
         self.shape = shape
         self.material = material
-        if kernel=="torch-fem":
+        if kernel == "torch-fem":
             from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
 
             self.kernel = TorchFEMKernel(device=device)
@@ -213,6 +219,22 @@ class FEAAnalyzer:
             self.constraints = constraints
         else:
             self.constraints: List["BoundaryCondition"] = []
+
+    def __str__(self) -> str:
+        """String representation of the FEA analyzer."""
+        solver = self.kernel.get_solver_name()
+        num_loads = len(self.loads)
+        num_constraints = len(self.constraints)
+        return (
+            f"FEAAnalyzer(\n"
+            f"  solver={solver},\n"
+            f"  material={self.material.name},\n"
+            f"  mesh_size={self.mesh_size}mm,\n"
+            f"  element_type={self.element_type},\n"
+            f"  loads={[str(load) for load in self.loads]},\n"
+            f"  constraints={[str(constraint) for constraint in self.constraints]}\n"
+            f")"
+        )
 
     def add_load(self, load: "Load") -> "FEAAnalyzer":
         """
@@ -240,7 +262,7 @@ class FEAAnalyzer:
         self.constraints.append(constraint)
         return self
 
-    def solve(self, verbose: bool = False) -> "FEAResults":
+    def solve(self) -> "FEAResults":
         """
         Run FEA analysis and return results.
 
@@ -259,7 +281,6 @@ class FEAAnalyzer:
             constraints=self.constraints,
             mesh_size=self.mesh_size,
             element_type=self.element_type,
-            verbose=verbose,
         )
 
     def optimize(
@@ -271,7 +292,6 @@ class FEAAnalyzer:
         move_limit: float = 0.2,
         rho_min: float = 1e-3,
         use_autograd: bool = False,
-        verbose: bool = False,
     ) -> "OptimizationResult":
         """
         Run topology optimization using SIMP method.
@@ -305,7 +325,6 @@ class FEAAnalyzer:
             move_limit=move_limit,
             rho_min=rho_min,
             use_autograd=use_autograd,
-            verbose=verbose,
         )
 
     def get_solver_name(self) -> str:
@@ -332,10 +351,10 @@ class FEAAnalyzer:
         - Loaded nodes (green spheres with force arrows)
 
         Args:
-            interactive: Use interactive viewer. If False or filename is set, 
+            interactive: Use interactive viewer. If False or filename is set,
                         uses off-screen rendering. Default: True
             window_size: Window dimensions (width, height). Default: (1400, 700)
-            filename: Optional path to save the plot. If set, saves to file 
+            filename: Optional path to save the plot. If set, saves to file
                      instead of showing interactively.
 
         Note: This method requires the kernel to support visualization data extraction.
@@ -345,7 +364,7 @@ class FEAAnalyzer:
             interactive = False
             pv.start_xvfb()  # Start virtual framebuffer for headless environments
             pv.OFF_SCREEN = True
-        
+
         # Get visualization data from kernel
         pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
             self.kernel.get_visualization_data(

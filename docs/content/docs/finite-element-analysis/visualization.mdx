@@ -3,6 +3,8 @@ title: Visualization
 ---
 ### Interactive Visualization
 
+`results` is a `FEAResults` object returned by the `FEAAnalyzer.solve()` method. It provides an interactive 3D viewer to explore FEA results such as stress and displacement.
+
 ```python
 # Display modes
 results.show(display='stress')          # Von Mises stress
@@ -18,11 +20,11 @@ results.show(
 )
 ```
 
-![FEA Results - Stress and Displacement](display_both_example.png)
+![FEA Results - Stress and Displacement](img/display_both_example.png)
 
 ### Boundary Condition Visualization
 
-Visualize constraints and loads before solving using the analyzer's `show()` method:
+The `FEAAnalyzer` can visualize constraints and loads before solving using the analyzer's `show()` method:
 
 ```python
 # After setting up boundary conditions
@@ -38,4 +40,4 @@ Shows:
 - 🟢 **Green spheres** - Loaded nodes
 - ➡️ **Green arrows** - Force direction and magnitude
 
-![Boundary Conditions Visualization](plot_boundary_conditions.png)
+![Boundary Conditions Visualization](img/plot_boundary_conditions.png)

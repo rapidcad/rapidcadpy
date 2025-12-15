@@ -5,8 +5,6 @@ title: Topology Optimization
 import { PythonClass } from '@/components/python-class';
 import { PythonFunction } from '@/components/python-function';
 
-# Topology Optimization
-
 Topology optimization automatically finds the optimal material distribution within a design space to maximize stiffness while satisfying volume constraints using the SIMP (Solid Isotropic Material with Penalization) method.
 
 ## Quick Start Example
@@ -38,7 +36,6 @@ from rapidcadpy.fea import (
         num_iterations=20,
         penalization=3.0,
         filter_radius=1.0,
-        verbose=True,
     )
 
     # View results
@@ -229,46 +226,6 @@ For faster results reduce `filter_radius` and `num_iterations`.
   />
 
   <PythonFunction
-    name="get_visualization_data"
-    signature="get_visualization_data(shape, material, loads, constraints, mesh_size, element_type)"
-    description="Prepare mesh and boundary condition data for visualization without solving. Used internally by FEAAnalyzer.show()."
-    params={{
-      shape: {
-        type: 'Shape',
-        description: 'Shape to visualize',
-        required: true,
-      },
-      material: {
-        type: 'MaterialProperties',
-        description: 'Material properties',
-        required: true,
-      },
-      loads: {
-        type: 'List[Load]',
-        description: 'List of loads to visualize',
-        required: true,
-      },
-      constraints: {
-        type: 'List[BoundaryCondition]',
-        description: 'List of constraints to visualize',
-        required: true,
-      },
-      mesh_size: {
-        type: 'float',
-        description: 'Target mesh element size in mm',
-        required: true,
-      },
-      element_type: {
-        type: 'str',
-        description: 'Element type',
-        required: true,
-      },
-    }}
-    returns="Tuple of (pv_mesh, nodes, constraint_mask, force_mask, force_vectors) for visualization"
-    returnType="Tuple[UnstructuredGrid, ndarray, ndarray, ndarray, ndarray]"
-  />
-
-  <PythonFunction
     name="is_available"
     signature="is_available()"
     description="Check if torch-fem dependencies are available. Class method."
@@ -333,7 +290,6 @@ result = analyzer.optimize(
     penalization=3.0,         # Standard penalization
     filter_radius=1.5,        # Smooth results, 1.5× mesh size
     mesh_size=0.5,           # Fine mesh for detail
-    verbose=True             # Show progress
 )
 
 # Fast preview optimization
@@ -343,7 +299,6 @@ result = analyzer.optimize(
     penalization=3.0,         
     filter_radius=0.0,        # No filtering (faster)
     mesh_size=2.0,           # Coarse mesh
-    verbose=False
 )
 ```
 

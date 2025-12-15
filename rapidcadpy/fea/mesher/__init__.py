@@ -6,10 +6,9 @@ meshing backends (Netgen, GMSH, etc.).
 """
 
 from .base import MesherBase
-from .netgen_mesher import NetgenMesher, import_geometry_netgen
+from .netgen_mesher import NetgenMesher
 
 __all__ = [
-    'MesherBase',
-    'NetgenMesher',
-    'import_geometry_netgen',  # Backward compatibility
+    "MesherBase",
+    "NetgenMesher",
 ]

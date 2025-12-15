@@ -1,0 +1,51 @@
+---
+title: "Materials"
+---
+
+RapidCAD-Py includes a library of common engineering materials:
+
+| Material | Young's Modulus (GPa) | Density (g/cm³) | Yield Strength (MPa) |
+|----------|----------------------|-----------------|---------------------|
+| `Material.STEEL` | 210 | 7.85 | 250 |
+| `Material.ALUMINUM_6061` | 69 | 2.70 | 276 |
+| `Material.ALUMINUM_7075` | 72 | 2.81 | 503 |
+| `Material.TITANIUM_GRADE_5` | 114 | 4.43 | 880 |
+| `Material.STAINLESS_STEEL_304` | 193 | 8.00 | 215 |
+| `Material.CARBON_FIBER` | 230 | 1.60 | 600 |
+| `Material.BRASS` | 100 | 8.40 | 200 |
+| `Material.COPPER` | 120 | 8.96 | 70 |
+
+# Setting Materials of a Shape
+
+```
+from rapidcadpy.fea.materials import Material
+shape.material = Material.STEEL
+```
+
+# Using Materials in FEA
+
+```python
+from rapidcadpy.fea import Material, FEAAnalyzer, TorchFEMKernel
+
+# Direct usage with analyzer
+kernel = TorchFEMKernel()
+analyzer = FEAAnalyzer(beam, Material.STEEL, kernel)
+
+# Access material properties
+mat = Material.ALUMINUM_6061
+print(f"E = {mat.E} MPa")
+print(f"Density = {mat.density} g/cm³")
+```
+
+# Custom Materials
+To define a custom material, create an instance of `MaterialProperties`:
+
+```python
+from rapidcadpy.fea.materials import MaterialProperties
+custom_material = MaterialProperties(
+    name="CustomAlloy",
+    E=150000.0,          # Young's Modulus in MPa
+    density=5.0,        # Density in g/cm³
+    yield_strength=300.0 # Yield Strength in MPa
+)
+```

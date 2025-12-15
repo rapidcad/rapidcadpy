@@ -27,21 +27,37 @@ Force distributed evenly over a surface:
 Concentrated force at a specific location:
 
 ```python
-from rapidcadpy.fea import PointLoad
+from rapidcadpy.fea import PointLoad, FixedConstraint, FEAAnalyzer
 
-# Scalar force
-PointLoad(
-    point=(5, 50, 10),
-    force=-500.0,
-    direction='z'
+# Cantilever beam dimensions
+LENGTH, WIDTH, HEIGHT = 100.0, 20.0, 5.0
+
+# Create cantilever beam (not centered, starting from origin)
+wp = app.work_plane("XY")
+beam = wp.move_to(0, 0).rect(LENGTH, WIDTH, centered=False).extrude(HEIGHT)
+
+# Point load at the free end (center of tip face)
+load_point = (LENGTH - 1, WIDTH / 2, HEIGHT)
+load = PointLoad(point=load_point, force=-1000.0, direction="z", tolerance=2.0)
+
+# Fixed constraint at the base
+constraint = FixedConstraint(location="x_min", dofs=[True, True, True])
+
+# Run FEA
+fea = FEAAnalyzer(
+    beam,
+    loads=[load],
+    constraints=[constraint],
+    material=Material.STEEL,
+    kernel="torch-fem",
+    mesh_size=5.0
 )
 
-# Vector force
-PointLoad(
-    point=(5, 50, 10),
-    force=(0, 0, -500)  # (Fx, Fy, Fz)
-)
+# Visualize boundary conditions
+fea.show()
 ```
+
+![Point Load Illustration](img/point_load.png)
 
 <PythonFunction
   name="PointLoad"

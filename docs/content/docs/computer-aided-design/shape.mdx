@@ -1,0 +1,160 @@
+---
+title: "Shapes"
+---
+
+# Boolean Operations on Shapes
+You can perform boolean operations such as union and cut on shapes. These operations modify the shape in-place and return self for method chaining.
+
+```python
+# Single shape union
+box1.union(box2)
+
+# Multiple shapes union
+box1.union([box2, box3, box4])
+
+# Cut (subtraction)
+box1.cut(hole)
+
+# Method chaining
+result = box1.union(box2).cut(hole)
+```
+
+# Exporting
+Shapes can be exported to various file formats for use in other applications:
+
+```python
+# Export to STL (mesh format)
+shape.to_stl("output.stl")
+
+# Export to STEP (CAD format)
+shape.to_step("output.step")
+
+# Export to PNG (rendered image)
+shape.to_png("output.png", view="iso")
+```
+
+# Visualization
+Render shapes to PNG images with different camera views:
+
+```python
+# Isometric view (default)
+shape.to_png("iso.png", view="iso")
+
+# Orthographic views
+shape.to_png("front.png", view="front")
+shape.to_png("top.png", view="top")
+shape.to_png("right.png", view="right")
+
+# Custom size
+shape.to_png("large.png", width=1920, height=1080)
+```
+
+# API Reference
+
+<PythonClass
+  name="OccShape"
+  description="Represents a geometric shape backed by OpenCASCADE. Provides boolean operations, export capabilities, and FEA integration."
+  bases={['Shape']}
+  source="https://github.com/rapidcad/rapidcadpy/blob/main/rapidcadpy/integrations/occ/shape.py"
+>
+  <PythonFunction
+    name="union"
+    signature="union(other: Shape | list[Shape]) -> OccShape"
+    description="Perform a boolean union operation (addition) on this shape. Modifies the shape in-place."
+    params={{
+      other: {
+        type: 'Shape | list[Shape]',
+        description: 'A single shape or a list of shapes to union with this shape.',
+        required: true,
+      },
+    }}
+    returns={{
+      type: 'OccShape',
+      description: 'Self (modified in-place) for method chaining.',
+    }}
+  />
+
+  <PythonFunction
+    name="cut"
+    signature="cut(other: OccShape) -> OccShape"
+    description="Perform a boolean cut operation (subtraction) on this shape. Modifies the shape in-place by subtracting the other shape from it."
+    params={{
+      other: {
+        type: 'OccShape',
+        description: 'The shape to subtract from this shape.',
+        required: true,
+      },
+    }}
+    returns={{
+      type: 'OccShape',
+      description: 'Self (modified in-place) for method chaining.',
+    }}
+  />
+
+  <PythonFunction
+    name="to_stl"
+    signature="to_stl(file_name: str) -> bool"
+    description="Export the shape to STL format (triangulated mesh). Uses parallel meshing with default tolerances."
+    params={{
+      file_name: {
+        type: 'str',
+        description: 'Path to save the STL file.',
+        required: true,
+      },
+    }}
+    returns={{
+      type: 'bool',
+      description: 'True if export was successful.',
+    }}
+  />
+
+  <PythonFunction
+    name="to_step"
+    signature="to_step(file_name: str) -> None"
+    description="Export the shape to STEP format (CAD interchange format). Preserves exact geometry."
+    params={{
+      file_name: {
+        type: 'str',
+        description: 'Path to save the STEP file.',
+        required: true,
+      },
+    }}
+  />
+
+  <PythonFunction
+    name="to_png"
+    signature="to_png(file_name: str, view: str = 'iso', width: int = 800, height: int = 600, backend: str = 'auto') -> None"
+    description="Render the shape to a PNG file with 3D shading using off-screen rendering. Works in headless environments."
+    params={{
+      file_name: {
+        type: 'str',
+        description: 'Path to save the PNG file.',
+        required: true,
+      },
+      view: {
+        type: 'str',
+        description: "Camera view: 'iso', 'front', 'top', 'right', or axis aliases 'x', 'y', 'z'.",
+        required: false,
+        default: "'iso'",
+      },
+      width: {
+        type: 'int',
+        description: 'Image width in pixels.',
+        required: false,
+        default: '800',
+      },
+      height: {
+        type: 'int',
+        description: 'Image height in pixels.',
+        required: false,
+        default: '600',
+      },
+      backend: {
+        type: 'str',
+        description: "Rendering backend: 'auto', 'pyvista', or 'vedo'.",
+        required: false,
+        default: "'auto'",
+      },
+    }}
+  />
+</PythonClass>
