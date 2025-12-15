@@ -9,13 +9,17 @@ interface ParamInfo {
   default?: string;
 }
 
+interface ReturnInfo {
+  type: string;
+  description: string;
+}
+
 interface PythonFunctionProps {
   name: string;
   signature: string;
   description: string;
   params: Record<string, ParamInfo>;
-  returns?: string;
-  returnType?: string;
+  returns?: ReturnInfo;
   source?: string;
 }
 
@@ -25,7 +29,6 @@ export function PythonFunction({
   description,
   params,
   returns,
-  returnType,
   source,
 }: PythonFunctionProps) {
   // Convert params to TypeTable format
@@ -72,22 +75,18 @@ export function PythonFunction({
         </div>
       )}
 
-      {(returns || returnType) && (
+      {returns && (
         <div className="mt-4 space-y-1">
-          {returns && (
-            <p className="text-sm">
-              <span className="font-semibold text-fd-foreground">Returns:</span>{' '}
-              <span className="text-fd-muted-foreground">{returns}</span>
-            </p>
-          )}
-          {returnType && (
-            <p className="text-sm">
-              <span className="font-semibold text-fd-foreground">Return type:</span>{' '}
-              <code className="rounded bg-fd-muted px-1.5 py-0.5 font-mono text-sm">
-                {returnType}
-              </code>
-            </p>
-          )}
+          <p className="text-sm">
+            <span className="font-semibold text-fd-foreground">Returns:</span>{' '}
+            <span className="text-fd-muted-foreground">{returns.description}</span>
+          </p>
+          <p className="text-sm">
+            <span className="font-semibold text-fd-foreground">Return type:</span>{' '}
+            <code className="rounded bg-fd-muted px-1.5 py-0.5 font-mono text-sm">
+              {returns.type}
+            </code>
+          </p>
         </div>
       )}
     </div>

@@ -1,13 +1,16 @@
 import defaultMdxComponents from 'fumadocs-ui/mdx';
 import type { MDXComponents } from 'mdx/types';
 import * as Python from 'fumadocs-python/components';
+import { PythonClass } from '@/components/python-class';
 import { PythonFunction } from '@/components/python-function';
 
 // use this function to get MDX components, you will need it for rendering MDX
 export function getMDXComponents(components?: MDXComponents): MDXComponents {
   return {
     ...defaultMdxComponents,
-      ...Python,
+    ...Python,
+    // Prefer our local typed components.
+    PythonClass,
     PythonFunction,
     ...components,
   };
