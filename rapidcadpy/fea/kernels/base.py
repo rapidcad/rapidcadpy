@@ -7,7 +7,7 @@ This module provides:
 """
 
 from abc import ABC, abstractmethod
-from typing import List, Optional, Tuple, TYPE_CHECKING
+from typing import List, Optional, Tuple, TYPE_CHECKING, Union
 import numpy as np
 import pyvista as pv
 
@@ -135,12 +135,13 @@ class FEAKernel(ABC):
 
     def get_visualization_data(
         self,
-        shape: "Shape",
+        shape: Union["Shape", str],
         material: "MaterialProperties",
         loads: List["Load"],
         constraints: List["BoundaryCondition"],
         mesh_size: float,
         element_type: str,
+        **kwargs,
     ) -> Tuple[pv.UnstructuredGrid, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
         Get mesh and boundary condition data for visualization.
@@ -149,12 +150,13 @@ class FEAKernel(ABC):
         returning data needed for visualization of constraints and loads.
 
         Args:
-            shape: Shape to visualize
+            shape: Shape to visualize or path to STEP file
             material: Material properties
             loads: List of loads to apply
             constraints: List of boundary conditions to apply
             mesh_size: Target mesh element size (mm)
             element_type: Element type (solver-dependent)
+            **kwargs: Additional keyword arguments for kernel-specific options
 
         Returns:
             Tuple containing:
@@ -183,7 +185,7 @@ class FEAAnalyzer:
 
     def __init__(
         self,
-        shape: "Shape",
+        shape: Union["Shape", str],
         material: "MaterialProperties",
         kernel: str,
         mesh_size: float = 2.0,
@@ -191,24 +193,26 @@ class FEAAnalyzer:
         loads: Optional[List["Load"]] = None,
         constraints: Optional[List["BoundaryCondition"]] = None,
         device: str = "auto",
+        mesher: str = "netgen",
     ):
         """
         Initialize FEA analyzer with dependency injection.
 
         Args:
-            shape: Shape to analyze
+            shape: Shape to analyze or path to STEP file
             material: Material properties
             kernel: FEAKernel implementation to use for solving
             mesh_size: Target mesh element size (mm)
             element_type: Element type (solver-dependent)
             device: Device to use ('cpu', 'cuda', or 'auto'). Only for torch-fem kernel.
+            mesher: Mesher to use ('netgen' or 'gmsh'). Only for torch-fem kernel.
         """
         self.shape = shape
         self.material = material
         if kernel == "torch-fem":
             from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
 
-            self.kernel = TorchFEMKernel(device=device)
+            self.kernel = TorchFEMKernel(device=device, mesher=mesher)
         self.mesh_size = mesh_size
         self.element_type = element_type
         if loads is not None:
@@ -274,14 +278,20 @@ class FEAAnalyzer:
         Returns:
             FEAResults object containing analysis results
         """
-        return self.kernel.solve(
-            shape=self.shape,
-            material=self.material,
-            loads=self.loads,
-            constraints=self.constraints,
-            mesh_size=self.mesh_size,
-            element_type=self.element_type,
-        )
+        try:
+            return self.kernel.solve(
+                shape=self.shape,
+                material=self.material,
+                loads=self.loads,
+                constraints=self.constraints,
+                mesh_size=self.mesh_size,
+                element_type=self.element_type,
+            )
+        except ZeroDivisionError:
+            raise ValueError(
+                "Error applying boundary conditions: No nodes found for one of the loads. "
+                "Please check that your load locations match the geometry and mesh size."
+            ) from None
 
     def optimize(
         self,
@@ -311,21 +321,27 @@ class FEAAnalyzer:
         Returns:
             OptimizationResult object containing optimization results
         """
-        return self.kernel.optimize(
-            shape=self.shape,
-            material=self.material,
-            loads=self.loads,
-            constraints=self.constraints,
-            mesh_size=self.mesh_size,
-            element_type=self.element_type,
-            volume_fraction=volume_fraction,
-            num_iterations=num_iterations,
-            penalization=penalization,
-            filter_radius=filter_radius,
-            move_limit=move_limit,
-            rho_min=rho_min,
-            use_autograd=use_autograd,
-        )
+        try:
+            return self.kernel.optimize(
+                shape=self.shape,
+                material=self.material,
+                loads=self.loads,
+                constraints=self.constraints,
+                mesh_size=self.mesh_size,
+                element_type=self.element_type,
+                volume_fraction=volume_fraction,
+                num_iterations=num_iterations,
+                penalization=penalization,
+                filter_radius=filter_radius,
+                move_limit=move_limit,
+                rho_min=rho_min,
+                use_autograd=use_autograd,
+            )
+        except ZeroDivisionError:
+            raise ValueError(
+                "Error applying boundary conditions: No nodes found for one of the loads. "
+                "Please check that your load locations match the geometry and mesh size."
+            ) from None
 
     def get_solver_name(self) -> str:
         """
@@ -336,11 +352,100 @@ class FEAAnalyzer:
         """
         return self.kernel.get_solver_name()
 
+    def validate_connectivity(self) -> bool:
+        """
+        Check if loaded and constrained nodes are connected via the mesh.
+        
+        This validates that forces can be transmitted from loaded regions
+        to constrained regions through the mesh structure. Disconnected
+        geometry or floating parts will return False.
+        
+        Returns:
+            True if loaded and constrained nodes are in the same connected
+            component of the mesh, False otherwise.
+            
+        Note:
+            - Returns True if there are no loads or no constraints
+            - Requires the kernel to support visualization data extraction
+            - This creates a temporary mesh to check connectivity
+        """
+        from collections import deque
+        
+        # If no loads or constraints, consider it valid
+        if len(self.loads) == 0 or len(self.constraints) == 0:
+            return True
+        
+        try:
+            # Get mesh and boundary condition data
+            pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
+                self.kernel.get_visualization_data(
+                    shape=self.shape,
+                    material=self.material,
+                    loads=self.loads,
+                    constraints=self.constraints,
+                    mesh_size=self.mesh_size,
+                    element_type=self.element_type,
+                )
+            )
+            
+            # Find constrained and loaded nodes
+            constrained_nodes = set(np.where(constraint_mask)[0])
+            loaded_nodes = set(np.where(force_mask)[0])
+            
+            if len(constrained_nodes) == 0 or len(loaded_nodes) == 0:
+                return True
+            
+            # Extract element connectivity from PyVista mesh
+            cells = pv_mesh.cells
+            cell_types = pv_mesh.celltypes
+            
+            # Build adjacency list from elements
+            n_nodes = nodes.shape[0]
+            adjacency = [set() for _ in range(n_nodes)]
+            
+            # Parse VTK cell array
+            idx = 0
+            for cell_type in cell_types:
+                n_points = cells[idx]
+                elem_nodes = cells[idx + 1 : idx + 1 + n_points]
+                
+                # Connect all pairs of nodes in this element
+                for i in range(len(elem_nodes)):
+                    for j in range(i + 1, len(elem_nodes)):
+                        adjacency[elem_nodes[i]].add(elem_nodes[j])
+                        adjacency[elem_nodes[j]].add(elem_nodes[i])
+                
+                idx += 1 + n_points
+            
+            # Find connected component containing constrained nodes using BFS
+            visited = set()
+            queue = deque(constrained_nodes)
+            visited.update(constrained_nodes)
+            
+            while queue:
+                node = queue.popleft()
+                for neighbor in adjacency[node]:
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        queue.append(neighbor)
+            
+            # Check if all loaded nodes are in the same component
+            disconnected_loads = loaded_nodes - visited
+            
+            return len(disconnected_loads) == 0
+            
+        except Exception as e:
+            # If we can't check connectivity, assume it's invalid
+            print(f"⚠ Warning: Could not validate connectivity: {e}")
+            return False
+
     def show(
         self,
         interactive: bool = True,
         window_size: Tuple[int, int] = (1400, 700),
         filename: Optional[str] = None,
+        show_legend: bool = True,
+        display: str = "conditions",
     ) -> None:
         """
         Visualize constraints, loads, and mesh of the analyzed shape.
@@ -356,9 +461,15 @@ class FEAAnalyzer:
             window_size: Window dimensions (width, height). Default: (1400, 700)
             filename: Optional path to save the plot. If set, saves to file
                      instead of showing interactively.
+            show_legend: Whether to show the legend. Default: True
+            display: What to display. 'conditions' (default) shows mesh, loads,
+                    and constraints. 'mesh' shows only the mesh.
 
         Note: This method requires the kernel to support visualization data extraction.
         """
+        if display not in ["conditions", "mesh"]:
+            raise ValueError("display must be either 'conditions' or 'mesh'")
+
         # Configure for headless/non-interactive mode if needed
         if filename:
             interactive = False
@@ -366,16 +477,24 @@ class FEAAnalyzer:
             pv.OFF_SCREEN = True
 
         # Get visualization data from kernel
-        pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
-            self.kernel.get_visualization_data(
-                shape=self.shape,
-                material=self.material,
-                loads=self.loads,
-                constraints=self.constraints,
-                mesh_size=self.mesh_size,
-                element_type=self.element_type,
+        try:
+            pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
+                self.kernel.get_visualization_data(
+                    shape=self.shape,
+                    material=self.material,
+                    loads=self.loads,
+                    constraints=self.constraints,
+                    mesh_size=self.mesh_size,
+                    element_type=self.element_type,
+                    with_conditions=(display == "conditions"),
+                )
             )
-        )
+        except Exception as e:
+            print(f"Could not show debug mesh: {e}")
+            raise ValueError(
+                "Error applying boundary conditions: No nodes found for one of the loads. "
+                "Please check that your load locations match the geometry and mesh size."
+            ) from None
 
         # Visualize boundary conditions
         plotter = pv.Plotter(window_size=list(window_size), off_screen=not interactive)
@@ -390,61 +509,62 @@ class FEAAnalyzer:
             line_width=0.5,
         )
 
-        # Visualize FIXED NODES (constraints)
-        constrained_nodes = nodes[constraint_mask]
+        if display == "conditions":
+            # Visualize FIXED NODES (constraints)
+            constrained_nodes = nodes[constraint_mask]
 
-        if len(constrained_nodes) > 0:
-            # Add fixed nodes as red spheres
-            fixed_points = pv.PolyData(constrained_nodes)
-            plotter.add_mesh(
-                fixed_points,
-                color="red",
-                point_size=15,
-                render_points_as_spheres=True,
-                label="Fixed Nodes",
-            )
-            print(f"✓ Visualizing {len(constrained_nodes)} constrained nodes (RED)")
+            if len(constrained_nodes) > 0:
+                # Add fixed nodes as red spheres
+                fixed_points = pv.PolyData(constrained_nodes)
+                plotter.add_mesh(
+                    fixed_points,
+                    color="green",
+                    point_size=10,
+                    render_points_as_spheres=True,
+                    label="Fixed Nodes",
+                )
+            # Visualize LOADED NODES (forces)
+            loaded_nodes = nodes[force_mask]
 
-        # Visualize LOADED NODES (forces)
-        loaded_nodes = nodes[force_mask]
+            if len(loaded_nodes) > 0:
+                # Add loaded nodes as green spheres
+                load_points = pv.PolyData(loaded_nodes)
+                plotter.add_mesh(
+                    load_points,
+                    color="red",
+                    point_size=15,
+                    render_points_as_spheres=True,
+                    label="Loaded Nodes",
+                )
 
-        if len(loaded_nodes) > 0:
-            # Add loaded nodes as green spheres
-            load_points = pv.PolyData(loaded_nodes)
-            plotter.add_mesh(
-                load_points,
-                color="green",
-                point_size=15,
-                render_points_as_spheres=True,
-                label="Loaded Nodes",
-            )
+                # Add force arrows
+                # Scale arrows for visibility
+                arrow_scale = (nodes[:, 0].max() - nodes[:, 0].min()) * 0.05
+                force_magnitude = np.linalg.norm(force_vectors, axis=1, keepdims=True)
+                force_directions = force_vectors / (force_magnitude + 1e-10)
+                scaled_vectors = force_directions * arrow_scale
 
-            # Add force arrows
-            # Scale arrows for visibility
-            arrow_scale = (nodes[:, 0].max() - nodes[:, 0].min()) * 0.1
-            force_magnitude = np.linalg.norm(force_vectors, axis=1, keepdims=True)
-            force_directions = force_vectors / (force_magnitude + 1e-10)
-            scaled_vectors = force_directions * arrow_scale
+                plotter.add_arrows(
+                    loaded_nodes,
+                    scaled_vectors,
+                    mag=1.0,
+                    color="darkred",
+                    label="Force Vectors",
+                )
 
-            plotter.add_arrows(
-                loaded_nodes,
-                scaled_vectors,
-                mag=1.0,
-                color="darkgreen",
-                label="Force Vectors",
-            )
-            print(
-                f"✓ Visualizing {len(loaded_nodes)} loaded nodes (GREEN) with force arrows"
-            )
+            # Add legend and labels
+            if show_legend:
+                plotter.add_legend()
+                plotter.add_text("Boundary Conditions", position="upper_edge", font_size=12)
+                plotter.add_text(
+                    "Red = Fixed (Constraints)\nGreen = Loaded (Forces)",
+                    position="lower_left",
+                    font_size=10,
+                )
+        else:
+            # Display mode is 'mesh'
+            plotter.add_text("Mesh Visualization", position="upper_edge", font_size=12)
 
-        # Add legend and labels
-        plotter.add_legend()
-        plotter.add_text("Boundary Conditions", position="upper_edge", font_size=12)
-        plotter.add_text(
-            "Red = Fixed (Constraints)\nGreen = Loaded (Forces)",
-            position="lower_left",
-            font_size=10,
-        )
         plotter.add_axes()
         plotter.camera_position = "iso"
 
@@ -460,3 +580,4 @@ class FEAAnalyzer:
                 plotter.show()
             else:
                 plotter.show(jupyter_backend="static")
+

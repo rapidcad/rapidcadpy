@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rapidcadpy.components.sections.base import Section2D
+from rapidcadpy.sketch2d import Sketch2D
 
 
 @dataclass(frozen=True)
@@ -23,8 +24,15 @@ class IPESection(Section2D):
     flange_thickness: float
     web_thickness: float
 
-    def sketch(self, wp, *, x: float = 0.0, y: float = 0.0):
-        """Sketch the IPE profile centered on (x, y) in workplane coordinates."""
+    def sketch(self, wp, *, x: float = 0.0, y: float = 0.0) -> "Sketch2D":
+        """Sketch the IPE profile centered on (x, y) in workplane coordinates.
+        Args:
+            wp: The workplane to sketch on
+            x: X coordinate of section center
+            y: Y coordinate of section center
+        Returns:
+            The resulting Sketch2D with the IPE profile
+        """
 
         half_depth = self.depth / 2.0
         half_flange = self.flange_width / 2.0
@@ -79,6 +87,12 @@ _IPE_PRESETS: dict[str, IPESection] = {
 
 
 def ipe(name: str) -> IPESection:
+    """Get a preset IPE section by name.
+    Args:
+        name: The name of the IPE profile (e.g., "IPE80")
+        Returns:
+            The corresponding IPESection instance
+    """
     key = name.strip().upper()
     if key not in _IPE_PRESETS:
         available = ", ".join(sorted(_IPE_PRESETS.keys()))

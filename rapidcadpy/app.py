@@ -50,8 +50,8 @@ class App:
         """Get the total volume of all shapes registered with this app."""
         total_volume = 0.0
         for shape in self._shapes:
-            if hasattr(shape.obj, "volume"):
-                total_volume += shape.obj.volume()
+            if hasattr(shape, "volume"):
+                total_volume += shape.volume()
         return total_volume
 
     def workplane_count(self) -> int:
@@ -351,3 +351,16 @@ class App:
             mesh_size=mesh_size,
             element_type=element_type,
         )
+
+    def to_step(self, file_name: str) -> None:
+        """Export all shapes in the app to a single STEP file.
+
+        Args:
+            file_name: Path to the output STEP file
+        """
+        if not self._shapes:
+            raise ValueError("No shapes to export")
+
+        # Combine all shapes into one
+        combined_shape = self._shapes[0]
+        combined_shape.to_step(file_name)

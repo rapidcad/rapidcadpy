@@ -7,8 +7,12 @@ meshing backends (Netgen, GMSH, etc.).
 
 from .base import MesherBase
 from .netgen_mesher import NetgenMesher
+from .gmsh_subprocess_mesher import GmshSubprocessMesher
+from .netgen_subprocess_mesher import NetgenSubprocessMesher
 
 __all__ = [
     "MesherBase",
     "NetgenMesher",
+    "GmshSubprocessMesher",
+    "NetgenSubprocessMesher",
 ]

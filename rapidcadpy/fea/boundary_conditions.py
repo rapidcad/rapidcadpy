@@ -183,7 +183,7 @@ class FixedConstraint(BoundaryCondition):
         self,
         location: Union[str, Tuple[float, float, float]],
         dofs: Tuple[bool, bool, bool] = (True, True, True),
-        tolerance: float = 0.1,
+        tolerance: float = 1,
     ):
         """
         Create a fixed constraint.
@@ -198,7 +198,7 @@ class FixedConstraint(BoundaryCondition):
         self.dofs = dofs
         self.tolerance = tolerance
 
-    def apply(self, model, nodes, elements, geometry_info):
+    def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply fixed constraint to the model"""
         from rapidcadpy.fea.utils import find_nodes_in_box
         import torch
@@ -214,42 +214,42 @@ class FixedConstraint(BoundaryCondition):
                     nodes,
                     xmin=bbox["xmin"],
                     xmax=bbox["xmin"],
-                    tolerance=self.tolerance,
+                    tolerance=self.tolerance*mesh_size,
                 )
             elif loc in ["end_2", "x_max"]:
                 constrained_nodes = find_nodes_in_box(
                     nodes,
                     xmin=bbox["xmax"],
                     xmax=bbox["xmax"],
-                    tolerance=self.tolerance,
+                    tolerance=self.tolerance*mesh_size,
                 )
             elif loc in ["y_min"]:
                 constrained_nodes = find_nodes_in_box(
                     nodes,
                     ymin=bbox["ymin"],
                     ymax=bbox["ymin"],
-                    tolerance=self.tolerance,
+                    tolerance=self.tolerance*mesh_size,
                 )
             elif loc in ["y_max"]:
                 constrained_nodes = find_nodes_in_box(
                     nodes,
                     ymin=bbox["ymax"],
                     ymax=bbox["ymax"],
-                    tolerance=self.tolerance,
+                    tolerance=self.tolerance*mesh_size,
                 )
             elif loc in ["bottom", "z_min"]:
                 constrained_nodes = find_nodes_in_box(
                     nodes,
                     zmin=bbox["zmin"],
                     zmax=bbox["zmin"],
-                    tolerance=self.tolerance,
+                    tolerance=self.tolerance*mesh_size,
                 )
             elif loc in ["top", "z_max"]:
                 constrained_nodes = find_nodes_in_box(
                     nodes,
                     zmin=bbox["zmax"],
                     zmax=bbox["zmax"],
-                    tolerance=self.tolerance,
+                    tolerance=self.tolerance*mesh_size,
                 )
             else:
                 raise ValueError(f"Unknown location: {self.location}")
@@ -283,7 +283,7 @@ class PinnedConstraint(BoundaryCondition):
     """
 
     def __init__(
-        self, location: Union[str, Tuple[float, float, float]], tolerance: float = 0.1
+        self, location: Union[str, Tuple[float, float, float]], tolerance: float = 1
     ):
         """
         Create a pinned constraint.
@@ -313,7 +313,7 @@ class RollerConstraint(BoundaryCondition):
         self,
         location: Union[str, Tuple[float, float, float]],
         direction: Literal["x", "y", "z"] = "z",
-        tolerance: float = 0.1,
+        tolerance: float = 1,
     ):
         """
         Create a roller constraint.
@@ -369,7 +369,7 @@ class DistributedLoad(Load):
         location: str,
         force: Union[float, Tuple[float, float, float]],
         direction: Optional[Literal["x", "y", "z", "normal"]] = None,
-        tolerance: float = 0.1,
+        tolerance: float = 1,
     ):
         """
         Create a distributed load.
@@ -386,7 +386,7 @@ class DistributedLoad(Load):
         self.direction = direction
         self.tolerance = tolerance
 
-    def apply(self, model, nodes, elements, geometry_info):
+    def apply(self, model, nodes, elements, geometry_info, mesh_size: float ):
         """Apply distributed load to the model"""
         from rapidcadpy.fea.utils import find_nodes_in_box
         import torch
@@ -397,32 +397,32 @@ class DistributedLoad(Load):
         # Find nodes on the specified surface
         if loc in ["top", "z_max"]:
             load_nodes = find_nodes_in_box(
-                nodes, zmin=bbox["zmax"], zmax=bbox["zmax"], tolerance=self.tolerance
+                nodes, zmin=bbox["zmax"], zmax=bbox["zmax"], tolerance=self.tolerance * mesh_size
             )
             default_dir = "z"
         elif loc in ["bottom", "z_min"]:
             load_nodes = find_nodes_in_box(
-                nodes, zmin=bbox["zmin"], zmax=bbox["zmin"], tolerance=self.tolerance
+                nodes, zmin=bbox["zmin"], zmax=bbox["zmin"], tolerance=self.tolerance * mesh_size
             )
             default_dir = "z"
         elif loc in ["x_min"]:
             load_nodes = find_nodes_in_box(
-                nodes, xmin=bbox["xmin"], xmax=bbox["xmin"], tolerance=self.tolerance
+                nodes, xmin=bbox["xmin"], xmax=bbox["xmin"], tolerance=self.tolerance * mesh_size
             )
             default_dir = "x"
         elif loc in ["x_max"]:
             load_nodes = find_nodes_in_box(
-                nodes, xmin=bbox["xmax"], xmax=bbox["xmax"], tolerance=self.tolerance
+                nodes, xmin=bbox["xmax"], xmax=bbox["xmax"], tolerance=self.tolerance * mesh_size
             )
             default_dir = "x"
         elif loc in ["y_min"]:
             load_nodes = find_nodes_in_box(
-                nodes, ymin=bbox["ymin"], ymax=bbox["ymin"], tolerance=self.tolerance
+                nodes, ymin=bbox["ymin"], ymax=bbox["ymin"], tolerance=self.tolerance * mesh_size
             )
             default_dir = "y"
         elif loc in ["y_max"]:
             load_nodes = find_nodes_in_box(
-                nodes, ymin=bbox["ymax"], ymax=bbox["ymax"], tolerance=self.tolerance
+                nodes, ymin=bbox["ymax"], ymax=bbox["ymax"], tolerance=self.tolerance * mesh_size
             )
             default_dir = "y"
         else:
@@ -467,7 +467,7 @@ class PointLoad(Load):
         point: Tuple[float, float, float],
         force: Union[float, Tuple[float, float, float]],
         direction: Optional[Literal["x", "y", "z"]] = None,
-        tolerance: float = 0.1,
+        tolerance: float = 1,
     ):
         """
         Create a point load.
@@ -489,7 +489,7 @@ class PointLoad(Load):
             f"direction={self.direction}, tolerance={self.tolerance})"
         )
 
-    def apply(self, model, nodes, elements, geometry_info):
+    def apply(self, model, nodes, elements, geometry_info, mesh_size):
         """Apply point load to the model"""
         from rapidcadpy.fea.utils import find_nodes_in_box
 
@@ -504,11 +504,11 @@ class PointLoad(Load):
             ymax=y,
             zmin=z,
             zmax=z,
-            tolerance=self.tolerance,
+            tolerance=self.tolerance*mesh_size,
         )
 
         if len(load_nodes) == 0:
-            raise ValueError(f"No nodes found near point: {self.point}")
+            print(f"Warning: No nodes found near point: {self.point}")
 
         # Apply force
         if isinstance(self.force, (int, float)):
@@ -544,7 +544,7 @@ class PressureLoad(Load):
     Note: This is a simplified implementation that converts pressure to total force.
     """
 
-    def __init__(self, location: str, pressure: float, tolerance: float = 0.1):
+    def __init__(self, location: str, pressure: float, tolerance: float = 1):
         """
         Create a pressure load.
 

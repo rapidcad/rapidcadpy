@@ -41,9 +41,6 @@ class Vector(np.ndarray):
     def from_json(json_data):
         return Vector(json_data["x"], json_data["y"], json_data["z"])
 
-    def to_python(self):
-        return f"Vector({self.x}, {self.y}, {self.z})"
-
 
 VectorLike = Union[Tuple[float, float], Tuple[float, float, float], Vector]
 

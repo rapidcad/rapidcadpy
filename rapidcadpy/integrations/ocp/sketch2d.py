@@ -464,3 +464,6 @@ class OccSketch2D(Sketch2D):
         else:
             # Display in interactive window
             plt.show()
+
+    def sweep(self, profile: Sketch2D, make_solid: bool = True, is_frenet: bool = True, transition_mode: str = "right"):
+        raise NotImplementedError("Sweep operation is not implemented for OccSketch2D yet.")

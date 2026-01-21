@@ -54,6 +54,7 @@ def sample_deepcad_json_flash():
         pytest.skip(f"Test file not found: {path}")
     return str(path.resolve())
 
+
 @pytest.fixture
 def sample_deepcad_json_internal_holes():
     """Fixture to provide path to sample DeepCAD JSON file."""
@@ -61,6 +62,7 @@ def sample_deepcad_json_internal_holes():
     if not path.exists():
         pytest.skip(f"Test file not found: {path}")
     return str(path.resolve())
+
 
 class TestDeepCadToPyCadSeqGenerator:
     """Test class for DeepCAD to PyCadSeq code generation."""

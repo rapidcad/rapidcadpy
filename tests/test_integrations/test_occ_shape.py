@@ -17,7 +17,14 @@ class TestOccShapeExport:
         # Create a simple cube
         app = OpenCascadeApp()
         wp = app.work_plane("XY")
-        cube = wp.move_to(0, 0).line_to(10, 0).line_to(10, 10).line_to(0, 10).line_to(0, 0).extrude(10)
+        cube = (
+            wp.move_to(0, 0)
+            .line_to(10, 0)
+            .line_to(10, 10)
+            .line_to(0, 10)
+            .line_to(0, 0)
+            .extrude(10)
+        )
 
         test_file = "test_cube_export.step"
 
@@ -35,7 +42,9 @@ class TestOccShapeExport:
             # Basic validation - STEP files should start with "ISO-10303-21;"
             with open(test_file, "r") as f:
                 first_line = f.readline().strip()
-                assert first_line == "ISO-10303-21;", "STEP file should start with ISO-10303-21;"
+                assert (
+                    first_line == "ISO-10303-21;"
+                ), "STEP file should start with ISO-10303-21;"
 
         finally:
             # Clean up

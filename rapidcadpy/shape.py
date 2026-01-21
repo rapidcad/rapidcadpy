@@ -98,7 +98,7 @@ class Shape(ABC):
 
         # Get analyzer from concrete implementation
         analyzer = FEAAnalyzer(
-            shape=self, material=resolved_material, kernel="torch-fem"
+            shape=self, material=resolved_material, kernel="torch-fem", mesh_size=mesh_size
         )
 
         if analyzer is None:

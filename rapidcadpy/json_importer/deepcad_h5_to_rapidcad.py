@@ -11,9 +11,9 @@ from geom_utils import *
 
 ###########
 # May need to update this if your data is stored elsewhere
-H5_VEC_FOLDER = '/mnt/data/deepcad_h5/'
-RAPIDCAD_FOLDER = '/mnt/data/rapidcadpy'
-UNQUANTIZE = True # TODO: support unquantized?
+H5_VEC_FOLDER = "/mnt/data/deepcad_h5/"
+RAPIDCAD_FOLDER = "/mnt/data/rapidcadpy"
+UNQUANTIZE = True  # TODO: support unquantized?
 generate_stls = False
 ###########
 
@@ -137,8 +137,8 @@ def convert_h5_to_cadquery(
         return workplane_comment + python_command
 
     def rapidcad_line(x, y, curr_x, curr_y, loop_list, unquantize, extrude_scale):
-        if (
-            (x == curr_x) and (y == curr_y)
+        if (x == curr_x) and (
+            y == curr_y
         ):  # handles case where there are duplicate points or first point is zero and it also closes at zero, need to handle case of first point and last point are same but not zero
             print(f"problem: {x}, {y}, {curr_x}, {curr_y}")
             return ""
@@ -209,7 +209,7 @@ def convert_h5_to_cadquery(
             )
         else:
             return NotImplementedError("Circle with other things in loop")
-    
+
     def rapidcad_close_loop(loop_operations, loop_num, sketch_num):
         if len(loop_operations) > 1:
             loop_string = "".join(loop_operations) + ".close()"
@@ -295,14 +295,14 @@ def convert_h5_to_cadquery(
                         dir_with_normal = dir1
                         dir_against_normal = -dir2
 
-                    elif (
-                        (dir1 < 0) and (dir2 > 0)
+                    elif (dir1 < 0) and (
+                        dir2 > 0
                     ):  # I suspect this case was handled incorrectly by DeepCAD, and that if dir1 is negative it against normal while dir2 becomes direction of normal, matching their implementation
                         dir_with_normal = dir1
                         dir_against_normal = -dir2
 
-                    elif (
-                        (dir1 > 0) and (dir2 < 0)
+                    elif (dir1 > 0) and (
+                        dir2 < 0
                     ):  # If the two bodies are completley overlapping, union gives an empty result. Example of this happening is index 5193. Happens in DeepCAD generation too
                         dir_with_normal = dir1
                         dir_against_normal = -dir2
@@ -544,11 +544,15 @@ def convert_h5_to_cadquery(
         return "".join(loops_expanded)
 
     if os.path.exists(os.path.dirname(save_python_dir)):
-        return # skip if file already exists
+        return  # skip if file already exists
 
     # Initiate python program string
-    python_rapidcad = ["from rapidcadpy import InventorApp\n", "app = InventorApp()\n", "app.new_document()\n"]
-    
+    python_rapidcad = [
+        "from rapidcadpy import InventorApp\n",
+        "app = InventorApp()\n",
+        "app.new_document()\n",
+    ]
+
     # print(f"Original numpy array:\n{vecs}")
 
     sketches, extrudes = split_by_sketches(vecs)
@@ -634,10 +638,18 @@ def convert_h5_to_cadquery(
             total_loop_count += 1
         loops_joined = join_loops(loops_in_this_sketch, i)
 
-            
-        extrude_command = cadquery_extrude(loops_joined, op, type, dir1, dir2, i, sketch_plane.normal, wp_decl, loop_chunk)
+        extrude_command = cadquery_extrude(
+            loops_joined,
+            op,
+            type,
+            dir1,
+            dir2,
+            i,
+            sketch_plane.normal,
+            wp_decl,
+            loop_chunk,
+        )
         python_rapidcad.append(extrude_command)
-    
 
     # Write the python string to a python file
     os.makedirs(save_python_dir.rsplit("/", 1)[0], exist_ok=True)
@@ -701,18 +713,26 @@ if __name__ == "__main__":
         # Extract subdir from first 4 characters of the file ID
         sub_dir = args.file_id[:4]
         h5_file_path = f"{H5_VEC_FOLDER}/{sub_dir}/{args.file_id}.h5"
-        
+
         if not os.path.exists(h5_file_path):
             print(f"Error: File not found: {h5_file_path}")
             exit(1)
-        
+
         print(f"Converting single file: {h5_file_path}")
-        
-        python_file_save_path = RAPIDCAD_FOLDER + h5_file_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".py"
-        stl_file_save_path = f"{H5_VEC_FOLDER[:-5]}/cadquery_stl/" + h5_file_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".stl"
-        
+
+        python_file_save_path = (
+            RAPIDCAD_FOLDER
+            + h5_file_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+            + ".py"
+        )
+        stl_file_save_path = (
+            f"{H5_VEC_FOLDER[:-5]}/cadquery_stl/"
+            + h5_file_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+            + ".stl"
+        )
+
         h5_vec = extract_h5_file(h5_file_path)
-        
+
         try:
             convert_h5_to_cadquery(
                 h5_vec,
@@ -722,7 +742,7 @@ if __name__ == "__main__":
                 args.decimal_points,
             )
             print(f"Successfully generated: {python_file_save_path}")
-            
+
             if generate_stls:
                 try:
                     subprocess.run(["python", python_file_save_path], check=True)
@@ -731,7 +751,7 @@ if __name__ == "__main__":
                     print(f"Error generating STL: {e}")
         except Exception as e:
             print(f"Error converting file: {e}")
-        
+
         exit(0)
 
     sub_dirs = [str(i).zfill(4) for i in range(100)]
@@ -765,11 +785,21 @@ if __name__ == "__main__":
         for i, h5_vec_path in enumerate(h5_files):
             print(f"Num: {i}")
             print(f"Path: {h5_vec_path}")
-            
-            python_file_save_path = RAPIDCAD_FOLDER + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".py"
-            stl_file_save_path = f"{H5_VEC_FOLDER[:-5]}/cadquery_stl/" + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0] + ".stl"
-            unique_id = python_file_save_path.split(".")[0].removeprefix(os.path.dirname(H5_VEC_FOLDER) + "/cadquery")
-            
+
+            python_file_save_path = (
+                RAPIDCAD_FOLDER
+                + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+                + ".py"
+            )
+            stl_file_save_path = (
+                f"{H5_VEC_FOLDER[:-5]}/cadquery_stl/"
+                + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+                + ".stl"
+            )
+            unique_id = python_file_save_path.split(".")[0].removeprefix(
+                os.path.dirname(H5_VEC_FOLDER) + "/cadquery"
+            )
+
             h5_vec = extract_h5_file(h5_vec_path)
 
             try:
@@ -862,10 +892,8 @@ if __name__ == "__main__":
         print(f"Successful code file generations: {code_files_successfully_generated}")
         print(f"STLs generated successfully: {stls_generated_successfully}")
         print(f"STLs NOT generated: {stls_not_generated}")
-        print (f"Total number of generated files: {gen_file}")
-    
-        
-    
+        print(f"Total number of generated files: {gen_file}")
+
     # for i, h5_vec_path in enumerate(h5_files):
 
     #     if '/0000/' in h5_vec_path:

@@ -14,9 +14,24 @@ from .app import App
 # Core geometry types for fluent API
 from .cad_types import Vector, Vertex
 
+# Core shape and sketch classes
+from .shape import Shape
+from .sketch2d import Sketch2D
+from .sketch3d import Sketch3D
+
+# Components - preset profiles
+from .components import profiles
+
 # Optional integrations - import with error handling
-from .integrations.inventor.app import InventorApp
-from .integrations.occ.app import OpenCascadeApp
+try:
+    from .integrations.occ.app import OpenCascadeApp
+except ImportError:
+    OpenCascadeApp = None
+
+try:
+    from .integrations.ocp.app import OpenCascadeOcpApp
+except ImportError:
+    OpenCascadeOcpApp = None
 
 # Essential primitives for fluent modeling
 from .workplane import Workplane
@@ -36,11 +51,12 @@ __all__ = [
     # Core fluent API
     "App",
     "Workplane",
-    # Geometry types
-    "Vector",
-    "Vertex",
-    # Primitives
+    "Shape",
+    "Sketch2D",
+    "Sketch3D",
+    # Components
+    "profiles",
     # Optional integrations
     "OpenCascadeApp",
-    "InventorApp",
+    "OpenCascadeOcpApp",
 ]

@@ -9,7 +9,7 @@ from pyvista import UnstructuredGrid
 import torch
 import tempfile
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Tuple, Optional
+from typing import TYPE_CHECKING, List, Tuple, Optional, Union
 
 from torchfem import Solid
 
@@ -36,7 +36,7 @@ class TorchFEMKernel(FEAKernel):
     def __init__(
         self,
         device: str = "auto",
-        mesher: Optional[MesherBase] = None,
+        mesher: Optional[Union[MesherBase, str]] = None,
         num_threads: int = 0,
     ):
         """
@@ -45,10 +45,12 @@ class TorchFEMKernel(FEAKernel):
         Args:
             device: Device to use for computations ('cpu', 'cuda', or 'auto').
                     'auto' will use CUDA if available, otherwise CPU.
-            mesher: Mesher instance to use for geometry meshing.
-                   If None, uses NetgenMesher by default.
+            mesher: Mesher to use. Can be:
+                   - MesherBase instance (custom mesher)
+                   - String: 'netgen', 'gmsh', or 'netgen-subprocess' (will instantiate the appropriate mesher)
+                   - None: uses NetgenMesher by default
             num_threads: Number of threads for meshing (0 = auto-detect).
-                        Only used if mesher is None.
+                        Only used if mesher is None or a string.
         """
         if not self.is_available():
             raise ImportError(
@@ -58,8 +60,19 @@ class TorchFEMKernel(FEAKernel):
         torch.set_default_dtype(torch.float64)
 
         # Set mesher
-        if mesher is None:
+        if mesher is None or mesher == "netgen":
             self.mesher = NetgenMesher(num_threads=num_threads)
+        elif isinstance(mesher, str):
+            if mesher == "gmsh-subprocess":
+                from rapidcadpy.fea.mesher import GmshSubprocessMesher
+                self.mesher = GmshSubprocessMesher(num_threads=num_threads)
+            elif mesher == "netgen-subprocess":
+                from rapidcadpy.fea.mesher import NetgenSubprocessMesher
+                self.mesher = NetgenSubprocessMesher(num_threads=num_threads)
+            else:
+                raise ValueError(
+                    f"Unknown mesher: {mesher}. Supported: 'netgen', 'gmsh', 'netgen-subprocess'"
+                )
         else:
             self.mesher = mesher
 
@@ -94,7 +107,7 @@ class TorchFEMKernel(FEAKernel):
 
     def solve(
         self,
-        shape,
+        shape: Union["Shape", str],
         material,
         loads: List,
         constraints: List,
@@ -105,7 +118,7 @@ class TorchFEMKernel(FEAKernel):
         Run FEA analysis using torch-fem.
 
         Args:
-            shape: Shape to analyze
+            shape: Shape to analyze or path to STEP file
             material: Material properties
             loads: List of loads to apply
             constraints: List of boundary conditions to apply
@@ -116,10 +129,15 @@ class TorchFEMKernel(FEAKernel):
             FEAResults object containing analysis results
         """
 
-        # Step 1: Export mesh
-        with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
-            step_path = tmp.name
-        shape.to_step(step_path)
+        # Step 1: Export mesh or use provided STEP file
+        if isinstance(shape, str):
+            # shape is a path to a STEP file
+            step_path = shape
+        else:
+            # shape is a Shape object, export to STEP
+            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+                step_path = tmp.name
+            shape.to_step(step_path)
         torch.set_default_dtype(torch.float64)
         nodes, elements = self.mesher.generate_mesh(
             step_path,
@@ -128,7 +146,7 @@ class TorchFEMKernel(FEAKernel):
             dim=3,
         )
 
-        elements = elements[:, [1, 0, 2, 3]]
+        # elements = elements[:, [1, 0, 2, 3]]
 
         # Convert nodes to float64 and move to device
         nodes = nodes.to(torch.float64).to(self.device)
@@ -153,7 +171,7 @@ class TorchFEMKernel(FEAKernel):
             print(f"  Elements: {model.n_elem}")
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(model, nodes, elements, loads, constraints)
+        self._apply_boundary_conditions(model, nodes, elements, loads, constraints, mesh_size=mesh_size)
 
         solution = model.solve()
 
@@ -181,6 +199,7 @@ class TorchFEMKernel(FEAKernel):
         elements: torch.Tensor,
         loads: List,
         constraints: List,
+        mesh_size: float,
     ) -> None:
         """
         Apply loads and constraints to torch-fem model.
@@ -210,7 +229,7 @@ class TorchFEMKernel(FEAKernel):
 
         # Apply constraints
         for constraint in constraints:
-            num_nodes = constraint.apply(model, nodes, elements, geometry_info)
+            num_nodes = constraint.apply(model, nodes, elements, geometry_info=geometry_info, mesh_size=mesh_size)
             if num_nodes is not None:
                 total_constrained += num_nodes
             if os.getenv("RCADPY_VERBOSE") == "1":
@@ -220,7 +239,7 @@ class TorchFEMKernel(FEAKernel):
 
         # Apply loads
         for load in loads:
-            num_nodes = load.apply(model, nodes, elements, geometry_info)
+            num_nodes = load.apply(model, nodes, elements, geometry_info, mesh_size=mesh_size)
             if num_nodes is not None:
                 total_loaded += num_nodes
             if os.getenv("RCADPY_VERBOSE") == "1":
@@ -233,6 +252,10 @@ class TorchFEMKernel(FEAKernel):
             )
         if total_loaded == 0:
             print("  ⚠ WARNING: No loads were applied!")
+        
+        # Check connectivity between loaded and constrained nodes
+        if total_constrained > 0 and total_loaded > 0:
+            self._validate_connectivity(model, nodes, elements)
 
     def _extract_results(
         self,
@@ -348,7 +371,30 @@ class TorchFEMKernel(FEAKernel):
 
         # Step 1: Create mesh and model
         torch.set_default_dtype(torch.float64)
-        if hasattr(shape, "to_step"):  # Check if it's a Shape (duck typing)
+        if isinstance(shape, str):
+            # shape is a path to a STEP file
+            step_path = shape
+            t0 = time.perf_counter()
+            nodes, elements = self.mesher.generate_mesh(
+                step_path,
+                mesh_size=mesh_size,
+                element_type="tet4",
+                dim=3,
+            )
+            mesh_time = time.perf_counter() - t0
+
+            elements = elements[:, [1, 0, 2, 3]]
+            nodes = nodes.to(torch.float64)
+
+            # Step 2: Create FEM model
+
+            material_fem = material.to_torchfem()
+            model = Solid(
+                nodes,
+                elements,
+                IsotropicElasticity3D(E=210000.0, nu=0.3),
+            )
+        elif hasattr(shape, "to_step"):  # Check if it's a Shape (duck typing)
             with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
                 step_path = tmp.name
             shape.to_step(step_path)
@@ -388,7 +434,7 @@ class TorchFEMKernel(FEAKernel):
             print(f"  DOFs: {model.n_dofs}")
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(model, nodes, elements, loads, constraints)
+        self._apply_boundary_conditions(model, nodes, elements, loads, constraints, mesh_size=mesh_size)
 
         # Step 4: Initialize optimization variables
         n_elem = model.n_elem
@@ -661,14 +707,79 @@ class TorchFEMKernel(FEAKernel):
             "zmax": nodes[:, 2].max().item(),
         }
 
+    def _validate_connectivity(
+        self,
+        model,
+        nodes: torch.Tensor,
+        elements: torch.Tensor,
+    ) -> bool:
+        """
+        Validate that loaded and constrained nodes are connected via the mesh.
+        
+        Uses BFS to find connected components and checks if all loaded and
+        constrained nodes belong to the same component.
+        
+        Args:
+            model: torchfem.Solid model with applied boundary conditions
+            nodes: Mesh nodes
+            elements: Mesh elements
+            
+        Raises:
+            RuntimeError: If loaded and constrained nodes are disconnected
+        """
+        from collections import deque
+        
+        # Find constrained and loaded nodes
+        constraint_mask = model.constraints.any(dim=1).cpu().numpy()
+        force_mask = (model.forces.abs() > 1e-10).any(dim=1).cpu().numpy()
+        
+        constrained_nodes = set(np.where(constraint_mask)[0])
+        loaded_nodes = set(np.where(force_mask)[0])
+        
+        if len(constrained_nodes) == 0 or len(loaded_nodes) == 0:
+            return True  # Nothing to check
+        
+        # Build adjacency list from elements
+        n_nodes = nodes.shape[0]
+        adjacency = [set() for _ in range(n_nodes)]
+        
+        elements_np = elements.cpu().numpy()
+        for elem in elements_np:
+            # For each element, connect all pairs of nodes
+            for i in range(len(elem)):
+                for j in range(i + 1, len(elem)):
+                    adjacency[elem[i]].add(elem[j])
+                    adjacency[elem[j]].add(elem[i])
+        
+        # Find connected component containing constrained nodes using BFS
+        visited = set()
+        queue = deque(constrained_nodes)
+        visited.update(constrained_nodes)
+        
+        while queue:
+            node = queue.popleft()
+            for neighbor in adjacency[node]:
+                if neighbor not in visited:
+                    visited.add(neighbor)
+                    queue.append(neighbor)
+        
+        # Check if all loaded nodes are in the same component
+        disconnected_loads = loaded_nodes - visited
+        
+        if disconnected_loads:
+            return False
+        
+        return True
+
     def get_visualization_data(
         self,
-        shape: "Shape",
+        shape: Union["Shape", str],
         material: "MaterialProperties",
         loads: List["Load"],
         constraints: List["BoundaryCondition"],
         mesh_size: float,
         element_type: str,
+        with_conditions: bool = True,
     ) -> Tuple[UnstructuredGrid, ndarray, ndarray, ndarray, ndarray]:
         """
         Get mesh and boundary condition data for visualization.
@@ -677,7 +788,7 @@ class TorchFEMKernel(FEAKernel):
         returning data needed for visualization of constraints and loads.
 
         Args:
-            shape: Shape to visualize
+            shape: Shape to visualize or path to STEP file
             material: Material properties
             loads: List of loads to apply
             constraints: List of boundary conditions to apply
@@ -695,10 +806,15 @@ class TorchFEMKernel(FEAKernel):
         import numpy as np
         import pyvista as pv
 
-        # Step 1: Export shape and create mesh
-        with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
-            step_path = tmp.name
-        shape.to_step(step_path)
+        # Step 1: Export shape or use provided STEP file
+        if isinstance(shape, str):
+            # shape is a path to a STEP file
+            step_path = shape
+        else:
+            # shape is a Shape object, export to STEP
+            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+                step_path = tmp.name
+            shape.to_step(step_path)
         torch.set_default_dtype(torch.float64)
 
         nodes, elements = self.mesher.generate_mesh(
@@ -711,6 +827,30 @@ class TorchFEMKernel(FEAKernel):
         elements = elements[:, [1, 0, 2, 3]]
         nodes = nodes.to(torch.float64)
 
+        # Optimization: If no loads/constraints, skip FEM model creation
+        if not with_conditions:
+            nodes_np = nodes.cpu().numpy()
+            elements_np = elements.cpu().numpy()
+
+            # Create VTK cell array for tetrahedra
+            n_cells = elements_np.shape[0]
+            cells = np.hstack(
+                [np.full((n_cells, 1), 4, dtype=np.int64), elements_np]  # 4 nodes per tet
+            ).ravel()
+
+            # Cell types: VTK_TETRA = 10
+            cell_types = np.full(n_cells, 10, dtype=np.uint8)
+
+            pv_mesh = pv.UnstructuredGrid(cells, cell_types, nodes_np)
+
+            # Return empty masks/vectors
+            n_nodes = nodes_np.shape[0]
+            constraint_mask = np.zeros(n_nodes, dtype=bool)
+            force_mask = np.zeros(n_nodes, dtype=bool)
+            force_vectors = np.zeros((0, 3))
+
+            return pv_mesh, nodes_np, constraint_mask, force_mask, force_vectors
+
         # Step 2: Create FEM model
         from torchfem import Solid
 
@@ -721,7 +861,7 @@ class TorchFEMKernel(FEAKernel):
         )
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(model, nodes, elements, loads, constraints)
+        self._apply_boundary_conditions(model, nodes, elements, loads, constraints, mesh_size=mesh_size)
 
         # Step 4: Create PyVista mesh
         nodes_np = nodes.cpu().numpy()

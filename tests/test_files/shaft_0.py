@@ -11,7 +11,11 @@ wp1.move_to(0.0, 0.0).line_to(0.0, 2.2).line_to(10.7, 2.2).line_to(10.7, 3.0).li
     13.165, 3.0
 ).line_to(13.165, 3.65).line_to(15.365, 3.65).line_to(15.365, 3.0).line_to(
     17.83, 3.0
-).line_to(17.83, 0.0).line_to(0.0, 0.0)
+).line_to(
+    17.83, 0.0
+).line_to(
+    0.0, 0.0
+)
 
 # Revolve feature 1
 shape1 = wp1.revolve(6.283185307179586, "X", "NewBodyFeatureOperation")

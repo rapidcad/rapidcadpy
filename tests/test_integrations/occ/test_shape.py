@@ -3,13 +3,14 @@ Tests for Shape functionality including volume calculation and material properti
 """
 
 import pytest
+from rapidcadpy.integrations.occ.app import OpenCascadeApp
 from rapidcadpy.integrations.ocp.app import OpenCascadeOcpApp
 
 
 @pytest.fixture
 def app():
     """Create a fresh OpenCascadeApp instance for each test."""
-    return OpenCascadeOcpApp()
+    return OpenCascadeApp()
 
 
 class TestShapeVolume:
