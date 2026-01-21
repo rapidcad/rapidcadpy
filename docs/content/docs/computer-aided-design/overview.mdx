@@ -1,0 +1,31 @@
+---
+title: Architecture
+description: Overview of the high level architecture of the project.
+---
+
+# App
+Is the virtual equivalent of a CAD application. Workplanes can be created in the app.
+
+# Workplane
+Used to create and manipulate geometry. It contains functions like `extrude`, `line_to`, `circle`, etc.
+Extrude returns a new `Shape` object.
+
+<PythonFunction
+    name="extrude"
+    signature="extrude(distance: float) -> Shape"
+    description="Extrude the active sketch by a distance and return a new 3D shape."
+    params={{
+        distance: {
+            type: 'float',
+            description: 'Extrusion distance.',
+            required: true,
+        },
+    }}
+    returns={{
+        type: 'Shape',
+        description: 'The newly created 3D shape.',
+    }}
+/>
+
+# Shape
+Represents a 3D shape. Supports `union`.

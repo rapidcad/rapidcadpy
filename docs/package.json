@@ -2,6 +2,9 @@
   "name": "rapidcad",
   "version": "0.0.0",
   "private": true,
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "build": "next build",
     "dev": "next dev --turbo",
@@ -9,13 +12,13 @@
     "postinstall": "fumadocs-mdx"
   },
   "dependencies": {
-    "fumadocs-core": "15.7.8",
-    "fumadocs-mdx": "11.8.3",
-    "fumadocs-python": "^0.0.4",
-    "fumadocs-ui": "15.7.8",
-    "next": "15.5.2",
-    "react": "^19.1.1",
-    "react-dom": "^19.1.1",
+    "fumadocs-core": "16.2.5",
+    "fumadocs-mdx": "14.1.0",
+    "fumadocs-python": "^0.0.6",
+    "fumadocs-ui": "16.2.5",
+    "next": "^16.0.10",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "shiki": "^3.12.2"
   },
   "devDependencies": {

@@ -21,6 +21,10 @@ pip install -e .          # Basic install
 pip install -e ".[fea]"   # With FEA support
 ```
 
+# Documentation
+
+[![Docs](https://img.shields.io/badge/docs-online-blue)](https://rapidcadpy-yk28.vercel.app)
+
 ## 🏁 Quick Start
 
 ### Build a Model

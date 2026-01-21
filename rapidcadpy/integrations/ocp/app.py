@@ -21,21 +21,3 @@ class OpenCascadeOcpApp(App):
         from rapidcadpy.integrations.ocp.sketch2d import OccSketch2D
 
         return OccSketch2D
-
-    def fea(
-        self,
-        material: Union["MaterialProperties", str, None] = None,
-        loads: Optional[List["Load"]] = None,
-        constraints: Optional[List["BoundaryCondition"]] = None,
-        mesh_size: float = 2.0,
-        element_type: str = "tet4",
-        verbose: bool = False,
-    ):
-        return self._shapes[0].analyze(
-            material=material,
-            loads=loads,
-            constraints=constraints,
-            mesh_size=mesh_size,
-            element_type=element_type,
-            verbose=verbose,
-        )

@@ -25,6 +25,10 @@ class OccSketch2D(Sketch2D):
 
     This class holds a constructed TopoDS_Face and can extrude it
     into a 3D solid along the workplane's normal direction.
+
+    Additional operations:
+        - ``pipe(diameter)``: sweep a circular profile along the sketch path.
+        - ``sweep(profile)``: sweep an arbitrary *closed* profile sketch along the sketch path.
     """
 
     def _primitive_to_edge(self, primitive):
@@ -182,7 +186,12 @@ class OccSketch2D(Sketch2D):
         # Return the extruded shape
         return OccShape(obj=prism_builder.Shape(), app=self.app)
 
-    def pipe(self, diameter: float) -> OccShape:
+    def pipe(
+        self,
+        diameter: float,
+        is_frenet: bool = True,
+        transition_mode: str = "right",
+    ) -> OccShape:
         """
         Create a pipe (cylindrical extrusion) along the sketch path.
 
@@ -205,6 +214,7 @@ class OccSketch2D(Sketch2D):
         from OCC.Core.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
         from OCC.Core.BRepAdaptor import BRepAdaptor_CompCurve
         from OCC.Core.BRep import BRep_Tool
+        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
 
         # Get the wire that represents the path (spine)
         spine = self._make_wire()
@@ -248,13 +258,32 @@ class OccSketch2D(Sketch2D):
 
         pipe_builder = BRepOffsetAPI_MakePipeShell(spine)
 
-        # Set Frenet mode to automatically handle profile orientation along the path
-        # This prevents twisting and handles corners properly
-        pipe_builder.SetMode(True)  # True = Frenet mode (corrected frame)
+        # Orientation handling
+        pipe_builder.SetMode(bool(is_frenet))
 
-        # Add the profile to the pipe
-        # Parameters: profile_wire, withContact=False, withCorrection=False
-        pipe_builder.Add(profile_wire, False, False)
+        # Transition handling at C1 discontinuities (e.g., polyline corners)
+        trans_map = {
+            "transformed": BRepBuilderAPI_TransitionMode.BRepBuilderAPI_Transformed,
+            "round": BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RoundCorner,
+            "right": BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner,
+        }
+        # NOTE: pythonocc-core's stub typing represents these enum values as ints.
+        # The OCC runtime expects a BRepBuilderAPI_TransitionMode value.
+        from typing import cast
+
+        pipe_builder.SetTransitionMode(
+            cast(
+                BRepBuilderAPI_TransitionMode,
+                trans_map.get(
+                    transition_mode,
+                    BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner,
+                ),
+            )
+        )
+
+        # Add profile: translate/rotate flags
+        # For pipe, we want OCC to rotate the section along the path.
+        pipe_builder.Add(profile_wire, False, True)
 
         # Build the pipe
         pipe_builder.Build()
@@ -304,6 +333,134 @@ class OccSketch2D(Sketch2D):
 
         return OccShape(obj=result_shape, app=self.app)
 
+    def sweep(
+        self,
+        profile: "OccSketch2D",
+        make_solid: bool = True,
+        is_frenet: bool = True,
+        transition_mode: str = "right",
+        auto_align_profile: bool = False,
+        with_contact: bool = False,
+        with_correction: bool = True,
+    ) -> OccShape:
+        """Sweep a *profile* sketch along this sketch (the path).
+
+        This is a generalization of :meth:`pipe`:
+        - ``self`` provides the *spine/path* (a wire)
+        - ``profile`` provides the *section/profile* (a closed wire)
+
+        Notes / expectations:
+        - The ``profile`` sketch must be *closed* (able to form a valid wire).
+        - The resulting shell can optionally be converted to a solid with ``make_solid``.
+        - ``frenet=True`` uses an OCC corrected frame to reduce twisting along the path.
+
+        Args:
+            profile: The cross-section sketch to sweep (typically closed).
+            make_solid: If True, attempt to turn the swept shell into a solid.
+            frenet: If True, use Frenet mode for orientation along the path.
+            with_contact: Passed through to OCC `Add()`.
+            with_correction: Passed through to OCC `Add()`.
+
+        Returns:
+            OccShape: The swept shape.
+        """
+
+        from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+        from OCC.Core.BRepAdaptor import BRepAdaptor_CompCurve
+        from OCC.Core.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pnt, gp_Vec
+        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
+        from OCC.Core.gp import gp_Trsf
+        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
+
+        # Path (spine)
+        spine = self._make_wire()
+
+        # Profile section
+        profile_wire = profile._make_wire()
+
+        # Optional: align the profile's plane so its normal matches the path tangent at the start.
+        # This mimics what `pipe()` does when constructing its circular profile.
+        if auto_align_profile:
+            wire_adaptor = BRepAdaptor_CompCurve(spine)
+            first_param = wire_adaptor.FirstParameter()
+
+            # Start point + tangent
+            start_point: gp_Pnt = wire_adaptor.Value(first_param)
+            tangent_vec = gp_Vec()
+            tmp_p = gp_Pnt()
+            wire_adaptor.D1(first_param, tmp_p, tangent_vec)
+            tangent_dir = gp_Dir(tangent_vec)
+
+            # Choose a stable reference direction to define the rotated frame
+            ref_dir = gp_Dir(0, 0, 1)
+            if abs(tangent_dir.Z()) > 0.99:
+                ref_dir = gp_Dir(1, 0, 0)
+
+            # Build a target frame where the profile plane's normal is tangent to the path
+            target_ax2 = gp_Ax2(start_point, tangent_dir, ref_dir)
+
+            # Current profile frame: use its workplane origin and normal
+            # (profile sketches are planar, so aligning their plane is usually sufficient)
+            p0_3d = profile._workplane._to_3d(0.0, 0.0)
+            prof_origin = gp_Pnt(float(p0_3d[0]), float(p0_3d[1]), float(p0_3d[2]))
+            prof_normal = gp_Dir(
+                float(profile._workplane.normal_vector[0]),
+                float(profile._workplane.normal_vector[1]),
+                float(profile._workplane.normal_vector[2]),
+            )
+            prof_xdir = gp_Dir(
+                float(profile._workplane._local_x[0]),
+                float(profile._workplane._local_x[1]),
+                float(profile._workplane._local_x[2]),
+            )
+            source_ax2 = gp_Ax2(prof_origin, prof_normal, prof_xdir)
+
+            trsf = gp_Trsf()
+            # SetDisplacement expects gp_Ax3 coordinate systems
+            trsf.SetDisplacement(gp_Ax3(source_ax2), gp_Ax3(target_ax2))
+            profile_wire = BRepBuilderAPI_Transform(profile_wire, trsf, True).Shape()
+
+        sweep_builder = BRepOffsetAPI_MakePipeShell(spine)
+
+        # Let OCC manage the moving trihedron.
+        sweep_builder.SetMode(bool(is_frenet))
+
+        # Transition handling at corners
+        trans_map = {
+            "transformed": BRepBuilderAPI_TransitionMode.BRepBuilderAPI_Transformed,
+            "round": BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RoundCorner,
+            "right": BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner,
+        }
+        # NOTE: pythonocc-core's stub typing represents these enum values as ints.
+        # The OCC runtime expects a BRepBuilderAPI_TransitionMode value.
+        from typing import cast
+
+        sweep_builder.SetTransitionMode(
+            cast(
+                BRepBuilderAPI_TransitionMode,
+                trans_map.get(
+                    transition_mode,
+                    BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner,
+                ),
+            )
+        )
+
+        # The `Add` signature is Add(profile, translate, rotate)
+        # We want OCC to rotate the profile along the path; translate is typically False.
+        translate = False
+        rotate = True
+        sweep_builder.Add(profile_wire, translate, rotate)
+        sweep_builder.Build()
+
+        if not sweep_builder.IsDone():
+            raise RuntimeError("Failed to sweep profile along path")
+
+        if make_solid:
+            # For closed profiles OCC can usually cap/solidify the swept shell
+            sweep_builder.MakeSolid()
+
+        return OccShape(obj=sweep_builder.Shape(), app=self.app)
+
     def to_png(
         self,
         file_name: Optional[str] = None,
@@ -326,12 +483,6 @@ class OccSketch2D(Sketch2D):
         """
         # Delegate to the workplane's rendering method
         # We need access to the edges that were used to create this face
-        if (
-            not hasattr(self._workplane, "_extruded_sketches")
-            or not self._workplane._extruded_sketches
-        ):
-            raise ValueError("No sketch edges available for rendering")
-
         try:
             import matplotlib.pyplot as plt
         except ImportError:
@@ -350,11 +501,14 @@ class OccSketch2D(Sketch2D):
         all_points = []
 
         # Get the most recent extruded sketch edges
-        edges = self._workplane._extruded_sketches[-1]
+        # edges = self._workplane._extruded_sketches[-1]
 
         # Process each edge
-        for edge in edges:
-            adaptor = BRepAdaptor_Curve(edge)
+        for edge in self._primitives:
+            occ_edge = self._primitive_to_edge(edge)
+            if occ_edge is None:
+                continue
+            adaptor = BRepAdaptor_Curve(occ_edge)
             curve_type = adaptor.GetType()
 
             if curve_type == GeomAbs_Line:

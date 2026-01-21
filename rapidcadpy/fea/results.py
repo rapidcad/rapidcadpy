@@ -8,6 +8,7 @@ import torch
 import numpy as np
 import pyvista as pv
 
+
 @dataclass
 class FEAResults:
     """Container for FEA analysis results"""
@@ -113,14 +114,17 @@ class FEAResults:
                 )
             from rapidcadpy.fea.boundary_conditions import visualize_boundary_conditions
 
-            visualize_boundary_conditions(
+            conditions_plot = visualize_boundary_conditions(
                 self.model,
                 self.nodes,
                 self.elements,
                 window_size=window_size,
-                jupyter_backend=None if interactive else "static",
+                interactive=interactive,
             )
-            return None  # visualize_boundary_conditions handles display directly
+            if interactive:
+                conditions_plot.show()
+            else:
+                return conditions_plot
 
         # Create PyVista mesh
         points = self.nodes.cpu().numpy()
@@ -456,7 +460,7 @@ class OptimizationResult:
         """
         if filename:
             interactive = False
-            pv.start_xvfb()        # starts a virtual framebuffer
+            pv.start_xvfb()  # starts a virtual framebuffer
             pv.OFF_SCREEN = True
 
         if display == "convergence":

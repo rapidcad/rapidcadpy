@@ -266,7 +266,7 @@ class OccSketch2D(Sketch2D):
 
         # Add the profile to the pipe
         # Parameters: profile_wire, withContact=False, withCorrection=False
-        pipe_builder.Add(profile_wire, False, False)
+        pipe_builder.Add(profile_wire, True, True)
 
         # Build the pipe
         pipe_builder.Build()
@@ -464,3 +464,6 @@ class OccSketch2D(Sketch2D):
         else:
             # Display in interactive window
             plt.show()
+
+    def sweep(self, profile: Sketch2D, make_solid: bool = True, is_frenet: bool = True, transition_mode: str = "right"):
+        raise NotImplementedError("Sweep operation is not implemented for OccSketch2D yet.")

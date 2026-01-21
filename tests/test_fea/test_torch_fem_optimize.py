@@ -13,19 +13,19 @@ def test_torch_fem_optimization_plot():
 
     app = OpenCascadeApp()
     # create the design space
+    # create the design space
     box = app.work_plane("XY").rect(20, 10).extrude(10)
 
-    # Create shape and analyzer (use CUDA if available)
-    analyzer = FEAAnalyzer(
-        box, Material.STEEL, kernel="torch-fem", mesh_size=0.3, device="cuda"
-    )
+    # Create shape and analyzer
+    kernel = TorchFEMKernel()
+    analyzer = FEAAnalyzer(box, Material.STEEL, kernel="torch-fem", mesh_size=1)
 
     # Add boundary conditions
     analyzer.add_constraint(FixedConstraint("x_min"))
-    analyzer.add_load(DistributedLoad("top", force=-10))
-    # analyzer.show(filename="torch_fem_loads.png")
+    analyzer.add_load(DistributedLoad("top", force=-1000))
 
     # Run optimization
+    print("Starting topology optimization...")
     print("Starting topology optimization...")
     result = analyzer.optimize(
         volume_fraction=0.3, 

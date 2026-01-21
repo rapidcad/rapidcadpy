@@ -45,7 +45,7 @@ analyzer.add_load(DistributedLoad("top", force=-1000.0))
 analyzer.show()
 
 # Run analysis
-results = analyzer.solve(verbose=True)
+results = analyzer.solve()
 
 # View results
 print(f"Max stress: {results.max_stress:.2f} MPa")
@@ -170,7 +170,7 @@ Shows:
 Execute the FEA solver:
 
 ```python
-results = analyzer.solve(verbose=True)
+results = analyzer.solve()
 ```
 
 ### Analyze Results
@@ -195,36 +195,6 @@ results.show(display='conditions')    # Boundary conditions
 ```
 
 </Steps>
-
-## Materials Library
-
-RapidCAD-Py includes a library of common engineering materials:
-
-| Material | Young's Modulus (GPa) | Density (g/cm³) | Yield Strength (MPa) |
-|----------|----------------------|-----------------|---------------------|
-| `Material.STEEL` | 210 | 7.85 | 250 |
-| `Material.ALUMINUM_6061` | 69 | 2.70 | 276 |
-| `Material.ALUMINUM_7075` | 72 | 2.81 | 503 |
-| `Material.TITANIUM_GRADE_5` | 114 | 4.43 | 880 |
-| `Material.STAINLESS_STEEL_304` | 193 | 8.00 | 215 |
-| `Material.CARBON_FIBER` | 230 | 1.60 | 600 |
-| `Material.BRASS` | 100 | 8.40 | 200 |
-| `Material.COPPER` | 120 | 8.96 | 70 |
-
-### Using Materials
-
-```python
-from rapidcadpy.fea import Material, FEAAnalyzer, TorchFEMKernel
-
-# Direct usage with analyzer
-kernel = TorchFEMKernel()
-analyzer = FEAAnalyzer(beam, Material.STEEL, kernel)
-
-# Access material properties
-mat = Material.ALUMINUM_6061
-print(f"E = {mat.E} MPa")
-print(f"Density = {mat.density} g/cm³")
-```
 
 ## Results Analysis
 
@@ -363,7 +333,7 @@ analyzer.add_load(DistributedLoad("top", force=-1000.0))
 analyzer.show()
 
 # Solve
-results = analyzer.solve(verbose=True)
+results = analyzer.solve()
 
 # Check results
 print(f"Max deflection: {results.max_displacement:.4f} mm")
@@ -408,7 +378,6 @@ result = analyzer.optimize(
     num_iterations=50,      # Optimization iterations
     penalization=3.0,       # SIMP penalization factor
     filter_radius=1.5,      # Sensitivity filter radius
-    verbose=True,
 )
 
 # View results
@@ -501,7 +470,7 @@ analyzer.add_load(DistributedLoad("top", force=-5000.0))  # Traffic load
 analyzer.show()
 
 # Solve
-results = analyzer.solve(verbose=True)
+results = analyzer.solve()
 
 # Validate design
 if results.safety_factor() > 3.0:  # Higher safety for public structures
@@ -548,7 +517,6 @@ result = analyzer.optimize(
     move_limit=0.2,         # Max density change per iteration
     rho_min=1e-3,          # Minimum density to avoid singularity
     use_autograd=False,     # Use automatic differentiation
-    verbose=True,
 )
 
 # Access optimization history

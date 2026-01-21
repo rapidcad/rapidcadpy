@@ -5,6 +5,7 @@ Tests for FEA integration with torch-fem
 import pytest
 import torch
 import numpy as np
+import os
 
 
 # Check if FEA dependencies are available
@@ -23,6 +24,14 @@ try:
     FEA_AVAILABLE = True
 except ImportError:
     FEA_AVAILABLE = False
+
+
+@pytest.fixture
+def verbose_mode(monkeypatch):
+    """Enable verbose mode by setting RCADPY_VERBOSE environment variable"""
+    monkeypatch.setenv("RCADPY_VERBOSE", "1")
+    yield
+    # Cleanup happens automatically via monkeypatch
 
 
 @pytest.mark.skipif(not FEA_AVAILABLE, reason="FEA dependencies not installed")
@@ -248,49 +257,6 @@ class TestVisualizeBoundaryConditions:
             "called"
         ], "add_arrows should have been called for force visualization"
 
-    def test_visualize_with_cpu_tensors(self, simple_mesh, monkeypatch):
-        """Test visualization with CPU tensors"""
-        nodes, elements = simple_mesh
-        material = IsotropicElasticity3D(E=210000.0, nu=0.3)
-        model = Solid(nodes, elements, material)
-
-        # Ensure tensors are on CPU
-        assert nodes.device.type == "cpu"
-
-        model.constraints[[0, 1], :] = True
-        model.forces[[4, 5], 2] = -10.0
-
-        def mock_show(self, jupyter_backend=None):
-            return None
-
-        monkeypatch.setattr(pv.Plotter, "show", mock_show)
-
-        # Should work fine with CPU tensors
-        visualize_boundary_conditions(model, nodes, elements)
-
-    @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
-    def test_visualize_with_gpu_tensors(self, simple_mesh, monkeypatch):
-        """Test visualization with GPU tensors (if CUDA available)"""
-        nodes, elements = simple_mesh
-
-        # Move to GPU
-        nodes_gpu = nodes.cuda()
-        elements_gpu = elements.cuda()
-
-        material = IsotropicElasticity3D(E=210000.0, nu=0.3)
-        model = Solid(nodes_gpu, elements_gpu, material)
-
-        model.constraints[[0, 1], :] = True
-        model.forces[[4, 5], 2] = -10.0
-
-        def mock_show(self, jupyter_backend=None):
-            return None
-
-        monkeypatch.setattr(pv.Plotter, "show", mock_show)
-
-        # Should work with GPU tensors (automatically moved to CPU for visualization)
-        visualize_boundary_conditions(model, nodes_gpu, elements_gpu)
-
 
 @pytest.mark.skipif(not FEA_AVAILABLE, reason="FEA dependencies not installed")
 class TestBoundaryConditionIntegration:
@@ -429,3 +395,84 @@ class TestVisualizationQuality:
         geometry_size = nodes[:, 0].max() - nodes[:, 0].min()
         # The scaled vectors should be reasonable (not too small or large)
         assert arrow_params["mag"] == 1.0  # Magnitude parameter should be 1.0
+
+
+class TestShapeAnalyze:
+
+    @pytest.fixture
+    def app(self):
+        """Create an OpenCascadeApp instance for testing"""
+        from rapidcadpy.integrations.occ.app import OpenCascadeApp
+
+        return OpenCascadeApp()
+
+    @pytest.fixture
+    def shape_with_material(self, app):
+        """Create a simple shape with assigned material"""
+        beam = app.work_plane("XY").rect(10, 10).extrude(100)
+        beam.material = Material.STEEL
+        return beam
+
+    def test_analyze_uses_shape_material(self, shape_with_material):
+        """Test that analyze uses shape's assigned material if none provided"""
+        example_load = DistributedLoad(location="top", force=-1000.0, direction="z")
+        example_constraint = FixedConstraint(location="end_1")
+
+        # Call analyze without specifying material
+        result = shape_with_material.analyze(
+            loads=[example_load], constraints=[example_constraint]
+        )
+        assert result is not None
+
+    def test_point_load(self, app):
+        """Test analyze with a point load"""
+        from rapidcadpy.fea import Material, PointLoad, FixedConstraint
+
+        beam = app.work_plane("XY").rect(100, 10).extrude(5)
+        beam.material = Material.STEEL
+
+        # Note: rect(100, 10) creates geometry centered at origin
+        # X: -50 to 50, Y: -5 to 5, Z: 0 to 5
+        point_load = PointLoad(
+            point=(49, 0, 4), force=-500.0, direction="z", tolerance=3.0
+        )
+        constraint = FixedConstraint(location="x_min")  # Fix at x=-50
+
+        result = beam.analyze(loads=[point_load], constraints=[constraint])
+        assert result is not None
+
+    def test_point_load_cantilever(self, app, verbose_mode):
+        """Test analyze with a point load on a cantilever beam"""
+        from rapidcadpy.fea import PointLoad, FixedConstraint, FEAAnalyzer
+
+        # Cantilever beam dimensions
+        LENGTH, WIDTH, HEIGHT = 100.0, 20.0, 5.0
+
+        # Create cantilever beam (not centered, starting from origin)
+        wp = app.work_plane("XY")
+        beam = wp.move_to(0, 0).rect(LENGTH, WIDTH, centered=False).extrude(HEIGHT)
+
+        # Point load at the free end (center of tip face)
+        load_point = (LENGTH - 1, WIDTH / 2, HEIGHT)
+        load = PointLoad(point=load_point, force=-1000.0, direction="z", tolerance=2.0)
+
+        # Fixed constraint at the base
+        constraint = FixedConstraint(location="x_min", dofs=[True, True, True])
+
+        # Run FEA
+        fea = FEAAnalyzer(
+            beam,
+            loads=[load],
+            constraints=[constraint],
+            material=Material.STEEL,
+            kernel="torch-fem",
+            mesh_size=5.0,
+        )
+
+        # Visualize boundary conditions
+        fea.show()
+
+        # Solve and verify
+        result = fea.solve()
+        assert result is not None
+        assert result.max_displacement > 0

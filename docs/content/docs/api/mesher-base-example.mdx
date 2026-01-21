@@ -39,7 +39,7 @@ The `MesherBase` class provides an abstract interface for FEA mesh generators. A
 
   <PythonFunction
     name="generate_mesh"
-    signature="generate_mesh(filename, mesh_size=1.0, element_type='tet4', dim=3, verbose=True, **kwargs)"
+    signature="generate_mesh(filename, mesh_size=1.0, element_type='tet4', dim=3, **kwargs)"
     description="Generate mesh from geometry file. This is an abstract method that must be implemented by subclasses."
     params={{
       filename: {
@@ -156,8 +156,7 @@ if mesher.is_available():
     nodes, elements = mesher.generate_mesh(
         filename="part.step",
         mesh_size=0.5,
-        element_type="tet4",
-        verbose=True
+        element_type="tet4"
     )
 ```
 
@@ -190,7 +189,7 @@ class MyCustomMesher(MesherBase):
         return [".step", ".stp", ".stl", ".iges"]
     
     def generate_mesh(self, filename, mesh_size=1.0, element_type="tet4",
-                     dim=3, verbose=True, **kwargs):
+                     dim=3, **kwargs):
         # Validate inputs
         self.validate_inputs(filename, element_type, dim)
         

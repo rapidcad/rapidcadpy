@@ -3,9 +3,9 @@ from rapidcadpy.shape import Shape
 
 
 class OccShape(Shape):
-    def __init__(self, obj, app, material=None) -> None:
+    def __init__(self, obj, app) -> None:
         self.app = app
-        super().__init__(obj, app, material)
+        super().__init__(obj, app)
         # Register this shape with the app
 
     def volume(self) -> float:
@@ -333,7 +333,7 @@ class OccShape(Shape):
 
         return self
 
-    def get_fea_analyzer(self, material, mesh_size=2.0, element_type="tet4"):
+    def get_fea_analyzer(self, material, mesh_size, element_type="tet4"):
         """
         Get FEA analyzer for this OccShape.
 

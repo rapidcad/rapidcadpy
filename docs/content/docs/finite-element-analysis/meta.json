@@ -3,6 +3,7 @@
   "pages": [
     "loads",
     "constraints",
+    "materials",
     "fea-analysis",
     "optimization",
     "visualization"

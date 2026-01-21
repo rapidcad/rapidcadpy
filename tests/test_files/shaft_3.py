@@ -11,7 +11,15 @@ wp1.move_to(0.0, 0.0).line_to(0.0, 2.5).line_to(2.265, 2.5).line_to(
     2.265, 3.15
 ).line_to(4.065, 3.15).line_to(4.065, 2.5).line_to(6.33, 2.5).line_to(
     6.33, 2.1
-).line_to(7.93, 2.1).line_to(7.93, 1.3).line_to(14.13, 1.3).line_to(14.13, 0.0).line_to(
+).line_to(
+    7.93, 2.1
+).line_to(
+    7.93, 1.3
+).line_to(
+    14.13, 1.3
+).line_to(
+    14.13, 0.0
+).line_to(
     0.0, 0.0
 )
 

@@ -230,8 +230,6 @@ class Workplane(ABC):
             up_dir=Vector(z_norm[0], z_norm[1], z_norm[2]),
         )
 
-    # ========== Coordinate system properties and methods ==========
-
     @property
     def normal(self) -> Vector:
         """Get the normal vector of the plane (up_dir)."""
@@ -265,69 +263,6 @@ class Workplane(ABC):
         new_workplane._pending_shapes = self._pending_shapes.copy()
         new_workplane._current_position = self._current_position
         return new_workplane
-
-    @staticmethod
-    def from_dict(transform_dict: Dict[str, Any]) -> "Workplane":
-        """Create a workplane from a dictionary representation."""
-        origin = Vector(
-            transform_dict["origin"]["x"],
-            transform_dict["origin"]["y"],
-            transform_dict["origin"]["z"],
-        )
-
-        x_axis = Vector(
-            transform_dict["x_axis"]["x"],
-            transform_dict["x_axis"]["y"],
-            transform_dict["x_axis"]["z"],
-        )
-
-        y_axis = Vector(
-            transform_dict["y_axis"]["x"],
-            transform_dict["y_axis"]["y"],
-            transform_dict["y_axis"]["z"],
-        )
-
-        z_axis = Vector(
-            transform_dict["z_axis"]["x"],
-            transform_dict["z_axis"]["y"],
-            transform_dict["z_axis"]["z"],
-        )
-
-        return Workplane(origin, x_axis, y_axis, z_axis)
-
-    def to_json(self) -> Dict[str, Any]:
-        """Convert coordinate system to JSON representation."""
-        return {
-            "origin": self.origin.to_json(),
-            "x_dir": {
-                "x": float(self.x_dir.x),
-                "y": float(self.x_dir.y),
-                "z": float(self.x_dir.z),
-            },
-            "y_dir": {
-                "x": float(self.y_dir.x),
-                "y": float(self.y_dir.y),
-                "z": float(self.y_dir.z),
-            },
-            "up_dir": {
-                "x": float(self.up_dir.x),
-                "y": float(self.up_dir.y),
-                "z": float(self.up_dir.z),
-            },
-        }
-
-    @staticmethod
-    def from_json(json_data: Dict[str, Any]) -> "Workplane":
-        """Create a workplane from JSON representation."""
-        origin = Vector.from_json(json_data["origin"])
-        x_dir = Vector.from_json(json_data["x_dir"])
-        y_dir = Vector.from_json(json_data["y_dir"])
-        up_dir = Vector.from_json(json_data["up_dir"])
-        return Workplane(origin, x_dir, y_dir, up_dir)
-
-    def to_python(self):
-        """Generate Python code representation."""
-        return f"Workplane(origin={self.origin.to_python()}, x_dir={self.x_dir.to_python()}, y_dir={self.y_dir.to_python()}, up_dir={self.up_dir.to_python()})"
 
     def round(self, decimals=6):
         """Round coordinate system values to specified decimal places."""
@@ -426,7 +361,7 @@ class Workplane(ABC):
             radius: Radius of the circle
 
         Returns:
-            OccWorkplane: Self for method chaining
+            Workplane: Self for method chaining
         """
         # Store as 2D primitive - conversion to 3D happens in _make_wire
         circle_primitive = Circle(
@@ -436,7 +371,7 @@ class Workplane(ABC):
         self._pending_shapes.append(circle_primitive)
         return self
 
-    def three_point_arc(self, p1: VectorLike, p2: VectorLike) -> "OccWorkplane":
+    def three_point_arc(self, p1: VectorLike, p2: VectorLike) -> "Workplane":
         """
         Create a three-point arc from the current position through p1 to p2.
 
@@ -445,7 +380,7 @@ class Workplane(ABC):
             p2: End point of the arc (x, y)
 
         Returns:
-            OccWorkplane: Self for method chaining
+            Workplane: Self for method chaining
         """
         # Get the current position as the start point
         start_point = self._current_position
