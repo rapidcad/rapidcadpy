@@ -1,8 +1,10 @@
 import argparse
 import glob
+import logging
 import os
 import shutil
 import subprocess
+from datetime import datetime
 
 import h5py
 import numpy as np
@@ -219,7 +221,7 @@ def convert_h5_to_cadquery(
                 return (
                     f"loop{loop_num}=wp_sketch{sketch_num}" + loop_operations[0] + "\n"
                 )
-            elif "Arc" in loop_operations[0]:
+            elif "arc" in loop_operations[0].lower():  # Handle both "Arc" and "arc"
                 loop_string = "".join(loop_operations) + ".close()"
                 return f"loop{loop_num}=wp_sketch{sketch_num}" + loop_string + "\n"
             elif (len(loop_operations) == 1) and (
@@ -543,7 +545,7 @@ def convert_h5_to_cadquery(
         loops_expanded = [f".add(loop{l})" for l in loops]
         return "".join(loops_expanded)
 
-    if os.path.exists(os.path.dirname(save_python_dir)):
+    if os.path.exists(save_python_dir):
         return # skip if file already exists
 
     # Initiate python program string
@@ -689,8 +691,25 @@ if __name__ == "__main__":
     if args.delete_existing:
         shutil.rmtree(os.path.dirname(H5_VEC_FOLDER) + "/cadquery_stl/")
         shutil.rmtree(os.path.dirname(H5_VEC_FOLDER) + "/cadquery/")
+    
     # Set up save cadquery save directory
     root_save_dir = create_save_dir(RAPIDCAD_FOLDER)
+    
+    # Set up logging
+    log_dir = os.path.dirname(H5_VEC_FOLDER) + "/logs"
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, f"conversion_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()  # Also print to console
+        ]
+    )
+    
+    logging.info(f"Starting conversion process. Errors will be logged to: {log_file}")
 
     # file_path_ques = str(input("What file path would you like to save the generated python files to? (default: deepcad_derived/data/cad_vec/cadquery): "))
 
@@ -729,8 +748,15 @@ if __name__ == "__main__":
                     print(f"Successfully generated STL: {stl_file_save_path}")
                 except subprocess.CalledProcessError as e:
                     print(f"Error generating STL: {e}")
+        except TypeError as e:
+            print(f"Error converting file (TypeError): {e}")
+            logging.error(f"TypeError converting {h5_file_path}: {e}")
+        except NotImplementedError as e:
+            print(f"Error converting file (NotImplementedError): {e}")
+            logging.error(f"NotImplementedError converting {h5_file_path}: {e}")
         except Exception as e:
-            print(f"Error converting file: {e}")
+            print(f"Error converting file (Unexpected Error): {type(e).__name__}: {e}")
+            logging.error(f"Unexpected error converting {h5_file_path}: {type(e).__name__}: {e}", exc_info=True)
         
         exit(0)
 
@@ -843,7 +869,45 @@ if __name__ == "__main__":
                             )
 
             except TypeError as e:
-                print(f"ERROR: {h5_vec_path} NO GENERATION: {e}")
+                error_msg = f"TypeError: {h5_vec_path} NO GENERATION: {e}"
+                print(f"ERROR: {error_msg}")
+                logging.error(error_msg)
+                code_files_not_generated += 1
+                no_code.append(h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0])
+
+                # Check if DeepCAD produced the file
+                if os.path.exists(
+                    f"{prefix}/deepcad_stl"
+                    + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+                    + ".stl"
+                ):
+                    file_difference_from_deepcad.append(
+                        "code: "
+                        + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+                    )
+            
+            except NotImplementedError as e:
+                error_msg = f"NotImplementedError: {h5_vec_path} NO GENERATION: {e}"
+                print(f"ERROR: {error_msg}")
+                logging.error(error_msg)
+                code_files_not_generated += 1
+                no_code.append(h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0])
+
+                # Check if DeepCAD produced the file
+                if os.path.exists(
+                    f"{prefix}/deepcad_stl"
+                    + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+                    + ".stl"
+                ):
+                    file_difference_from_deepcad.append(
+                        "code: "
+                        + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
+                    )
+            
+            except Exception as e:
+                error_msg = f"Unexpected Error: {h5_vec_path} NO GENERATION: {type(e).__name__}: {e}"
+                print(f"ERROR: {error_msg}")
+                logging.error(error_msg, exc_info=True)
                 code_files_not_generated += 1
                 no_code.append(h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0])
 
@@ -858,11 +922,22 @@ if __name__ == "__main__":
                         + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
                     )
 
-        print(f"Total number of h5_vec files: {len(h5_files)}")
-        print(f"Successful code file generations: {code_files_successfully_generated}")
-        print(f"STLs generated successfully: {stls_generated_successfully}")
-        print(f"STLs NOT generated: {stls_not_generated}")
-        print (f"Total number of generated files: {gen_file}")
+        summary = f"""
+        Subdirectory {sub_dir} Summary:
+        - Total h5 files: {len(h5_files)}
+        - Successful code generations: {code_files_successfully_generated}
+        - Failed code generations: {code_files_not_generated}
+        - STLs generated successfully: {stls_generated_successfully}
+        - STLs NOT generated: {stls_not_generated}
+        - Total generated files: {gen_file}
+        """
+        print(summary)
+        logging.info(summary)
+        
+        if no_code:
+            logging.warning(f"Files with no code generation in {sub_dir}: {no_code[:10]}{'...' if len(no_code) > 10 else ''}")
+        if no_stl:
+            logging.warning(f"Files with no STL generation in {sub_dir}: {no_stl[:10]}{'...' if len(no_stl) > 10 else ''}")
     
         
     

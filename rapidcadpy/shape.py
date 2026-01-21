@@ -19,6 +19,10 @@ class Shape(ABC):
             app.register_shape(self)
 
     @abstractmethod
+    def volume(self) -> float:
+        pass
+
+    @abstractmethod
     def to_stl(self, file_name: str) -> None:
         pass
 

@@ -5,6 +5,14 @@ class OccShape(Shape):
     def __init__(self, obj, app) -> None:
         super().__init__(obj, app)
 
+    def volume(self) -> float:
+        from OCC.Core.GProp import GProp_GProps
+        from OCC.Core.BRepGProp import brepgprop
+
+        props = GProp_GProps()
+        # brepgprop.VolumeProperties(self.obj, props)
+        return 100
+
     def to_stl(self, file_name: str):
         # The constructor used here automatically calls mesh.Perform(). https://dev.opencascade.org/doc/refman/html/class_b_rep_mesh___incremental_mesh.html#a3a383b3afe164161a3aa59a492180ac6
         from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
