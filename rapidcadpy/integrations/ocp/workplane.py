@@ -86,3 +86,64 @@ class OccWorkplane(Workplane):
         )
 
         return self
+
+    def revolve(
+        self,
+        angle: float,
+        axis: str = "Z",
+        operation: str = "NewBodyFeatureOperation",
+    ) -> "OccWorkplane":
+        """
+        Revolve the current sketch around a specified axis.
+
+        Args:
+            angle: Angle in degrees to revolve (360 for full revolution)
+            axis: Axis to revolve around ('X', 'Y', or 'Z')
+            operation: Operation type (default 'NewBodyFeatureOperation')
+
+        Returns:
+            OccShape: The revolved 3D solid
+        """
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
+        from OCP.gp import gp_Ax1, gp_Pnt, gp_Dir
+        from math import radians
+        from rapidcadpy.integrations.ocp.sketch2d import OccSketch2D
+
+        # Check if there are shapes to revolve
+        if not self._pending_shapes:
+            raise ValueError("No shapes to revolve - sketch is empty")
+
+        # Create a Sketch2D from pending shapes to use existing _make_wire and _make_face
+        sketch2d = OccSketch2D(
+            primitives=self._pending_shapes, workplane=self, app=self.app
+        )
+
+        # Build the face to revolve
+        face = sketch2d._make_face()
+
+        # Map axis string to direction
+        axis_map = {
+            "X": gp_Dir(1, 0, 0),
+            "Y": gp_Dir(0, 1, 0),
+            "Z": gp_Dir(0, 0, 1),
+        }
+
+        axis_dir = axis_map.get(axis.upper(), gp_Dir(0, 0, 1))
+        axis_origin = gp_Pnt(0, 0, 0)
+
+        # Create the revolve axis
+        revolve_axis = gp_Ax1(axis_origin, axis_dir)
+
+        # Perform the revolve operation
+        revol_builder = BRepPrimAPI_MakeRevol(face, revolve_axis, radians(angle*360), True)
+
+        # Get the resulting shape
+        solid = revol_builder.Shape()
+
+        # Clear pending shapes
+        self._clear_pending_shapes()
+
+        # Return OccShape
+        from rapidcadpy.integrations.ocp.shape import OccShape
+
+        return OccShape(obj=solid, app=self.app)

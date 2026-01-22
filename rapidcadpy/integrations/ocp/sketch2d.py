@@ -12,12 +12,13 @@ from OCP.BRepBuilderAPI import (
     BRepBuilderAPI_MakeWire,
     BRepBuilderAPI_WireError,
 )
+from OCP.GC import GC_MakeArcOfCircle
 from OCP.gp import gp_Pnt
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS_Compound
 from rapidcadpy.integrations.ocp.shape import OccShape
-from rapidcadpy.primitives import Circle, Line
+from rapidcadpy.primitives import Arc, Circle, Line
 from rapidcadpy.sketch2d import Sketch2D
 
 
@@ -73,6 +74,25 @@ class OccSketch2D(Sketch2D):
 
             # Create edge from circle
             return BRepBuilderAPI_MakeEdge(circle_gp).Edge()
+        elif isinstance(primitive, Arc):
+            # Convert arc points to 3D
+            start_3d = self._workplane._to_3d(primitive.start[0], primitive.start[1])
+            mid_3d = self._workplane._to_3d(primitive.mid[0], primitive.mid[1])
+            end_3d = self._workplane._to_3d(primitive.end[0], primitive.end[1])
+
+            start_point_ocp = gp_Pnt(start_3d[0], start_3d[1], start_3d[2])
+            mid_point_ocp = gp_Pnt(mid_3d[0], mid_3d[1], mid_3d[2])
+            end_point_ocp = gp_Pnt(end_3d[0], end_3d[1], end_3d[2])
+
+            circle_geom = GC_MakeArcOfCircle(
+                start_point_ocp, mid_point_ocp, end_point_ocp
+            ).Value()
+
+            return BRepBuilderAPI_MakeEdge(circle_geom).Edge()
+        else:
+            raise NotImplementedError(
+                f"Primitive type {type(primitive)} not supported in OCC sketch."
+            )
 
     def _make_wire(self):
         num_primitives = len(self._primitives)
@@ -166,33 +186,113 @@ class OccSketch2D(Sketch2D):
             )
 
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation"
+        self, distance: float, operation: str = "NewBodyFeatureOperation", symmetric: bool=False
     ) -> OccShape:
         """
         Extrude the sketch face along the workplane's normal direction.
 
         Args:
             distance: Distance to extrude (can be negative for opposite direction)
-            operation: Operation type (reserved for future use)
-
+            operation: Operation type - "NewBodyFeatureOperation", "JoinBodyFeatureOperation", "Cut", or "CutOperation"
+            symmetric: Whether to extrude symmetrically in both directions (distance/2 each way)
         Returns:
-            OccShape: The extruded 3D solid
+            OccShape: The extruded 3D solid (or modified existing shape for cut operations)
         """
-        # Calculate extrude vector based on workplane normal
-        up_dir_vec = self._workplane.normal_vector * distance
+        face = self._make_face()
+
+        if symmetric:
+            # For symmetric extrusion, translate the face back by distance/2,
+            # then extrude by the full distance
+            from OCP.gp import gp_Trsf
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+
+            # Calculate translation vector (move back by half distance)
+            half_distance = distance / 2.0
+            translate_vec = self._workplane.normal_vector * (-half_distance)
+            
+            # Create translation transformation
+            transform = gp_Trsf()
+            transform.SetTranslation(
+                gp_Vec(float(translate_vec[0]), float(translate_vec[1]), float(translate_vec[2]))
+            )
+            
+            # Apply transformation to face
+            transform_builder = BRepBuilderAPI_Transform(face, transform, True)
+            face = transform_builder.Shape()
+            
+            # Now extrude by the full distance
+            up_dir_vec = self._workplane.normal_vector * distance
+        else:
+            # Normal extrusion
+            up_dir_vec = self._workplane.normal_vector * distance
 
         # Convert to gp_Vec using indexing to avoid attribute access issues
         extrude_vector = gp_Vec(
             float(up_dir_vec[0]), float(up_dir_vec[1]), float(up_dir_vec[2])
         )
 
-        face = self._make_face()
-
         # Create the prism (extrusion)
         prism_builder: Any = BRepPrimAPI_MakePrism(face, extrude_vector, True)
+        extruded_shape = prism_builder.Shape()
 
-        # Return the extruded shape
-        return OccShape(obj=prism_builder.Shape(), app=self.app)
+        # Handle different operations
+        if operation in ["Cut", "CutOperation"]:
+            # Cut operation - subtract the extruded shape from existing shapes
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
+            
+            # Get all existing shapes from the app
+            if self.app and hasattr(self.app, '_shapes') and self.app._shapes:
+                # Perform cut on all existing shapes
+                modified_shapes = []
+                for existing_shape in self.app._shapes:
+                    if hasattr(existing_shape, 'obj'):
+                        try:
+                            # Subtract the extruded shape from the existing shape
+                            cut_builder = BRepAlgoAPI_Cut(existing_shape.obj, extruded_shape)
+                            cut_builder.Build()
+                            
+                            if cut_builder.IsDone():
+                                # Update the existing shape with the cut result
+                                existing_shape.obj = cut_builder.Shape()
+                                modified_shapes.append(existing_shape)
+                        except Exception:
+                            # If cut fails, keep the original shape
+                            continue
+                
+                # Return the last modified shape (or first if available)
+                if modified_shapes:
+                    return modified_shapes[-1]
+            
+            # If no shapes to cut from, return the extruded shape as-is
+            return OccShape(obj=extruded_shape, app=self.app)
+            
+        elif operation == "JoinBodyFeatureOperation":
+            # Join operation - union with existing shapes
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+            
+            # Get all existing shapes from the app
+            if self.app and hasattr(self.app, '_shapes') and self.app._shapes:
+                # Get the last shape to join with
+                last_shape = self.app._shapes[-1]
+                if hasattr(last_shape, 'obj'):
+                    try:
+                        # Union the extruded shape with the existing shape
+                        fuse_builder = BRepAlgoAPI_Fuse(last_shape.obj, extruded_shape)
+                        fuse_builder.Build()
+                        
+                        if fuse_builder.IsDone():
+                            # Update the existing shape with the union result
+                            last_shape.obj = fuse_builder.Shape()
+                            return last_shape
+                    except Exception:
+                        pass
+            
+            # If join fails, return as new shape
+            return OccShape(obj=extruded_shape, app=self.app)
+        
+        else:
+            # NewBodyFeatureOperation or default - return as new shape
+            return OccShape(obj=extruded_shape, app=self.app)
 
     def pipe(self, diameter: float) -> OccShape:
         """

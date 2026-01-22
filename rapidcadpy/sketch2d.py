@@ -44,7 +44,7 @@ class Sketch2D(ABC):
 
     @abstractmethod
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation"
+        self, distance: float, operation: str = "NewBodyFeatureOperation", symmetric: bool = False
     ) -> Shape:
         """
         Extrude the sketch face along the workplane's normal direction.
