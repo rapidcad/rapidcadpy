@@ -9,7 +9,7 @@ if TYPE_CHECKING:
 
 
 class InventorApp(App):
-    def __init__(self, headless: bool = False):
+    def __init__(self, headless: bool = True):
         try:
             import win32com.client as win32
             from win32com.client import Dispatch, gencache
@@ -410,5 +410,264 @@ class InventorApp(App):
                     if success:
                         break
                 # if not success, skip to next edge
+
+        return created
+
+    def add_thread(
+        self,
+        x: Optional[float] = None,
+        y: Optional[float] = None,
+        z: Optional[float] = None,
+        radius: Optional[float] = None,
+        axis: Optional[str] = None,
+        designation: str = "M8x1.25",
+        thread_class: str = "6H",
+        thread_type: str = "external",
+        right_handed: bool = True,
+        length: Optional[float] = None,
+        full_length: bool = True,
+        offset: float = 0.0,
+        modeled: bool = False,
+        tol: float = 1e-3,
+    ) -> int:
+        """Apply a thread to cylindrical faces that match given geometric properties.
+
+        Searches all cylindrical faces and applies thread features to those matching
+        the specified position, radius, and optionally axis direction.
+
+        Args:
+            x: X coordinate of the cylindrical face center (required if radius provided)
+            y: Y coordinate of the cylindrical face center (optional, for better matching)
+            z: Z coordinate of the cylindrical face center (optional, for better matching)
+            radius: Radius of the cylindrical face to thread (required if x provided)
+            axis: Cylinder axis direction ("X", "Y", or "Z") for better matching (optional)
+            designation: Thread designation (e.g., "M8x1.25", "1/4-20 UNC")
+            thread_class: Thread class/fit (e.g., "6H", "6g")
+            thread_type: "internal" or "external"
+            right_handed: True for right-hand thread, False for left-hand
+            length: Thread length in cm (if None and full_length=False, uses face length)
+            full_length: Whether thread spans the full face length
+            offset: Offset from face start for thread placement
+            modeled: True for modeled thread (actual geometry), False for cosmetic
+            tol: Tolerance for matching position and radius
+
+        Returns:
+            Number of threads created
+
+        Example:
+            # External thread on a shaft at x=5, radius=0.4, along X-axis
+            app.add_thread(x=5, radius=0.4, axis='X', designation="M8x1.25", thread_type="external")
+            
+            # Internal thread in a hole with full position specification
+            app.add_thread(x=0, y=0, z=5, radius=0.35, axis='Z', 
+                          designation="M7x1", thread_type="internal")
+        """
+        try:
+            import win32com.client as win32
+        except ImportError:
+            raise ImportError(
+                "pywin32 is required for Inventor integration. Install with: pip install pywin32"
+            )
+
+        if self.comp_def is None:
+            raise RuntimeError(
+                "No active Inventor part is available for thread operation."
+            )
+
+        constants = win32.constants
+        thread_features = self.comp_def.Features.ThreadFeatures
+        created = 0
+
+        # Helper to check if a face is cylindrical and matches geometric properties
+        def _face_matches(face) -> bool:
+            try:
+                # Check if it's a cylindrical surface
+                if face.SurfaceType != constants.kCylinderSurface:
+                    return False
+                
+                geom = face.Geometry
+                base_pt = getattr(geom, "BasePoint", None)
+                r = getattr(geom, "Radius", None)
+                
+                if base_pt is None or r is None:
+                    return False
+                
+                # Match radius
+                if not (abs(r - radius) <= tol):
+                    return False
+                
+                # Match position (x is required, y/z optional for better precision)
+                if not (abs(base_pt.X - x) <= tol):
+                    return False
+                
+                if y is not None and not (abs(base_pt.Y - y) <= tol):
+                    return False
+                
+                if z is not None and not (abs(base_pt.Z - z) <= tol):
+                    return False
+                
+                # Match axis direction if specified
+                if axis is not None:
+                    axis_vec = getattr(geom, "AxisVector", None)
+                    if axis_vec is not None:
+                        if axis.upper() == "X" and abs(axis_vec.X) < 0.9:
+                            return False
+                        elif axis.upper() == "Y" and abs(axis_vec.Y) < 0.9:
+                            return False
+                        elif axis.upper() == "Z" and abs(axis_vec.Z) < 0.9:
+                            return False
+                
+                return True
+            except Exception:
+                return False
+
+        # Iterate through all faces in all bodies
+        try:
+            bodies = self.comp_def.SurfaceBodies
+        except Exception as e:
+            raise RuntimeError(f"Unable to access surface bodies: {e}")
+
+        for b_idx in range(1, bodies.Count + 1):
+            body = bodies.Item(b_idx)
+            faces = body.Faces
+            
+            for f_idx in range(1, faces.Count + 1):
+                face = faces.Item(f_idx)
+                
+                # If x and radius provided, match specific face
+                if x is not None and radius is not None:
+                    if not _face_matches(face):
+                        continue
+                
+                # Skip if not cylindrical
+                if face.SurfaceType != constants.kCylinderSurface:
+                    continue
+
+                family = "Unknown"
+                try:
+                    if modeled:
+                        print(f"Warning: Modeled threads not yet supported, creating cosmetic thread instead")
+
+                    is_internal = thread_type.lower() == "internal"
+                    
+                    # Fix thread class defaulting if it mismatches the type
+                    # H is internal, g/h are external usually. 
+                    # If user didn't specify class (it's the default "6H"), but type is external, switch to "6g".
+                    if thread_class == "6H" and not is_internal:
+                        thread_class = "6g"
+                    
+                    # Determine thread family (spreadsheet sheet name) based on designation
+                    # Common defaults: "ISO Metric Profile" for metric, "ANSI Unified Screw Threads" for imperial
+                    family = "ISO Metric Profile"
+                    des_clean = designation.strip().upper()
+                    if des_clean.startswith("M"):
+                        family = "ISO Metric Profile"
+                    elif ("-" in des_clean) or ("/" in des_clean) or ("UN" in des_clean):
+                        family = "ANSI Unified Screw Threads"
+
+                    # Create the thread info object first
+                    thread_info = None
+                    last_error = None
+                    
+                    # Strategies to try for thread creation
+                    strategies = []
+                    
+                    # 1. Try the primary family derived from designation
+                    strategies.append(family)
+                    
+                    # 2. Add fallbacks
+                    if family == "ISO Metric Profile":
+                        strategies.append("ANSI Metric M Profile")
+                    elif family == "ANSI Unified Screw Threads":
+                        strategies.append("Unified National")
+                    
+                    # 3. Always try the other common one as last resort
+                    if "ISO Metric Profile" not in strategies:
+                        strategies.append("ISO Metric Profile")
+                        
+                    for strategy_family in strategies:
+                        try:
+                            # Update family for logging
+                            # family = strategy_family # KEEP ORIGINAL FAMILY FOR LOGGING? OR UPDATE?
+                            
+                            thread_info = thread_features.CreateStandardThreadInfo(
+                                is_internal,  # Internal
+                                right_handed, # RightHanded
+                                strategy_family,       # ThreadType (Sheet name)
+                                designation,  # ThreadDesignation
+                                thread_class  # Class
+                            )
+                            # If successful, break
+                            family = strategy_family
+                            break
+                        except Exception as e:
+                            last_error = e
+                            continue
+                    
+                    if thread_info is None:
+                        if last_error:
+                             print(f"Warning: Failed to create thread info for {designation} with families {strategies}: {last_error}")
+                        
+                        if last_error:
+                            raise last_error
+                        else:
+                            raise RuntimeError(f"Could not create thread info for {designation}")
+
+                    # Find a valid start edge from the face
+                    if face.Edges.Count == 0:
+                        print(f"Warning: Face {f_idx} has no edges, cannot add thread.")
+                        continue
+                     
+                    # Heuristic for start edge:
+                    # - If external, we usually want the edge at the start of the cylinder?
+                    # - If internal, same?
+                    # Simple heuristic: Use start_edge = face.Edges.Item(1)
+                    # And try both directions if it fails? Or assume Item(1) works?
+                    # Let's try to be smarter if we have offset/length logic, but for full length, Item(1) is fine.
+                    
+                    start_edge = face.Edges.Item(1)
+
+                    # Add the thread feature using the info object
+                    # Signature per docs:
+                    # ThreadFeatures.Add(Face, StartEdge, ThreadInfo, [DirectionReversed], [FullDepth], [ThreadDepth], [ThreadOffset])
+                    
+                    try:
+                        # Note: We pass positional arguments as much as possible to avoid keyword issues with COM wrapper
+                        if full_length:
+                             # Face, StartEdge, ThreadInfo, DirectionReversed, FullDepth
+                             thread_feature = thread_features.Add(
+                                face, 
+                                start_edge, 
+                                thread_info, 
+                                False, 
+                                True
+                            )
+                        else:
+                            # Face, StartEdge, ThreadInfo, DirectionReversed, FullDepth, ThreadDepth, ThreadOffset
+                            depth = length if length is not None else 1.0 
+                            # If win32com wrapper is strict, we might need to be careful with optional args.
+                            # But usually positional works.
+                            thread_feature = thread_features.Add(
+                                face, 
+                                start_edge,
+                                thread_info, 
+                                False, # DirectionReversed
+                                False, # FullDepth
+                                float(depth), 
+                                float(offset)
+                            )
+                        
+                        created += 1
+                        
+                        if x is not None and radius is not None:
+                            break
+                    except Exception as e:
+                        print(f"Warning: Failed to create thread feature on face {f_idx} (Attempt 1): {e}")
+                        # Could try reversing direction or picking another edge?
+                        continue
+                    
+                except Exception as e:
+                    print(f"Warning: Failed to add thread to face {f_idx} (Designation: {designation}, Family: {family}): {e}")
+                    continue
 
         return created

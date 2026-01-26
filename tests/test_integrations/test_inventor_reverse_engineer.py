@@ -59,7 +59,7 @@ def sample_ipt_complex_shaft():
 
 @pytest.fixture
 def sample_ipt_complex_shaft_6():
-    path = pathlib.Path(__file__).parent.parent / "test_files" / "4.ipt"
+    path = pathlib.Path(__file__).parent.parent / "test_files" / "5.ipt"
     return path.resolve()
 
 
