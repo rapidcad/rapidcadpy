@@ -10,6 +10,9 @@ class InventorShape(Shape):
         super().__init__(obj, app)
         self.app: "InventorApp" = app  # type: ignore
 
+    def volume(self) -> float:
+        return 1.0  # Placeholder implementation
+
     def to_stl(self, file_name: str) -> None:
         """
         Export the shape to STL format using Autodesk Inventor COM API.
@@ -326,3 +329,6 @@ class InventorShape(Shape):
             error_msg += f"Tool solid: {getattr(tool_body, 'IsSolid', 'Unknown')}, "
             error_msg += f"Error: {str(e)}"
             raise RuntimeError(error_msg)
+
+    def to_png(self, file_name: str, view: str = "iso", width: int = 800, height: int = 600, backend: str = "auto") -> None:
+        raise NotImplementedError("to_png is not implemented for InventorShape")

@@ -33,6 +33,11 @@ try:
 except ImportError:
     OpenCascadeOcpApp = None
 
+try:
+    from .integrations.inventor.app import InventorApp
+except ImportError:
+    InventorApp = None
+
 # Essential primitives for fluent modeling
 from .workplane import Workplane
 
@@ -59,4 +64,5 @@ __all__ = [
     # Optional integrations
     "OpenCascadeApp",
     "OpenCascadeOcpApp",
+    "InventorApp",
 ]

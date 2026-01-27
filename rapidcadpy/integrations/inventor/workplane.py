@@ -1,5 +1,5 @@
 import math
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Optional
 
 from win32com.client import constants
 
@@ -22,8 +22,8 @@ class InventorWorkPlane(Workplane):
         # no duplicate point objects in the sketch, use dict
         self.point2d_dict = {}
         self.sketchpoint_dict = {}
-        # Track the start of the current loop for close()
-        self._loop_start: Vertex | None = None
+        # Track the start of the current loop for close() - must be Vertex to match base class
+        self._loop_start: Vertex = Vertex(0, 0)
 
     @classmethod
     def from_origin_normal(
@@ -46,12 +46,23 @@ class InventorWorkPlane(Workplane):
 
         # create a workplane in inventor using up_dir as the normal
         origin_pt = tg.CreatePoint(origin_3d[0], origin_3d[1], origin_3d[2])
-        up_vec = tg.CreateUnitVector(normal_3d[0], normal_3d[1], normal_3d[2])
-        x_vec = tg.CreateUnitVector(1, 0, 0)
-        y_vec = up_vec.CrossProduct(x_vec)
+        normal_vec = tg.CreateUnitVector(normal_3d[0], normal_3d[1], normal_3d[2])
+        
+        # Choose a reference vector that is not parallel to the normal
+        # Check if normal is aligned with X-axis
+        if abs(normal_3d[0]) > 0.9:
+            # Use Y-axis as reference
+            ref_vec = tg.CreateUnitVector(0, 1, 0)
+        else:
+            # Use X-axis as reference
+            ref_vec = tg.CreateUnitVector(1, 0, 0)
+        
+        # Create perpendicular vectors for the workplane
+        x_vec = normal_vec.CrossProduct(ref_vec)
+        y_vec = x_vec.CrossProduct(normal_vec)
 
-        # in inventor the y vector is the up direction
-        work_plane = app.comp_def.WorkPlanes.AddFixed(origin_pt, x_vec, y_vec, False)
+        # in inventor the y vector is the up direction (normal)
+        work_plane = app.comp_def.WorkPlanes.AddFixed(origin_pt, x_vec, normal_vec, False)
         work_plane.Visible = False
 
         # add a sketch on the workplane
@@ -62,39 +73,47 @@ class InventorWorkPlane(Workplane):
         )
 
     @classmethod
-    def xy_plane(cls, app: Any) -> "InventorWorkPlane":
+    def xy_plane(cls, app: Optional[Any] = None, offset: Optional[float] = None) -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the XY orientation at the given origin.
 
         Args:
             app: InventorApp instance
-            origin: Origin point of the workplane
+            offset: Offset distance along the normal (not yet implemented for Inventor)
         Returns:
             New InventorWorkPlane in the XY orientation at the specified origin
         """
+        if app is None:
+            raise ValueError("app parameter is required for InventorWorkPlane")
         return cls(
             app=app,
             sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(3)),
         )
 
     @classmethod
-    def xz_plane(cls, app: Any) -> "InventorWorkPlane":
+    def xz_plane(cls, app: Optional[Any] = None, offset: Optional[float] = None) -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the XZ orientation at the given origin.
 
         Args:
             app: InventorApp instance
+            offset: Offset distance along the normal (not yet implemented for Inventor)
         """
+        if app is None:
+            raise ValueError("app parameter is required for InventorWorkPlane")
         return cls(
             app=app,
             sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(2)),
         )
 
     @classmethod
-    def yz_plane(cls, app: Any) -> "InventorWorkPlane":
+    def yz_plane(cls, app: Optional[Any] = None, offset: Optional[float] = None) -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the YZ orientation at the given origin.
 
         Args:
             app: InventorApp instance
+            offset: Offset distance along the normal (not yet implemented for Inventor)
         """
+        if app is None:
+            raise ValueError("app parameter is required for InventorWorkPlane")
         return cls(
             app=app,
             sketch=app.comp_def.Sketches.Add(app.comp_def.WorkPlanes(1)),
@@ -161,20 +180,19 @@ class InventorWorkPlane(Workplane):
         # Reset current position to origin
         self._current_position = Vertex(0, 0)
         # Reset loop start for the new sketch
-        self._loop_start = None
+        self._loop_start = Vertex(0, 0)
 
-    def close(self) -> "InventorWorkPlane":
+    def close(self) -> "InventorWorkPlane":  # type: ignore[override]
         """Start a new Inventor Sketch on the same workplane.
 
         Useful for segmenting geometry into separate sketches before an extrude.
         """
         # add a line from current position to loop start if they are not the same
-        if self._loop_start is not None:
-            if (
-                abs(self._current_position.x - self._loop_start.x) > 1e-9
-                or abs(self._current_position.y - self._loop_start.y) > 1e-9
-            ):
-                self.line_to(self._loop_start.x, self._loop_start.y)
+        if (
+            abs(self._current_position.x - self._loop_start.x) > 1e-9
+            or abs(self._current_position.y - self._loop_start.y) > 1e-9
+        ):
+            self.line_to(self._loop_start.x, self._loop_start.y)
         self._create_new_sketch()
         return self
 
@@ -277,6 +295,7 @@ class InventorWorkPlane(Workplane):
         self,
         distance: float,
         operation: str = "NewBodyFeatureOperation",
+        both: bool = False,
         symmetric: bool = False,
     ) -> InventorShape:
         """Extrude all sketches in the workplane.
@@ -284,7 +303,8 @@ class InventorWorkPlane(Workplane):
         Args:
             distance: Extrusion distance (positive or negative)
             operation: Operation type for extrusion
-            symmetric: Whether to extrude symmetrically (not yet implemented)
+            both: Whether to extrude both directions (deprecated, use symmetric instead)
+            symmetric: Whether to extrude symmetrically in both directions
 
         Returns:
             InventorShape representing the last extruded body (or combined result)
@@ -299,7 +319,9 @@ class InventorWorkPlane(Workplane):
         }.get(operation, constants.kNewBodyOperation)
 
         # Determine extrusion direction
-        if distance < 0:
+        if symmetric or both:
+            direction = constants.kSymmetricExtentDirection
+        elif distance < 0:
             direction = constants.kNegativeExtentDirection
         else:
             direction = constants.kPositiveExtentDirection

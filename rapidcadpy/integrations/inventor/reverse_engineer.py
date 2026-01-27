@@ -96,6 +96,7 @@ class InventorReverseEngineer:
             self._analyze_sketch(pair["sketch"], wp_var, i + 1)
             self._analyze_feature(pair["feature"], pair["type"], wp_var, i + 1)
         self._analyze_chamfer_feature()
+        self._analyze_thread_features()
 
     def _get_sketch_index(self, target_sketch) -> int:
         """Get the index of a sketch in the sketches collection."""
@@ -591,3 +592,310 @@ class InventorReverseEngineer:
             self.generated_code.append(
                 f"app.chamfer_edge(x={self._fmt(center_x/10)}, radius={self._fmt(radius/10)}, angle={self._fmt(params['angle'])}, distance={self._fmt(params['distance'])})"
             )
+
+    def _analyze_thread_feature(self, thread_feature) -> Dict:
+        """
+        Analyze a thread feature and extract its parameters.
+
+        Args:
+            thread_feature: Inventor ThreadFeature object
+
+        Returns:
+            Dictionary containing thread information
+        """
+        thread_info = {
+            "feature_type": "Thread",
+            "name": thread_feature.Name,
+            "suppressed": thread_feature.Suppressed,
+        }
+
+        try:
+            # Get thread specification
+            thread_spec = thread_feature.ThreadInfo
+            
+            # Get cylindrical face information for x and radius (similar to chamfer approach)
+            if thread_feature.ThreadedFace:
+                thread_info["face_type"] = "Cylindrical"
+                threaded_face_obj = thread_feature.ThreadedFace
+                
+                # Check if it's a Faces collection or a single Face
+                try:
+                    # If it's a collection, get the first face
+                    if hasattr(threaded_face_obj, 'Count'):
+                        if threaded_face_obj.Count > 0:
+                            face = threaded_face_obj.Item(1)
+                            print(f"Got face from Faces collection (count: {threaded_face_obj.Count})")
+                        else:
+                            print("Warning: ThreadedFace collection is empty")
+                            face = None
+                    else:
+                        # It's a single face
+                        face = threaded_face_obj
+                        print("Got single face object")
+                except Exception as e:
+                    print(f"Warning: Could not access ThreadedFace: {e}")
+                    face = None
+                
+                if face is not None:
+                    try:
+                        # Get face geometry for position and radius
+                        geom = face.Geometry
+                        
+                        # Method 1: Try to get BasePoint and Radius directly
+                        if hasattr(geom, "BasePoint") and hasattr(geom, "Radius"):
+                            try:
+                                base_pt = geom.BasePoint
+                                thread_info["x"] = round(base_pt.X, 6)
+                                thread_info["y"] = round(base_pt.Y, 6)
+                                thread_info["z"] = round(base_pt.Z, 6)
+                                thread_info["radius"] = round(geom.Radius, 6)
+                                print(f"Thread face position (BasePoint): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})")
+                                print(f"Thread face radius: {thread_info['radius']}")
+                            except Exception as e:
+                                print(f"Warning: BasePoint/Radius extraction failed: {e}")
+                        
+                        # Method 2: Get from circular edges (similar to chamfer approach)
+                        if "x" not in thread_info or "radius" not in thread_info:
+                            try:
+                                edges = face.Edges
+                                for e_idx in range(1, edges.Count + 1):
+                                    edge = edges.Item(e_idx)
+                                    # Look for circular edges (CurveType 5124)
+                                    if edge.CurveType == 5124:
+                                        edge_geom = edge.Geometry
+                                        if hasattr(edge_geom, "Center") and hasattr(edge_geom, "Radius"):
+                                            center = edge_geom.Center
+                                            thread_info["x"] = round(center.X, 6)
+                                            thread_info["y"] = round(center.Y, 6)
+                                            thread_info["z"] = round(center.Z, 6)
+                                            thread_info["radius"] = round(edge_geom.Radius, 6)
+                                            print(f"Thread face position (from edge): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})")
+                                            print(f"Thread face radius (from edge): {thread_info['radius']}")
+                                            break
+                            except Exception as e:
+                                print(f"Warning: Edge extraction failed: {e}")
+                        
+                        # Method 3: Use face evaluator range box
+                        if "x" not in thread_info or "radius" not in thread_info:
+                            try:
+                                evaluator = face.Evaluator
+                                range_box = evaluator.RangeBox
+                                min_pt = range_box.MinPoint
+                                max_pt = range_box.MaxPoint
+                                
+                                if "x" not in thread_info:
+                                    thread_info["x"] = round((min_pt.X + max_pt.X) / 2, 6)
+                                    thread_info["y"] = round((min_pt.Y + max_pt.Y) / 2, 6)
+                                    thread_info["z"] = round((min_pt.Z + max_pt.Z) / 2, 6)
+                                    print(f"Thread face position (from range): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})")
+                                
+                                if "radius" not in thread_info:
+                                    # Try to get radius from geometry again
+                                    if hasattr(geom, "Radius"):
+                                        thread_info["radius"] = round(geom.Radius, 6)
+                                        print(f"Thread face radius (from geom): {thread_info['radius']}")
+                            except Exception as e:
+                                print(f"Warning: Range box extraction failed: {e}")
+                        
+                        # Get cylinder axis direction for better matching
+                        if hasattr(geom, "AxisVector"):
+                            try:
+                                axis_vec = geom.AxisVector
+                                # Determine primary axis direction
+                                if abs(axis_vec.X) > 0.9:
+                                    thread_info["axis"] = "X"
+                                elif abs(axis_vec.Y) > 0.9:
+                                    thread_info["axis"] = "Y"
+                                elif abs(axis_vec.Z) > 0.9:
+                                    thread_info["axis"] = "Z"
+                                print(f"Thread face axis: {thread_info.get('axis', 'Unknown')}")
+                            except Exception as e:
+                                print(f"Warning: Axis extraction failed: {e}")
+                        
+                    except Exception as e:
+                        print(f"Warning: Could not extract face geometry: {e}")
+                        import traceback
+                        traceback.print_exc()
+
+            # Thread designation - try different attribute names
+            designation = None
+            for attr_name in ["Designation", "ThreadDesignation", "Size"]:
+                try:
+                    designation = getattr(thread_spec, attr_name, None)
+                    if designation:
+                        break
+                except Exception:
+                    continue
+            
+            if not designation:
+                # Try to build designation from thread size properties
+                try:
+                    # Some threads have Size, Pitch, etc.
+                    if hasattr(thread_spec, "NominalDiameter"):
+                        nominal = thread_spec.NominalDiameter
+                        if hasattr(thread_spec, "Pitch"):
+                            pitch = thread_spec.Pitch
+                            designation = f"M{nominal}x{pitch}"
+                        else:
+                            designation = f"M{nominal}"
+                except Exception:
+                    pass
+            
+            thread_info["designation"] = designation if designation else "M8x1.25"
+
+            # Thread class/fit - try different attribute names
+            thread_class = None
+            for attr_name in ["ThreadClass", "Class", "FitClass"]:
+                try:
+                    thread_class = getattr(thread_spec, attr_name, None)
+                    if thread_class:
+                        break
+                except Exception:
+                    continue
+            thread_info["thread_class"] = thread_class if thread_class else "6H"
+
+            # Direction (Right-hand or Left-hand)
+            try:
+                thread_info["right_handed"] = getattr(thread_spec, "RightHanded", True)
+            except Exception:
+                thread_info["right_handed"] = True
+
+            # Check if it's a modeled thread or cosmetic thread
+            thread_info["modeled"] = thread_feature.ThreadedFace is not None
+
+            # Thread length
+            try:
+                if hasattr(thread_spec, "ThreadLength"):
+                    length = thread_spec.ThreadLength
+                    thread_info["length"] = length
+                    thread_info["length_cm"] = length  # Already in cm
+            except Exception:
+                pass
+
+            # Full length or partial
+            try:
+                thread_info["full_length"] = getattr(thread_spec, "FullLength", False)
+            except Exception:
+                thread_info["full_length"] = False
+
+            # Thread offset (if not starting at face)
+            try:
+                offset = getattr(thread_spec, "ThreadOffset", 0)
+                thread_info["offset"] = offset if offset else 0
+            except Exception:
+                thread_info["offset"] = 0
+
+            # Internal vs External thread
+            try:
+                thread_type = getattr(thread_spec, "ThreadType", None)
+                if thread_type is not None:
+                    thread_info["internal"] = thread_type == 67587  # kInternalThread
+                    thread_info["external"] = thread_type == 67586  # kExternalThread
+                else:
+                    # Fallback: check thread type string
+                    thread_type_str = str(thread_spec).lower()
+                    thread_info["internal"] = "internal" in thread_type_str
+                    thread_info["external"] = not thread_info["internal"]
+            except Exception:
+                # Default to external
+                thread_info["internal"] = False
+                thread_info["external"] = True
+
+        except Exception as e:
+            print(f"Error analyzing thread feature: {e}")
+            import traceback
+            traceback.print_exc()
+
+        # Validate that we have critical parameters for reconstruction
+        if "x" not in thread_info or "radius" not in thread_info:
+            print(f"Warning: Thread '{thread_info.get('name')}' missing position/radius - reconstruction may fail")
+        else:
+            print(f"✓ Thread extracted: x={thread_info['x']}, radius={thread_info['radius']}, {thread_info['designation']}")
+
+        return thread_info
+
+    def _generate_thread_code(self, thread_info: Dict) -> List[str]:
+        """
+        Generate Python code for creating a thread feature.
+
+        Args:
+            thread_info: Dictionary with thread parameters
+
+        Returns:
+            List of code lines
+        """
+        code_lines = []
+
+        # Add comment with thread info
+        designation = thread_info.get('designation', 'Unknown')
+        thread_type = "internal" if thread_info.get("internal") else "external"
+        code_lines.append(f"# Thread: {designation} ({thread_type})")
+
+        # Generate thread creation code
+        code_lines.append("thread = app.add_thread(")
+        
+        # Add geometric parameters if available (critical for face matching)
+        if "x" in thread_info and "radius" in thread_info:
+            code_lines.append(f"    x={self._fmt(thread_info['x'])},  # Cylindrical face center X")
+            code_lines.append(f"    radius={self._fmt(thread_info['radius'])},  # Cylindrical face radius")
+            
+            # Optionally add Y/Z if non-zero (for non-axial cylinders)
+            if "y" in thread_info and abs(thread_info['y']) > 1e-6:
+                code_lines.append(f"    y={self._fmt(thread_info['y'])},  # Cylindrical face center Y")
+            if "z" in thread_info and abs(thread_info['z']) > 1e-6:
+                code_lines.append(f"    z={self._fmt(thread_info['z'])},  # Cylindrical face center Z")
+            
+            # Add axis direction for better matching
+            if "axis" in thread_info:
+                code_lines.append(f"    axis='{thread_info['axis']}',  # Cylinder axis direction")
+        else:
+            code_lines.append("    # WARNING: Missing x/radius - may not match correct face!")
+        
+        code_lines.append(f"    designation='{thread_info.get('designation', 'M8x1.25')}',")
+        code_lines.append(f"    thread_class='{thread_info.get('thread_class', '6H')}',")
+        code_lines.append(f"    thread_type='{thread_type}',")
+        code_lines.append(f"    right_handed={thread_info.get('right_handed', True)},")
+
+        if not thread_info.get("full_length"):
+            length = thread_info.get("length_cm", 0)
+            if length > 0:
+                code_lines.append(f"    length={self._fmt(length)},")
+        else:
+            code_lines.append(f"    full_length=True,")
+
+        offset = thread_info.get("offset", 0)
+        if offset > 0:
+            code_lines.append(f"    offset={self._fmt(offset)},")
+
+        code_lines.append(f"    modeled={thread_info.get('modeled', False)}")
+        code_lines.append(")")
+
+        return code_lines
+
+    def _analyze_thread_features(self):
+        """
+        Process all thread features in the part and add code generation.
+        """
+        try:
+            thread_features = self.comp_def.Features.ThreadFeatures
+
+            if thread_features.Count == 0:
+                return
+
+            self.generated_code.append("")
+            self.generated_code.append("# === Thread Features ===")
+
+            for i in range(1, thread_features.Count + 1):
+                thread_feature = thread_features.Item(i)
+
+                # Skip suppressed features if needed
+                if thread_feature.Suppressed:
+                    continue
+
+                thread_info = self._analyze_thread_feature(thread_feature)
+                thread_code = self._generate_thread_code(thread_info)
+                self.generated_code.extend(thread_code)
+                self.generated_code.append("")
+
+        except Exception as e:
+            print(f"Error processing thread features: {e}")
