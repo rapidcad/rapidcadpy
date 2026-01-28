@@ -186,7 +186,10 @@ class OccSketch2D(Sketch2D):
             )
 
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation", symmetric: bool=False
+        self,
+        distance: float,
+        operation: str = "NewBodyFeatureOperation",
+        symmetric: bool = False,
     ) -> OccShape:
         """
         Extrude the sketch face along the workplane's normal direction.
@@ -209,17 +212,21 @@ class OccSketch2D(Sketch2D):
             # Calculate translation vector (move back by half distance)
             half_distance = distance / 2.0
             translate_vec = self._workplane.normal_vector * (-half_distance)
-            
+
             # Create translation transformation
             transform = gp_Trsf()
             transform.SetTranslation(
-                gp_Vec(float(translate_vec[0]), float(translate_vec[1]), float(translate_vec[2]))
+                gp_Vec(
+                    float(translate_vec[0]),
+                    float(translate_vec[1]),
+                    float(translate_vec[2]),
+                )
             )
-            
+
             # Apply transformation to face
             transform_builder = BRepBuilderAPI_Transform(face, transform, True)
             face = transform_builder.Shape()
-            
+
             # Now extrude by the full distance
             up_dir_vec = self._workplane.normal_vector * distance
         else:
@@ -239,18 +246,20 @@ class OccSketch2D(Sketch2D):
         if operation in ["Cut", "CutOperation"]:
             # Cut operation - subtract the extruded shape from existing shapes
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Cut
-            
+
             # Get all existing shapes from the app
-            if self.app and hasattr(self.app, '_shapes') and self.app._shapes:
+            if self.app and hasattr(self.app, "_shapes") and self.app._shapes:
                 # Perform cut on all existing shapes
                 modified_shapes = []
                 for existing_shape in self.app._shapes:
-                    if hasattr(existing_shape, 'obj'):
+                    if hasattr(existing_shape, "obj"):
                         try:
                             # Subtract the extruded shape from the existing shape
-                            cut_builder = BRepAlgoAPI_Cut(existing_shape.obj, extruded_shape)
+                            cut_builder = BRepAlgoAPI_Cut(
+                                existing_shape.obj, extruded_shape
+                            )
                             cut_builder.Build()
-                            
+
                             if cut_builder.IsDone():
                                 # Update the existing shape with the cut result
                                 existing_shape.obj = cut_builder.Shape()
@@ -258,38 +267,38 @@ class OccSketch2D(Sketch2D):
                         except Exception:
                             # If cut fails, keep the original shape
                             continue
-                
+
                 # Return the last modified shape (or first if available)
                 if modified_shapes:
                     return modified_shapes[-1]
-            
+
             # If no shapes to cut from, return the extruded shape as-is
             return OccShape(obj=extruded_shape, app=self.app)
-            
+
         elif operation == "JoinBodyFeatureOperation":
             # Join operation - union with existing shapes
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            
+
             # Get all existing shapes from the app
-            if self.app and hasattr(self.app, '_shapes') and self.app._shapes:
+            if self.app and hasattr(self.app, "_shapes") and self.app._shapes:
                 # Get the last shape to join with
                 last_shape = self.app._shapes[-1]
-                if hasattr(last_shape, 'obj'):
+                if hasattr(last_shape, "obj"):
                     try:
                         # Union the extruded shape with the existing shape
                         fuse_builder = BRepAlgoAPI_Fuse(last_shape.obj, extruded_shape)
                         fuse_builder.Build()
-                        
+
                         if fuse_builder.IsDone():
                             # Update the existing shape with the union result
                             last_shape.obj = fuse_builder.Shape()
                             return last_shape
                     except Exception:
                         pass
-            
+
             # If join fails, return as new shape
             return OccShape(obj=extruded_shape, app=self.app)
-        
+
         else:
             # NewBodyFeatureOperation or default - return as new shape
             return OccShape(obj=extruded_shape, app=self.app)
@@ -565,5 +574,108 @@ class OccSketch2D(Sketch2D):
             # Display in interactive window
             plt.show()
 
-    def sweep(self, profile: Sketch2D, make_solid: bool = True, is_frenet: bool = True, transition_mode: str = "right"):
-        raise NotImplementedError("Sweep operation is not implemented for OccSketch2D yet.")
+    def sweep(
+        self,
+        profile: Sketch2D,
+        make_solid: bool = True,
+        is_frenet: bool = True,
+        transition_mode: str = "right",
+    ) -> OccShape:
+        """
+        Sweep a profile along this sketch's path to create a 3D shape.
+
+        This method uses the current sketch as the sweep path (spine) and
+        sweeps the provided profile along it to create a solid or shell.
+
+        Args:
+            profile: A Sketch2D defining the cross-section profile to sweep.
+                    Must be a closed wire (e.g., a rectangle, circle, or closed polygon).
+            make_solid: If True (default), creates a solid. If False, creates a shell.
+            is_frenet: If True (default), uses Frenet frame for profile orientation.
+                      This keeps the profile perpendicular to the path.
+            transition_mode: Transition mode at path corners. Options:
+                           - "right": Right corner (sharp)
+                           - "round": Rounded corner
+                           - "transformed": Transformed corner
+
+        Returns:
+            OccShape: The resulting swept 3D shape
+
+        Raises:
+            ValueError: If the profile sketch is empty or invalid
+            RuntimeError: If the sweep operation fails
+
+        Example:
+            # Create a path
+            path = app.work_plane("XY").line_to(10, 0).line_to(10, 10)
+
+            # Create a circular profile
+            profile = app.work_plane("YZ").circle(1.0)
+
+            # Sweep the circle along the path
+            shape = path.sweep(profile)
+        """
+        from OCP.BRepBuilderAPI import (
+            BRepBuilderAPI_MakeEdge,
+            BRepBuilderAPI_MakeWire,
+            BRepBuilderAPI_MakeFace,
+        )
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
+        from OCP.gp import gp_Ax2, gp_Dir, gp_Pnt, gp_Vec
+        from OCP.BRepAdaptor import BRepAdaptor_CompCurve
+        from OCP.BRep import BRep_Tool
+
+        # Get the spine (path) from this sketch
+        spine = self._make_wire()
+
+        # Get the profile wire from the provided sketch
+        if not isinstance(profile, OccSketch2D):
+            raise ValueError(
+                "Profile must be an OccSketch2D instance. "
+                "Create it using app.work_plane(...).circle/rect/etc."
+            )
+
+        profile_wire = profile._make_wire()
+
+        # Set up the pipe shell builder with the spine
+        pipe_builder = BRepOffsetAPI_MakePipeShell(spine)
+
+        # Set Frenet mode for profile orientation
+        if is_frenet:
+            pipe_builder.SetMode(True)  # Frenet mode
+
+        # Set transition mode
+        if transition_mode.lower() == "round":
+            pipe_builder.SetTransitionMode(
+                BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RoundCorner
+            )
+        elif transition_mode.lower() == "transformed":
+            pipe_builder.SetTransitionMode(
+                BRepBuilderAPI_TransitionMode.BRepBuilderAPI_Transformed
+            )
+        else:
+            pipe_builder.SetTransitionMode(
+                BRepBuilderAPI_TransitionMode.BRepBuilderAPI_RightCorner
+            )
+
+        # Add the profile to the pipe
+        # Parameters: profile, withContact=False, withCorrection=True
+        pipe_builder.Add(profile_wire, False, True)
+
+        # Build the sweep
+        pipe_builder.Build()
+
+        if not pipe_builder.IsDone():
+            raise RuntimeError(
+                "Failed to create sweep - the profile could not be swept along the path. "
+                "Ensure the profile is properly oriented relative to the path start."
+            )
+
+        # Make solid if requested
+        if make_solid:
+            pipe_builder.MakeSolid()
+
+        result_shape = pipe_builder.Shape()
+
+        return OccShape(obj=result_shape, app=self.app)

@@ -107,6 +107,18 @@ class App:
         if not shapes and not workplanes:
             raise ValueError("No shapes or workplanes to display")
 
+        # Configure PyVista for headless rendering when saving screenshot
+        if screenshot is not None:
+            # Try to start virtual framebuffer for headless environments
+            try:
+                pv.start_xvfb()
+            except Exception:
+                # If Xvfb fails, try to use OSMesa or other available backend
+                pass
+
+            # Ensure off-screen mode is enabled
+            pv.OFF_SCREEN = True
+
         # Create plotter - use off-screen mode if saving screenshot
         plotter = pv.Plotter(
             window_size=[width, height], off_screen=(screenshot is not None)
@@ -241,6 +253,203 @@ class App:
             # Interactive mode - open window
             plotter.show()
 
+    def render_3d(
+        self,
+        width: int = 1200,
+        height: int = 800,
+        show_axes: bool = False,
+        screenshot: Optional[str] = None,
+        camera_angle: str = "iso",
+        color: str = "lightgray",
+        metallic: float = 0.1,
+        roughness: float = 0.5,
+        lighting: bool = True,
+        show_edges: bool = True,
+        edge_color: str = "black",
+        line_width: float = 1.0,
+        ambient: float = 0.3,
+        diffuse: float = 0.7,
+        specular: float = 0.3,
+    ) -> None:
+        """
+        Render shapes with high-quality visualization (no sketches, solid appearance).
+
+        This method provides a clean rendering of just the final 3D shapes without
+        transparency or sketch overlays, suitable for presentations and final visuals.
+
+        Args:
+            width: Window width in pixels (default: 1200)
+            height: Window height in pixels (default: 800)
+            show_axes: Whether to show coordinate axes (default: False)
+            screenshot: Optional path to save screenshot instead of showing interactively
+            camera_angle: Camera view angle - "iso", "x", "y", or "z" (default: "iso")
+            color: Color for all shapes (default: "lightgray")
+            metallic: Metallic appearance (0-1, default: 0.1)
+            roughness: Surface roughness (0-1, default: 0.5)
+            lighting: Whether to use enhanced lighting (default: True)
+            show_edges: Whether to show edges (default: True)
+            edge_color: Color of the edges (default: "black")
+            line_width: Width of edge lines (default: 1.0)
+            ambient: Ambient light contribution (0-1, default: 0.3)
+            diffuse: Diffuse light contribution (0-1, default: 0.7)
+            specular: Specular light contribution (0-1, default: 0.3)
+
+        Raises:
+            ImportError: If PyVista is not installed
+            ValueError: If no shapes to display
+        """
+        try:
+            import pyvista as pv
+        except ImportError:
+            raise ImportError(
+                "PyVista is required for 3D rendering. Install with: pip install pyvista"
+            )
+
+        import os
+
+        shapes = self.get_shapes()
+
+        if not shapes:
+            raise ValueError("No shapes to render")
+
+        # Configure PyVista for headless rendering when saving screenshot
+        if screenshot is not None:
+            try:
+                pv.start_xvfb()
+            except Exception:
+                pass
+            pv.OFF_SCREEN = True
+
+        # Create plotter with better rendering settings
+        plotter = pv.Plotter(
+            window_size=[width, height], off_screen=(screenshot is not None)
+        )
+        plotter.set_background("white")
+
+        # Add shapes to the plotter (no sketches, no transparency)
+        for idx, shape in enumerate(shapes):
+            # Export shape to temporary STL file for the solid surface
+            with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
+                tmp_stl = tmp.name
+
+            try:
+                shape.to_stl(tmp_stl)
+                mesh = pv.read(tmp_stl)
+
+                # Add mesh with solid appearance - no tessellation edges
+                if lighting:
+                    plotter.add_mesh(
+                        mesh,
+                        color=color,
+                        smooth_shading=True,
+                        pbr=True,
+                        metallic=metallic,
+                        roughness=roughness,
+                        show_edges=False,  # Don't show tessellation edges
+                        ambient=ambient,
+                        diffuse=diffuse,
+                        specular=specular,
+                    )
+                else:
+                    plotter.add_mesh(
+                        mesh,
+                        color=color,
+                        smooth_shading=True,
+                        show_edges=False,  # Don't show tessellation edges
+                        ambient=ambient,
+                        diffuse=diffuse,
+                        specular=specular,
+                    )
+
+                # Add CAD edges separately if requested
+                if show_edges and hasattr(shape, "obj"):
+                    try:
+                        import numpy as np
+                        from OCP.TopExp import TopExp_Explorer
+                        from OCP.TopAbs import TopAbs_EDGE
+                        from OCP.BRepAdaptor import BRepAdaptor_Curve
+                        from OCP.TopoDS import TopoDS
+
+                        # Extract all topological edges from the shape
+                        edge_explorer = TopExp_Explorer(shape.obj, TopAbs_EDGE)
+
+                        while edge_explorer.More():
+                            edge = TopoDS.Edge_s(edge_explorer.Current())
+
+                            # Sample points along the edge curve
+                            curve_adaptor = BRepAdaptor_Curve(edge)
+                            first_param = curve_adaptor.FirstParameter()
+                            last_param = curve_adaptor.LastParameter()
+
+                            # Sample more points for smoother edge display
+                            num_points = 50
+                            points = []
+                            for i in range(num_points + 1):
+                                param = (
+                                    first_param
+                                    + (last_param - first_param) * i / num_points
+                                )
+                                pnt = curve_adaptor.Value(param)
+                                points.append([pnt.X(), pnt.Y(), pnt.Z()])
+
+                            # Create polyline for this edge
+                            if len(points) > 1:
+                                points_array = np.array(points)
+                                polyline = pv.lines_from_points(points_array)
+                                plotter.add_mesh(
+                                    polyline,
+                                    color=edge_color,
+                                    line_width=line_width,
+                                    render_lines_as_tubes=False,
+                                )
+
+                            edge_explorer.Next()
+
+                    except Exception as e:
+                        # If edge extraction fails, silently continue
+                        pass
+
+            finally:
+                if os.path.exists(tmp_stl):
+                    os.remove(tmp_stl)
+
+        # Configure view
+        if show_axes:
+            plotter.add_axes()
+
+        # Enhanced lighting for better rendering
+        if lighting:
+            plotter.enable_lightkit()
+
+            # Add directional light from Y direction
+            light = pv.Light()
+            light.position = (0, -100, 0)  # Light coming from +Y direction
+            light.focal_point = (0, 0, 0)  # Pointing to origin
+            light.intensity = 0.8
+            plotter.add_light(light)
+
+        # Set camera position based on camera_angle parameter
+        if camera_angle.lower() == "iso":
+            plotter.camera_position = "iso"
+        elif camera_angle.lower() == "x":
+            plotter.view_yz()
+        elif camera_angle.lower() == "y":
+            plotter.view_xz()
+        elif camera_angle.lower() == "z":
+            plotter.view_xy()
+        else:
+            plotter.camera_position = "iso"
+
+        # Reset camera to fill frame with minimal margins (after setting view)
+        plotter.reset_camera(bounds=None, render=True)
+        plotter.camera.zoom(1.2)  # Zoom in to reduce margins
+
+        # Show or save
+        if screenshot:
+            plotter.show(screenshot=screenshot)
+        else:
+            plotter.show()
+
     def _add_sketch_to_plotter(
         self, plotter, workplane, sketch_primitives, color: str, label: str
     ) -> None:
@@ -364,3 +573,17 @@ class App:
         # Combine all shapes into one
         combined_shape = self._shapes[0]
         combined_shape.to_step(file_name)
+
+    def to_stl(self, file_name: str, ascii: bool = False) -> None:
+        """Export all shapes in the app to a single STL file.
+
+        Args:
+            file_name: Path to the output STL file
+            ascii: Whether to export as ASCII STL (default: False - binary STL)
+        """
+        if not self._shapes:
+            raise ValueError("No shapes to export")
+
+        # Combine all shapes into one
+        combined_shape = self._shapes[0]
+        combined_shape.to_stl(file_name)

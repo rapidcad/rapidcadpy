@@ -44,7 +44,10 @@ class Sketch2D(ABC):
 
     @abstractmethod
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation", symmetric: bool = False
+        self,
+        distance: float,
+        operation: str = "NewBodyFeatureOperation",
+        symmetric: bool = False,
     ) -> Shape:
         """
         Extrude the sketch face along the workplane's normal direction.
@@ -62,10 +65,13 @@ class Sketch2D(ABC):
     def pipe(self, diameter: float): ...
 
     @abstractmethod
-    def sweep(self, profile: "Sketch2D",
+    def sweep(
+        self,
+        profile: "Sketch2D",
         make_solid: bool = True,
         is_frenet: bool = True,
-        transition_mode: str = "right",): ...
+        transition_mode: str = "right",
+    ): ...
 
     @abstractmethod
     def to_png(

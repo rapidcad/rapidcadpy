@@ -98,22 +98,22 @@ class Sketch3D(ABC):
         """
         if not self._primitives:
             raise ValueError("Cannot close: no primitives in sketch")
-        
+
         # Get the first point from the first primitive
         first_primitive = self._primitives[0]
         if isinstance(first_primitive, Polyline3D):
             first_point = first_primitive.points[0]
         else:
             raise ValueError("Cannot determine first point of sketch")
-        
+
         if self._cursor is None:
             raise ValueError("No cursor position set")
-        
+
         # Only add closing line if we're not already at the start
         if self._cursor != first_point:
             self._primitives.append(Polyline3D((self._cursor, first_point)))
             self._cursor = first_point
-        
+
         return self
 
     def finish(self) -> "Sketch3D":

@@ -25,14 +25,13 @@ class OccShape(Shape):
         BRepGProp.VolumeProperties_s(self.obj, props)
         return props.Mass()
 
-    def to_stl(self, file_name: str):
+    def to_stl(self, file_name: str, ascii: bool = False) -> None:
         # The constructor used here automatically calls mesh.Perform(). https://dev.opencascade.org/doc/refman/html/class_b_rep_mesh___incremental_mesh.html#a3a383b3afe164161a3aa59a492180ac6
         from OCP.BRepMesh import BRepMesh_IncrementalMesh
         from OCP.StlAPI import StlAPI_Writer
 
         tolerance = 1e-3
         angular_tolerance = 0.1
-        ascii = False
         relative = True
         parallel = True
         BRepMesh_IncrementalMesh(

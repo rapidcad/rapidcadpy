@@ -544,14 +544,21 @@ class Workplane(ABC):
         wp._current_position = self._current_position
         return wp
 
-    def extrude(self, distance: float):
+    def extrude(
+        self,
+        distance: float,
+        operation: str = "NewBodyFeatureOperation",
+        symmetric: bool = False,
+    ) -> Any:
         """
         Alias function for sketch = wp.close(); sketch.extrude()
         """
         if len(self._pending_shapes) == 0:
             raise ValueError("No Pending Primitves to Extrude")
         sketch = self.close()
-        extruded_shape = sketch.extrude(distance)
+        extruded_shape = sketch.extrude(
+            distance, operation=operation, symmetric=symmetric
+        )
         return extruded_shape
 
     def to_png(
