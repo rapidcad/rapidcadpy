@@ -330,5 +330,12 @@ class InventorShape(Shape):
             error_msg += f"Error: {str(e)}"
             raise RuntimeError(error_msg)
 
-    def to_png(self, file_name: str, view: str = "iso", width: int = 800, height: int = 600, backend: str = "auto") -> None:
+    def to_png(
+        self,
+        file_name: str,
+        view: str = "iso",
+        width: int = 800,
+        height: int = 600,
+        backend: str = "auto",
+    ) -> None:
         raise NotImplementedError("to_png is not implemented for InventorShape")

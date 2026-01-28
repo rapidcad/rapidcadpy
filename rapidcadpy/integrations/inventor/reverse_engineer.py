@@ -63,40 +63,241 @@ class InventorReverseEngineer:
         return "\n".join(self.generated_code)
 
     def _analyze_sketches_and_features(self):
-        """Analyze sketches and their associated features in order."""
-        # Get all features that use sketches
-        extrude_features = self.comp_def.Features.ExtrudeFeatures
-        revolve_features = self.comp_def.Features.RevolveFeatures
-
-        # Collect all features with their sketches
-        feature_sketch_pairs = []
-
+        """Analyze all features in their correct creation order."""
+        # Get the PartFeatures collection which contains all features in order
+        part_features = self.comp_def.Features
+        
+        # Build a list of all features in order using the AllFeatures collection
+        # This gives us the browser/timeline order
+        all_features_ordered = []
+        
+        # Iterate through all features in order
+        # Note: PartFeatures has collections for each feature type
+        # We need to use a different approach to get the timeline order
+        
+        # Method: Collect all features with their "index" in specific collections,
+        # then use the Name or internal ordering to reconstruct timeline
+        
+        extrude_features = part_features.ExtrudeFeatures
+        revolve_features = part_features.RevolveFeatures
+        thread_features = part_features.ThreadFeatures
+        chamfer_features = part_features.ChamferFeatures
+        fillet_features = part_features.FilletFeatures
+        
+        # Collect all features with metadata
+        all_features = []
+        
         # Add extrude features
         for i in range(1, extrude_features.Count + 1):
             feature = extrude_features.Item(i)
-            sketch = feature.Profile.Parent
-            feature_sketch_pairs.append(
-                {"sketch": sketch, "feature": feature, "type": "extrude", "index": i}
-            )
-
+            if not feature.Suppressed:
+                sketch = feature.Profile.Parent
+                all_features.append({
+                    "feature": feature,
+                    "type": "extrude",
+                    "sketch": sketch,
+                    "sketch_index": self._get_sketch_index(sketch),
+                    "name": feature.Name,
+                })
+        
         # Add revolve features
         for i in range(1, revolve_features.Count + 1):
             feature = revolve_features.Item(i)
-            sketch = feature.Profile.Parent
-            feature_sketch_pairs.append(
-                {"sketch": sketch, "feature": feature, "type": "revolve", "index": i}
-            )
+            if not feature.Suppressed:
+                sketch = feature.Profile.Parent
+                all_features.append({
+                    "feature": feature,
+                    "type": "revolve",
+                    "sketch": sketch,
+                    "sketch_index": self._get_sketch_index(sketch),
+                    "name": feature.Name,
+                })
+        
+        # Add thread features
+        for i in range(1, thread_features.Count + 1):
+            feature = thread_features.Item(i)
+            if not feature.Suppressed:
+                # Threads don't have a sketch, but we can try to find which face they depend on
+                # This helps us determine order based on which extrude/revolve created that face
+                dependent_sketch_index = self._get_thread_dependent_sketch_index(feature)
+                all_features.append({
+                    "feature": feature,
+                    "type": "thread",
+                    "sketch": None,
+                    "sketch_index": dependent_sketch_index,
+                    "name": feature.Name,
+                })
+        
+        # Add chamfer features
+        for i in range(1, chamfer_features.Count + 1):
+            feature = chamfer_features.Item(i)
+            if not feature.Suppressed:
+                dependent_sketch_index = self._get_chamfer_dependent_sketch_index(feature)
+                all_features.append({
+                    "feature": feature,
+                    "type": "chamfer",
+                    "sketch": None,
+                    "sketch_index": dependent_sketch_index,
+                    "name": feature.Name,
+                })
+        
+        # Add fillet features
+        for i in range(1, fillet_features.Count + 1):
+            feature = fillet_features.Item(i)
+            if not feature.Suppressed:
+                dependent_sketch_index = self._get_fillet_dependent_sketch_index(feature)
+                all_features.append({
+                    "feature": feature,
+                    "type": "fillet",
+                    "sketch": None,
+                    "sketch_index": dependent_sketch_index,
+                    "name": feature.Name,
+                })
+        
+        # Sort by sketch_index to maintain feature order
+        # Features that depend on later sketches come after features that depend on earlier sketches
+        all_features.sort(key=lambda x: (x["sketch_index"], x["name"]))
+        
+        # Generate code for each feature in order
+        sketch_counter = 0
+        processed_sketches = set()
+        
+        for feat_info in all_features:
+            feat_type = feat_info["type"]
+            feature = feat_info["feature"]
+            
+            if feat_type in ["extrude", "revolve"]:
+                # These features have sketches
+                sketch = feat_info["sketch"]
+                sketch_id = id(sketch)
+                
+                if sketch_id not in processed_sketches:
+                    sketch_counter += 1
+                    wp_var = f"wp{sketch_counter}"
+                    self._analyze_sketch(sketch, wp_var, sketch_counter)
+                    processed_sketches.add(sketch_id)
+                else:
+                    # Find the wp_var for this already-processed sketch
+                    wp_var = f"wp{list(processed_sketches).index(sketch_id) + 1}"
+                
+                self._analyze_feature(feature, feat_type, wp_var, sketch_counter)
+                
+            elif feat_type == "thread":
+                thread_info = self._analyze_thread_feature(feature)
+                thread_code = self._generate_thread_code(thread_info)
+                self.generated_code.append("")
+                self.generated_code.append(f"# Thread: {feat_info['name']}")
+                self.generated_code.extend(thread_code)
+                
+            elif feat_type == "chamfer":
+                self._analyze_single_chamfer_feature(feature)
+                
+            elif feat_type == "fillet":
+                self._analyze_single_fillet_feature(feature)
 
-        # Sort by creation order (using sketch index as approximation)
-        feature_sketch_pairs.sort(key=lambda x: self._get_sketch_index(x["sketch"]))
-
-        # Generate code for each sketch and feature
-        for i, pair in enumerate(feature_sketch_pairs):
-            wp_var = f"wp{i+1}"
-            self._analyze_sketch(pair["sketch"], wp_var, i + 1)
-            self._analyze_feature(pair["feature"], pair["type"], wp_var, i + 1)
-        self._analyze_chamfer_feature()
-        self._analyze_thread_features()
+    def _get_thread_dependent_sketch_index(self, thread_feature) -> float:
+        """
+        Determine which sketch/feature the thread depends on.
+        Returns a sketch index that places this thread after its parent feature.
+        """
+        try:
+            # Try to find the face the thread is applied to
+            if thread_feature.ThreadedFace:
+                threaded_face = thread_feature.ThreadedFace
+                
+                # Get the face (handle collection or single face)
+                if hasattr(threaded_face, "Count") and threaded_face.Count > 0:
+                    face = threaded_face.Item(1)
+                else:
+                    face = threaded_face
+                
+                # Try to find which feature created this face
+                # by looking at the face's CreatedByFeature
+                if hasattr(face, "CreatedByFeature"):
+                    parent_feature = face.CreatedByFeature
+                    
+                    # If the parent feature has a profile/sketch, get its index
+                    if hasattr(parent_feature, "Profile"):
+                        sketch = parent_feature.Profile.Parent
+                        # Add 0.5 to place thread after the parent feature
+                        return self._get_sketch_index(sketch) + 0.5
+        except Exception as e:
+            pass
+        
+        # Default: put threads near the end
+        return 998
+    
+    def _get_chamfer_dependent_sketch_index(self, chamfer_feature) -> float:
+        """
+        Determine which sketch/feature the chamfer depends on.
+        """
+        try:
+            # Try to get the edges the chamfer is applied to
+            if hasattr(chamfer_feature, "Edges"):
+                edges = chamfer_feature.Edges
+                if edges and edges.Count > 0:
+                    edge = edges.Item(1)
+                    
+                    # Get the faces connected to this edge
+                    if hasattr(edge, "Faces") and edge.Faces.Count > 0:
+                        face = edge.Faces.Item(1)
+                        
+                        if hasattr(face, "CreatedByFeature"):
+                            parent_feature = face.CreatedByFeature
+                            
+                            if hasattr(parent_feature, "Profile"):
+                                sketch = parent_feature.Profile.Parent
+                                return self._get_sketch_index(sketch) + 0.6
+        except Exception:
+            pass
+        
+        return 999
+    
+    def _get_fillet_dependent_sketch_index(self, fillet_feature) -> float:
+        """
+        Determine which sketch/feature the fillet depends on.
+        """
+        try:
+            if hasattr(fillet_feature, "Edges"):
+                edges = fillet_feature.Edges
+                if edges and edges.Count > 0:
+                    edge = edges.Item(1)
+                    
+                    if hasattr(edge, "Faces") and edge.Faces.Count > 0:
+                        face = edge.Faces.Item(1)
+                        
+                        if hasattr(face, "CreatedByFeature"):
+                            parent_feature = face.CreatedByFeature
+                            
+                            if hasattr(parent_feature, "Profile"):
+                                sketch = parent_feature.Profile.Parent
+                                return self._get_sketch_index(sketch) + 0.7
+        except Exception:
+            pass
+        
+        return 999
+    
+    def _analyze_single_chamfer_feature(self, chamfer_feature):
+        """Analyze and generate code for a single chamfer feature."""
+        # Reuse existing chamfer logic but for a single feature
+        try:
+            chamfer_info = self._extract_chamfer_info(chamfer_feature)
+            if chamfer_info:
+                self.generated_code.append("")
+                self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
+                chamfer_code = self._generate_chamfer_code(chamfer_info)
+                self.generated_code.extend(chamfer_code)
+        except Exception as e:
+            self.generated_code.append(f"# Warning: Could not process chamfer {chamfer_feature.Name}: {e}")
+    
+    def _analyze_single_fillet_feature(self, fillet_feature):
+        """Analyze and generate code for a single fillet feature."""
+        try:
+            self.generated_code.append("")
+            self.generated_code.append(f"# Fillet: {fillet_feature.Name}")
+            self.generated_code.append(f"# TODO: Fillet feature not yet implemented in code generation")
+        except Exception as e:
+            self.generated_code.append(f"# Warning: Could not process fillet {fillet_feature.Name}: {e}")
 
     def _get_sketch_index(self, target_sketch) -> int:
         """Get the index of a sketch in the sketches collection."""
@@ -593,6 +794,70 @@ class InventorReverseEngineer:
                 f"app.chamfer_edge(x={self._fmt(center_x/10)}, radius={self._fmt(radius/10)}, angle={self._fmt(params['angle'])}, distance={self._fmt(params['distance'])})"
             )
 
+    def _extract_chamfer_info(self, chamfer_feature) -> Dict:
+        """
+        Extract chamfer parameters from a single chamfer feature.
+        
+        Args:
+            chamfer_feature: Inventor ChamferFeature object
+            
+        Returns:
+            Dictionary containing chamfer information
+        """
+        try:
+            chamfer_def = chamfer_feature.Definition
+            
+            info = {
+                "name": chamfer_feature.Name,
+                "angle": chamfer_def.Angle.Value if hasattr(chamfer_def, "Angle") else 0.785,  # 45 degrees default
+                "distance": chamfer_def.Distance.Value if hasattr(chamfer_def, "Distance") else 0.1,
+            }
+            
+            # Try to get edge information
+            if hasattr(chamfer_feature, "Edges"):
+                edges = chamfer_feature.Edges
+                if edges and edges.Count > 0:
+                    edge = edges.Item(1)
+                    if edge.CurveType == 5124:  # Circular edge
+                        geom = edge.Geometry
+                        if hasattr(geom, "Center"):
+                            center = geom.Center
+                            info["x"] = round(center.X, 6)
+                            info["y"] = round(center.Y, 6)
+                            info["z"] = round(center.Z, 6)
+                        if hasattr(geom, "Radius"):
+                            info["radius"] = round(geom.Radius, 6)
+            
+            return info
+        except Exception as e:
+            print(f"Warning: Could not extract chamfer info: {e}")
+            return None
+    
+    def _generate_chamfer_code(self, chamfer_info: Dict) -> List[str]:
+        """
+        Generate code for a chamfer feature.
+        
+        Args:
+            chamfer_info: Dictionary containing chamfer parameters
+            
+        Returns:
+            List of code lines
+        """
+        code_lines = []
+        
+        if chamfer_info and "x" in chamfer_info and "radius" in chamfer_info:
+            code_lines.append(
+                f"app.chamfer_edge("
+                f"x={self._fmt(chamfer_info['x'])}, "
+                f"radius={self._fmt(chamfer_info['radius'])}, "
+                f"angle={self._fmt(chamfer_info['angle'])}, "
+                f"distance={self._fmt(chamfer_info['distance'])})"
+            )
+        elif chamfer_info:
+            code_lines.append(f"# Chamfer: Could not extract edge position for {chamfer_info.get('name', 'unknown')}")
+        
+        return code_lines
+
     def _analyze_thread_feature(self, thread_feature) -> Dict:
         """
         Analyze a thread feature and extract its parameters.
@@ -612,19 +877,21 @@ class InventorReverseEngineer:
         try:
             # Get thread specification
             thread_spec = thread_feature.ThreadInfo
-            
+
             # Get cylindrical face information for x and radius (similar to chamfer approach)
             if thread_feature.ThreadedFace:
                 thread_info["face_type"] = "Cylindrical"
                 threaded_face_obj = thread_feature.ThreadedFace
-                
+
                 # Check if it's a Faces collection or a single Face
                 try:
                     # If it's a collection, get the first face
-                    if hasattr(threaded_face_obj, 'Count'):
+                    if hasattr(threaded_face_obj, "Count"):
                         if threaded_face_obj.Count > 0:
                             face = threaded_face_obj.Item(1)
-                            print(f"Got face from Faces collection (count: {threaded_face_obj.Count})")
+                            print(
+                                f"Got face from Faces collection (count: {threaded_face_obj.Count})"
+                            )
                         else:
                             print("Warning: ThreadedFace collection is empty")
                             face = None
@@ -635,12 +902,12 @@ class InventorReverseEngineer:
                 except Exception as e:
                     print(f"Warning: Could not access ThreadedFace: {e}")
                     face = None
-                
+
                 if face is not None:
                     try:
                         # Get face geometry for position and radius
                         geom = face.Geometry
-                        
+
                         # Method 1: Try to get BasePoint and Radius directly
                         if hasattr(geom, "BasePoint") and hasattr(geom, "Radius"):
                             try:
@@ -649,11 +916,15 @@ class InventorReverseEngineer:
                                 thread_info["y"] = round(base_pt.Y, 6)
                                 thread_info["z"] = round(base_pt.Z, 6)
                                 thread_info["radius"] = round(geom.Radius, 6)
-                                print(f"Thread face position (BasePoint): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})")
+                                print(
+                                    f"Thread face position (BasePoint): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})"
+                                )
                                 print(f"Thread face radius: {thread_info['radius']}")
                             except Exception as e:
-                                print(f"Warning: BasePoint/Radius extraction failed: {e}")
-                        
+                                print(
+                                    f"Warning: BasePoint/Radius extraction failed: {e}"
+                                )
+
                         # Method 2: Get from circular edges (similar to chamfer approach)
                         if "x" not in thread_info or "radius" not in thread_info:
                             try:
@@ -663,18 +934,26 @@ class InventorReverseEngineer:
                                     # Look for circular edges (CurveType 5124)
                                     if edge.CurveType == 5124:
                                         edge_geom = edge.Geometry
-                                        if hasattr(edge_geom, "Center") and hasattr(edge_geom, "Radius"):
+                                        if hasattr(edge_geom, "Center") and hasattr(
+                                            edge_geom, "Radius"
+                                        ):
                                             center = edge_geom.Center
                                             thread_info["x"] = round(center.X, 6)
                                             thread_info["y"] = round(center.Y, 6)
                                             thread_info["z"] = round(center.Z, 6)
-                                            thread_info["radius"] = round(edge_geom.Radius, 6)
-                                            print(f"Thread face position (from edge): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})")
-                                            print(f"Thread face radius (from edge): {thread_info['radius']}")
+                                            thread_info["radius"] = round(
+                                                edge_geom.Radius, 6
+                                            )
+                                            print(
+                                                f"Thread face position (from edge): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})"
+                                            )
+                                            print(
+                                                f"Thread face radius (from edge): {thread_info['radius']}"
+                                            )
                                             break
                             except Exception as e:
                                 print(f"Warning: Edge extraction failed: {e}")
-                        
+
                         # Method 3: Use face evaluator range box
                         if "x" not in thread_info or "radius" not in thread_info:
                             try:
@@ -682,21 +961,31 @@ class InventorReverseEngineer:
                                 range_box = evaluator.RangeBox
                                 min_pt = range_box.MinPoint
                                 max_pt = range_box.MaxPoint
-                                
+
                                 if "x" not in thread_info:
-                                    thread_info["x"] = round((min_pt.X + max_pt.X) / 2, 6)
-                                    thread_info["y"] = round((min_pt.Y + max_pt.Y) / 2, 6)
-                                    thread_info["z"] = round((min_pt.Z + max_pt.Z) / 2, 6)
-                                    print(f"Thread face position (from range): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})")
-                                
+                                    thread_info["x"] = round(
+                                        (min_pt.X + max_pt.X) / 2, 6
+                                    )
+                                    thread_info["y"] = round(
+                                        (min_pt.Y + max_pt.Y) / 2, 6
+                                    )
+                                    thread_info["z"] = round(
+                                        (min_pt.Z + max_pt.Z) / 2, 6
+                                    )
+                                    print(
+                                        f"Thread face position (from range): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})"
+                                    )
+
                                 if "radius" not in thread_info:
                                     # Try to get radius from geometry again
                                     if hasattr(geom, "Radius"):
                                         thread_info["radius"] = round(geom.Radius, 6)
-                                        print(f"Thread face radius (from geom): {thread_info['radius']}")
+                                        print(
+                                            f"Thread face radius (from geom): {thread_info['radius']}"
+                                        )
                             except Exception as e:
                                 print(f"Warning: Range box extraction failed: {e}")
-                        
+
                         # Get cylinder axis direction for better matching
                         if hasattr(geom, "AxisVector"):
                             try:
@@ -708,13 +997,16 @@ class InventorReverseEngineer:
                                     thread_info["axis"] = "Y"
                                 elif abs(axis_vec.Z) > 0.9:
                                     thread_info["axis"] = "Z"
-                                print(f"Thread face axis: {thread_info.get('axis', 'Unknown')}")
+                                print(
+                                    f"Thread face axis: {thread_info.get('axis', 'Unknown')}"
+                                )
                             except Exception as e:
                                 print(f"Warning: Axis extraction failed: {e}")
-                        
+
                     except Exception as e:
                         print(f"Warning: Could not extract face geometry: {e}")
                         import traceback
+
                         traceback.print_exc()
 
             # Thread designation - try different attribute names
@@ -726,7 +1018,7 @@ class InventorReverseEngineer:
                         break
                 except Exception:
                     continue
-            
+
             if not designation:
                 # Try to build designation from thread size properties
                 try:
@@ -740,7 +1032,7 @@ class InventorReverseEngineer:
                             designation = f"M{nominal}"
                 except Exception:
                     pass
-            
+
             thread_info["designation"] = designation if designation else "M8x1.25"
 
             # Thread class/fit - try different attribute names
@@ -804,13 +1096,18 @@ class InventorReverseEngineer:
         except Exception as e:
             print(f"Error analyzing thread feature: {e}")
             import traceback
+
             traceback.print_exc()
 
         # Validate that we have critical parameters for reconstruction
         if "x" not in thread_info or "radius" not in thread_info:
-            print(f"Warning: Thread '{thread_info.get('name')}' missing position/radius - reconstruction may fail")
+            print(
+                f"Warning: Thread '{thread_info.get('name')}' missing position/radius - reconstruction may fail"
+            )
         else:
-            print(f"✓ Thread extracted: x={thread_info['x']}, radius={thread_info['radius']}, {thread_info['designation']}")
+            print(
+                f"✓ Thread extracted: x={thread_info['x']}, radius={thread_info['radius']}, {thread_info['designation']}"
+            )
 
         return thread_info
 
@@ -827,32 +1124,48 @@ class InventorReverseEngineer:
         code_lines = []
 
         # Add comment with thread info
-        designation = thread_info.get('designation', 'Unknown')
+        designation = thread_info.get("designation", "Unknown")
         thread_type = "internal" if thread_info.get("internal") else "external"
         code_lines.append(f"# Thread: {designation} ({thread_type})")
 
         # Generate thread creation code
         code_lines.append("thread = app.add_thread(")
-        
+
         # Add geometric parameters if available (critical for face matching)
         if "x" in thread_info and "radius" in thread_info:
-            code_lines.append(f"    x={self._fmt(thread_info['x'])},  # Cylindrical face center X")
-            code_lines.append(f"    radius={self._fmt(thread_info['radius'])},  # Cylindrical face radius")
-            
+            code_lines.append(
+                f"    x={self._fmt(thread_info['x'])},  # Cylindrical face center X"
+            )
+            code_lines.append(
+                f"    radius={self._fmt(thread_info['radius'])},  # Cylindrical face radius"
+            )
+
             # Optionally add Y/Z if non-zero (for non-axial cylinders)
-            if "y" in thread_info and abs(thread_info['y']) > 1e-6:
-                code_lines.append(f"    y={self._fmt(thread_info['y'])},  # Cylindrical face center Y")
-            if "z" in thread_info and abs(thread_info['z']) > 1e-6:
-                code_lines.append(f"    z={self._fmt(thread_info['z'])},  # Cylindrical face center Z")
-            
+            if "y" in thread_info and abs(thread_info["y"]) > 1e-6:
+                code_lines.append(
+                    f"    y={self._fmt(thread_info['y'])},  # Cylindrical face center Y"
+                )
+            if "z" in thread_info and abs(thread_info["z"]) > 1e-6:
+                code_lines.append(
+                    f"    z={self._fmt(thread_info['z'])},  # Cylindrical face center Z"
+                )
+
             # Add axis direction for better matching
             if "axis" in thread_info:
-                code_lines.append(f"    axis='{thread_info['axis']}',  # Cylinder axis direction")
+                code_lines.append(
+                    f"    axis='{thread_info['axis']}',  # Cylinder axis direction"
+                )
         else:
-            code_lines.append("    # WARNING: Missing x/radius - may not match correct face!")
-        
-        code_lines.append(f"    designation='{thread_info.get('designation', 'M8x1.25')}',")
-        code_lines.append(f"    thread_class='{thread_info.get('thread_class', '6H')}',")
+            code_lines.append(
+                "    # WARNING: Missing x/radius - may not match correct face!"
+            )
+
+        code_lines.append(
+            f"    designation='{thread_info.get('designation', 'M8x1.25')}',"
+        )
+        code_lines.append(
+            f"    thread_class='{thread_info.get('thread_class', '6H')}',"
+        )
         code_lines.append(f"    thread_type='{thread_type}',")
         code_lines.append(f"    right_handed={thread_info.get('right_handed', True)},")
 

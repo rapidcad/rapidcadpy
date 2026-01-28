@@ -47,7 +47,7 @@ class InventorWorkPlane(Workplane):
         # create a workplane in inventor using up_dir as the normal
         origin_pt = tg.CreatePoint(origin_3d[0], origin_3d[1], origin_3d[2])
         normal_vec = tg.CreateUnitVector(normal_3d[0], normal_3d[1], normal_3d[2])
-        
+
         # Choose a reference vector that is not parallel to the normal
         # Check if normal is aligned with X-axis
         if abs(normal_3d[0]) > 0.9:
@@ -56,13 +56,15 @@ class InventorWorkPlane(Workplane):
         else:
             # Use X-axis as reference
             ref_vec = tg.CreateUnitVector(1, 0, 0)
-        
+
         # Create perpendicular vectors for the workplane
         x_vec = normal_vec.CrossProduct(ref_vec)
         y_vec = x_vec.CrossProduct(normal_vec)
 
         # in inventor the y vector is the up direction (normal)
-        work_plane = app.comp_def.WorkPlanes.AddFixed(origin_pt, x_vec, normal_vec, False)
+        work_plane = app.comp_def.WorkPlanes.AddFixed(
+            origin_pt, x_vec, normal_vec, False
+        )
         work_plane.Visible = False
 
         # add a sketch on the workplane
@@ -73,7 +75,9 @@ class InventorWorkPlane(Workplane):
         )
 
     @classmethod
-    def xy_plane(cls, app: Optional[Any] = None, offset: Optional[float] = None) -> "InventorWorkPlane":
+    def xy_plane(
+        cls, app: Optional[Any] = None, offset: Optional[float] = None
+    ) -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the XY orientation at the given origin.
 
         Args:
@@ -90,7 +94,9 @@ class InventorWorkPlane(Workplane):
         )
 
     @classmethod
-    def xz_plane(cls, app: Optional[Any] = None, offset: Optional[float] = None) -> "InventorWorkPlane":
+    def xz_plane(
+        cls, app: Optional[Any] = None, offset: Optional[float] = None
+    ) -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the XZ orientation at the given origin.
 
         Args:
@@ -105,7 +111,9 @@ class InventorWorkPlane(Workplane):
         )
 
     @classmethod
-    def yz_plane(cls, app: Optional[Any] = None, offset: Optional[float] = None) -> "InventorWorkPlane":
+    def yz_plane(
+        cls, app: Optional[Any] = None, offset: Optional[float] = None
+    ) -> "InventorWorkPlane":
         """Create an InventorWorkPlane in the YZ orientation at the given origin.
 
         Args:
