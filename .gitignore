@@ -54,3 +54,17 @@ docs/node_modules
 
 # test files
 *.step
+*.stp
+*.stl
+
+# Debug and test output files
+*_debug*.py
+reproduce_issue.py
+patch_*.py
+count_*.py
+summary.csv
+*.png
+*.json
+!package.json
+!tsconfig.json
+!.vscode/*.json
