@@ -355,26 +355,26 @@ class FEAAnalyzer:
     def validate_connectivity(self) -> bool:
         """
         Check if loaded and constrained nodes are connected via the mesh.
-        
+
         This validates that forces can be transmitted from loaded regions
         to constrained regions through the mesh structure. Disconnected
         geometry or floating parts will return False.
-        
+
         Returns:
             True if loaded and constrained nodes are in the same connected
             component of the mesh, False otherwise.
-            
+
         Note:
             - Returns True if there are no loads or no constraints
             - Requires the kernel to support visualization data extraction
             - This creates a temporary mesh to check connectivity
         """
         from collections import deque
-        
+
         # If no loads or constraints, consider it valid
         if len(self.loads) == 0 or len(self.constraints) == 0:
             return True
-        
+
         try:
             # Get mesh and boundary condition data
             pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
@@ -387,53 +387,53 @@ class FEAAnalyzer:
                     element_type=self.element_type,
                 )
             )
-            
+
             # Find constrained and loaded nodes
             constrained_nodes = set(np.where(constraint_mask)[0])
             loaded_nodes = set(np.where(force_mask)[0])
-            
+
             if len(constrained_nodes) == 0 or len(loaded_nodes) == 0:
                 return True
-            
+
             # Extract element connectivity from PyVista mesh
             cells = pv_mesh.cells
             cell_types = pv_mesh.celltypes
-            
+
             # Build adjacency list from elements
             n_nodes = nodes.shape[0]
             adjacency = [set() for _ in range(n_nodes)]
-            
+
             # Parse VTK cell array
             idx = 0
             for cell_type in cell_types:
                 n_points = cells[idx]
                 elem_nodes = cells[idx + 1 : idx + 1 + n_points]
-                
+
                 # Connect all pairs of nodes in this element
                 for i in range(len(elem_nodes)):
                     for j in range(i + 1, len(elem_nodes)):
                         adjacency[elem_nodes[i]].add(elem_nodes[j])
                         adjacency[elem_nodes[j]].add(elem_nodes[i])
-                
+
                 idx += 1 + n_points
-            
+
             # Find connected component containing constrained nodes using BFS
             visited = set()
             queue = deque(constrained_nodes)
             visited.update(constrained_nodes)
-            
+
             while queue:
                 node = queue.popleft()
                 for neighbor in adjacency[node]:
                     if neighbor not in visited:
                         visited.add(neighbor)
                         queue.append(neighbor)
-            
+
             # Check if all loaded nodes are in the same component
             disconnected_loads = loaded_nodes - visited
-            
+
             return len(disconnected_loads) == 0
-            
+
         except Exception as e:
             # If we can't check connectivity, assume it's invalid
             print(f"⚠ Warning: Could not validate connectivity: {e}")
@@ -446,6 +446,7 @@ class FEAAnalyzer:
         filename: Optional[str] = None,
         show_legend: bool = True,
         display: str = "conditions",
+        camera_position: str = "iso",
     ) -> None:
         """
         Visualize constraints, loads, and mesh of the analyzed shape.
@@ -464,6 +465,8 @@ class FEAAnalyzer:
             show_legend: Whether to show the legend. Default: True
             display: What to display. 'conditions' (default) shows mesh, loads,
                     and constraints. 'mesh' shows only the mesh.
+            camera_position: Camera view angle ('iso', 'x', 'y', 'z', 'xy', 'xz', 'yz').
+                           Default: 'iso' (isometric view)
 
         Note: This method requires the kernel to support visualization data extraction.
         """
@@ -518,8 +521,8 @@ class FEAAnalyzer:
                 fixed_points = pv.PolyData(constrained_nodes)
                 plotter.add_mesh(
                     fixed_points,
-                    color="green",
-                    point_size=10,
+                    color="red",
+                    point_size=15,
                     render_points_as_spheres=True,
                     label="Fixed Nodes",
                 )
@@ -531,7 +534,7 @@ class FEAAnalyzer:
                 load_points = pv.PolyData(loaded_nodes)
                 plotter.add_mesh(
                     load_points,
-                    color="red",
+                    color="green",
                     point_size=15,
                     render_points_as_spheres=True,
                     label="Loaded Nodes",
@@ -548,14 +551,16 @@ class FEAAnalyzer:
                     loaded_nodes,
                     scaled_vectors,
                     mag=1.0,
-                    color="darkred",
+                    color="darkgreen",
                     label="Force Vectors",
                 )
 
             # Add legend and labels
             if show_legend:
                 plotter.add_legend()
-                plotter.add_text("Boundary Conditions", position="upper_edge", font_size=12)
+                plotter.add_text(
+                    "Boundary Conditions", position="upper_edge", font_size=12
+                )
                 plotter.add_text(
                     "Red = Fixed (Constraints)\nGreen = Loaded (Forces)",
                     position="lower_left",
@@ -566,7 +571,20 @@ class FEAAnalyzer:
             plotter.add_text("Mesh Visualization", position="upper_edge", font_size=12)
 
         plotter.add_axes()
-        plotter.camera_position = "iso"
+
+        # Set camera position
+        camera_position = camera_position.lower()
+        if camera_position == "iso":
+            plotter.camera_position = "iso"
+        elif camera_position in ["x", "yz"]:
+            plotter.view_yz()
+        elif camera_position in ["y", "xz"]:
+            plotter.view_xz()
+        elif camera_position in ["z", "xy"]:
+            plotter.view_xy()
+        else:
+            # Default to iso if invalid
+            plotter.camera_position = "iso"
 
         # Show or save
         if filename:
@@ -580,4 +598,3 @@ class FEAAnalyzer:
                 plotter.show()
             else:
                 plotter.show(jupyter_backend="static")
-

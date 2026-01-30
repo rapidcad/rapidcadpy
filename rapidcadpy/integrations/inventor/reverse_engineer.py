@@ -66,111 +66,127 @@ class InventorReverseEngineer:
         """Analyze all features in their correct creation order."""
         # Get the PartFeatures collection which contains all features in order
         part_features = self.comp_def.Features
-        
+
         # Build a list of all features in order using the AllFeatures collection
         # This gives us the browser/timeline order
         all_features_ordered = []
-        
+
         # Iterate through all features in order
         # Note: PartFeatures has collections for each feature type
         # We need to use a different approach to get the timeline order
-        
+
         # Method: Collect all features with their "index" in specific collections,
         # then use the Name or internal ordering to reconstruct timeline
-        
+
         extrude_features = part_features.ExtrudeFeatures
         revolve_features = part_features.RevolveFeatures
         thread_features = part_features.ThreadFeatures
         chamfer_features = part_features.ChamferFeatures
         fillet_features = part_features.FilletFeatures
-        
+
         # Collect all features with metadata
         all_features = []
-        
+
         # Add extrude features
         for i in range(1, extrude_features.Count + 1):
             feature = extrude_features.Item(i)
             if not feature.Suppressed:
                 sketch = feature.Profile.Parent
-                all_features.append({
-                    "feature": feature,
-                    "type": "extrude",
-                    "sketch": sketch,
-                    "sketch_index": self._get_sketch_index(sketch),
-                    "name": feature.Name,
-                })
-        
+                all_features.append(
+                    {
+                        "feature": feature,
+                        "type": "extrude",
+                        "sketch": sketch,
+                        "sketch_index": self._get_sketch_index(sketch),
+                        "name": feature.Name,
+                    }
+                )
+
         # Add revolve features
         for i in range(1, revolve_features.Count + 1):
             feature = revolve_features.Item(i)
             if not feature.Suppressed:
                 sketch = feature.Profile.Parent
-                all_features.append({
-                    "feature": feature,
-                    "type": "revolve",
-                    "sketch": sketch,
-                    "sketch_index": self._get_sketch_index(sketch),
-                    "name": feature.Name,
-                })
-        
+                all_features.append(
+                    {
+                        "feature": feature,
+                        "type": "revolve",
+                        "sketch": sketch,
+                        "sketch_index": self._get_sketch_index(sketch),
+                        "name": feature.Name,
+                    }
+                )
+
         # Add thread features
         for i in range(1, thread_features.Count + 1):
             feature = thread_features.Item(i)
             if not feature.Suppressed:
                 # Threads don't have a sketch, but we can try to find which face they depend on
                 # This helps us determine order based on which extrude/revolve created that face
-                dependent_sketch_index = self._get_thread_dependent_sketch_index(feature)
-                all_features.append({
-                    "feature": feature,
-                    "type": "thread",
-                    "sketch": None,
-                    "sketch_index": dependent_sketch_index,
-                    "name": feature.Name,
-                })
-        
+                dependent_sketch_index = self._get_thread_dependent_sketch_index(
+                    feature
+                )
+                all_features.append(
+                    {
+                        "feature": feature,
+                        "type": "thread",
+                        "sketch": None,
+                        "sketch_index": dependent_sketch_index,
+                        "name": feature.Name,
+                    }
+                )
+
         # Add chamfer features
         for i in range(1, chamfer_features.Count + 1):
             feature = chamfer_features.Item(i)
             if not feature.Suppressed:
-                dependent_sketch_index = self._get_chamfer_dependent_sketch_index(feature)
-                all_features.append({
-                    "feature": feature,
-                    "type": "chamfer",
-                    "sketch": None,
-                    "sketch_index": dependent_sketch_index,
-                    "name": feature.Name,
-                })
-        
+                dependent_sketch_index = self._get_chamfer_dependent_sketch_index(
+                    feature
+                )
+                all_features.append(
+                    {
+                        "feature": feature,
+                        "type": "chamfer",
+                        "sketch": None,
+                        "sketch_index": dependent_sketch_index,
+                        "name": feature.Name,
+                    }
+                )
+
         # Add fillet features
         for i in range(1, fillet_features.Count + 1):
             feature = fillet_features.Item(i)
             if not feature.Suppressed:
-                dependent_sketch_index = self._get_fillet_dependent_sketch_index(feature)
-                all_features.append({
-                    "feature": feature,
-                    "type": "fillet",
-                    "sketch": None,
-                    "sketch_index": dependent_sketch_index,
-                    "name": feature.Name,
-                })
-        
+                dependent_sketch_index = self._get_fillet_dependent_sketch_index(
+                    feature
+                )
+                all_features.append(
+                    {
+                        "feature": feature,
+                        "type": "fillet",
+                        "sketch": None,
+                        "sketch_index": dependent_sketch_index,
+                        "name": feature.Name,
+                    }
+                )
+
         # Sort by sketch_index to maintain feature order
         # Features that depend on later sketches come after features that depend on earlier sketches
         all_features.sort(key=lambda x: (x["sketch_index"], x["name"]))
-        
+
         # Generate code for each feature in order
         sketch_counter = 0
         processed_sketches = set()
-        
+
         for feat_info in all_features:
             feat_type = feat_info["type"]
             feature = feat_info["feature"]
-            
+
             if feat_type in ["extrude", "revolve"]:
                 # These features have sketches
                 sketch = feat_info["sketch"]
                 sketch_id = id(sketch)
-                
+
                 if sketch_id not in processed_sketches:
                     sketch_counter += 1
                     wp_var = f"wp{sketch_counter}"
@@ -179,19 +195,19 @@ class InventorReverseEngineer:
                 else:
                     # Find the wp_var for this already-processed sketch
                     wp_var = f"wp{list(processed_sketches).index(sketch_id) + 1}"
-                
+
                 self._analyze_feature(feature, feat_type, wp_var, sketch_counter)
-                
+
             elif feat_type == "thread":
                 thread_info = self._analyze_thread_feature(feature)
                 thread_code = self._generate_thread_code(thread_info)
                 self.generated_code.append("")
                 self.generated_code.append(f"# Thread: {feat_info['name']}")
                 self.generated_code.extend(thread_code)
-                
+
             elif feat_type == "chamfer":
                 self._analyze_single_chamfer_feature(feature)
-                
+
             elif feat_type == "fillet":
                 self._analyze_single_fillet_feature(feature)
 
@@ -204,18 +220,18 @@ class InventorReverseEngineer:
             # Try to find the face the thread is applied to
             if thread_feature.ThreadedFace:
                 threaded_face = thread_feature.ThreadedFace
-                
+
                 # Get the face (handle collection or single face)
                 if hasattr(threaded_face, "Count") and threaded_face.Count > 0:
                     face = threaded_face.Item(1)
                 else:
                     face = threaded_face
-                
+
                 # Try to find which feature created this face
                 # by looking at the face's CreatedByFeature
                 if hasattr(face, "CreatedByFeature"):
                     parent_feature = face.CreatedByFeature
-                    
+
                     # If the parent feature has a profile/sketch, get its index
                     if hasattr(parent_feature, "Profile"):
                         sketch = parent_feature.Profile.Parent
@@ -223,10 +239,10 @@ class InventorReverseEngineer:
                         return self._get_sketch_index(sketch) + 0.5
         except Exception as e:
             pass
-        
+
         # Default: put threads near the end
         return 998
-    
+
     def _get_chamfer_dependent_sketch_index(self, chamfer_feature) -> float:
         """
         Determine which sketch/feature the chamfer depends on.
@@ -237,22 +253,22 @@ class InventorReverseEngineer:
                 edges = chamfer_feature.Edges
                 if edges and edges.Count > 0:
                     edge = edges.Item(1)
-                    
+
                     # Get the faces connected to this edge
                     if hasattr(edge, "Faces") and edge.Faces.Count > 0:
                         face = edge.Faces.Item(1)
-                        
+
                         if hasattr(face, "CreatedByFeature"):
                             parent_feature = face.CreatedByFeature
-                            
+
                             if hasattr(parent_feature, "Profile"):
                                 sketch = parent_feature.Profile.Parent
                                 return self._get_sketch_index(sketch) + 0.6
         except Exception:
             pass
-        
+
         return 999
-    
+
     def _get_fillet_dependent_sketch_index(self, fillet_feature) -> float:
         """
         Determine which sketch/feature the fillet depends on.
@@ -262,21 +278,21 @@ class InventorReverseEngineer:
                 edges = fillet_feature.Edges
                 if edges and edges.Count > 0:
                     edge = edges.Item(1)
-                    
+
                     if hasattr(edge, "Faces") and edge.Faces.Count > 0:
                         face = edge.Faces.Item(1)
-                        
+
                         if hasattr(face, "CreatedByFeature"):
                             parent_feature = face.CreatedByFeature
-                            
+
                             if hasattr(parent_feature, "Profile"):
                                 sketch = parent_feature.Profile.Parent
                                 return self._get_sketch_index(sketch) + 0.7
         except Exception:
             pass
-        
+
         return 999
-    
+
     def _analyze_single_chamfer_feature(self, chamfer_feature):
         """Analyze and generate code for a single chamfer feature."""
         # Reuse existing chamfer logic but for a single feature
@@ -288,16 +304,22 @@ class InventorReverseEngineer:
                 chamfer_code = self._generate_chamfer_code(chamfer_info)
                 self.generated_code.extend(chamfer_code)
         except Exception as e:
-            self.generated_code.append(f"# Warning: Could not process chamfer {chamfer_feature.Name}: {e}")
-    
+            self.generated_code.append(
+                f"# Warning: Could not process chamfer {chamfer_feature.Name}: {e}"
+            )
+
     def _analyze_single_fillet_feature(self, fillet_feature):
         """Analyze and generate code for a single fillet feature."""
         try:
             self.generated_code.append("")
             self.generated_code.append(f"# Fillet: {fillet_feature.Name}")
-            self.generated_code.append(f"# TODO: Fillet feature not yet implemented in code generation")
+            self.generated_code.append(
+                f"# TODO: Fillet feature not yet implemented in code generation"
+            )
         except Exception as e:
-            self.generated_code.append(f"# Warning: Could not process fillet {fillet_feature.Name}: {e}")
+            self.generated_code.append(
+                f"# Warning: Could not process fillet {fillet_feature.Name}: {e}"
+            )
 
     def _get_sketch_index(self, target_sketch) -> int:
         """Get the index of a sketch in the sketches collection."""
@@ -797,22 +819,28 @@ class InventorReverseEngineer:
     def _extract_chamfer_info(self, chamfer_feature) -> Dict:
         """
         Extract chamfer parameters from a single chamfer feature.
-        
+
         Args:
             chamfer_feature: Inventor ChamferFeature object
-            
+
         Returns:
             Dictionary containing chamfer information
         """
         try:
             chamfer_def = chamfer_feature.Definition
-            
+
             info = {
                 "name": chamfer_feature.Name,
-                "angle": chamfer_def.Angle.Value if hasattr(chamfer_def, "Angle") else 0.785,  # 45 degrees default
-                "distance": chamfer_def.Distance.Value if hasattr(chamfer_def, "Distance") else 0.1,
+                "angle": (
+                    chamfer_def.Angle.Value if hasattr(chamfer_def, "Angle") else 0.785
+                ),  # 45 degrees default
+                "distance": (
+                    chamfer_def.Distance.Value
+                    if hasattr(chamfer_def, "Distance")
+                    else 0.1
+                ),
             }
-            
+
             # Try to get edge information
             if hasattr(chamfer_feature, "Edges"):
                 edges = chamfer_feature.Edges
@@ -827,24 +855,24 @@ class InventorReverseEngineer:
                             info["z"] = round(center.Z, 6)
                         if hasattr(geom, "Radius"):
                             info["radius"] = round(geom.Radius, 6)
-            
+
             return info
         except Exception as e:
             print(f"Warning: Could not extract chamfer info: {e}")
             return None
-    
+
     def _generate_chamfer_code(self, chamfer_info: Dict) -> List[str]:
         """
         Generate code for a chamfer feature.
-        
+
         Args:
             chamfer_info: Dictionary containing chamfer parameters
-            
+
         Returns:
             List of code lines
         """
         code_lines = []
-        
+
         if chamfer_info and "x" in chamfer_info and "radius" in chamfer_info:
             code_lines.append(
                 f"app.chamfer_edge("
@@ -854,8 +882,10 @@ class InventorReverseEngineer:
                 f"distance={self._fmt(chamfer_info['distance'])})"
             )
         elif chamfer_info:
-            code_lines.append(f"# Chamfer: Could not extract edge position for {chamfer_info.get('name', 'unknown')}")
-        
+            code_lines.append(
+                f"# Chamfer: Could not extract edge position for {chamfer_info.get('name', 'unknown')}"
+            )
+
         return code_lines
 
     def _analyze_thread_feature(self, thread_feature) -> Dict:
