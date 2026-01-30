@@ -5,9 +5,9 @@ from typing import Dict, List, Optional
 
 import numpy as np
 
-from rapidcadpy.cad import Cad
-from rapidcadpy.cad_types import Vector, Vertex
-from rapidcadpy.constraint import (
+from .cad import Cad
+from .cad_types import Vector, Vertex
+from .constraint import (
     EndToStartCoincidenceConstraint,
     HorizontalConstraint,
     ParallelConstraint,
@@ -16,12 +16,12 @@ from rapidcadpy.constraint import (
     TangentConstraint,
     VerticalConstraint,
 )
-from rapidcadpy.extrude import Extrude
-from rapidcadpy.primitive import Arc, Circle, Line
-from rapidcadpy.sketch import Sketch
-from rapidcadpy.sketch_extrude import Extrude
-from rapidcadpy.wire import Wire
-from rapidcadpy.workplane import Workplane
+from .extrude import Extrude
+from .primitive import Arc, Circle, Line
+from .sketch import Sketch
+from .sketch_extrude import Extrude
+from .wire import Wire
+from .workplane import Workplane
 
 
 class Fusion360GalleryParser:

@@ -17,9 +17,9 @@ from OCP.gp import gp_Pnt
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS_Compound
-from rapidcadpy.integrations.ocp.shape import OccShape
-from rapidcadpy.primitives import Arc, Circle, Line
-from rapidcadpy.sketch2d import Sketch2D
+from .integrations.ocp.shape import OccShape
+from .primitives import Arc, Circle, Line
+from .sketch2d import Sketch2D
 
 
 class OccSketch2D(Sketch2D):

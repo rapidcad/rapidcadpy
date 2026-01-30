@@ -1,14 +1,14 @@
 """Public entry points for preset profile sections.
 
 Intended usage:
-    from rapidcadpy.components import profiles
+    from .components import profiles
     profile = profiles.ipe('IPE80').sketch(wp)
 """
 
 from __future__ import annotations
 
-from rapidcadpy.components.sections.ipe import ipe, list_ipe
-from rapidcadpy.components.sections.ipn import ipn, list_ipn
+from .sections.ipe import list_ipe
+from .sections.ipn import list_ipn
 
 
 def list_profiles() -> dict[str, list[str]]:

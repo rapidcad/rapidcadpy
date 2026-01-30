@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from typing import Tuple, Optional, Union, Literal, TYPE_CHECKING, Dict, Any
 
 if TYPE_CHECKING:
-    from rapidcadpy.cad_types import Vector
+    from ...cad_types import Vector
 
 
 def visualize_boundary_conditions(
@@ -36,7 +36,7 @@ def visualize_boundary_conditions(
         str: Path to saved file if filename is provided, otherwise None
 
     Example:
-        >>> from rapidcadpy.fea.boundary_conditions import visualize_boundary_conditions
+        >>> from .fea.boundary_conditions import visualize_boundary_conditions
         >>> # After setting up model with constraints and forces
         >>> visualize_boundary_conditions(model, nodes, elements)
 
@@ -200,7 +200,7 @@ class FixedConstraint(BoundaryCondition):
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply fixed constraint to the model"""
-        from rapidcadpy.fea.utils import find_nodes_in_box
+        from .utils import find_nodes_in_box
         import torch
 
         bbox = geometry_info["bounding_box"]
@@ -324,7 +324,7 @@ class CylindricalConstraint(BoundaryCondition):
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply cylindrical constraint to the model"""
-        from rapidcadpy.fea.utils import find_nodes_in_box
+        from .utils import find_nodes_in_box
         import torch
 
         cx, cy, cz = self.center
@@ -505,7 +505,7 @@ class DistributedLoad(Load):
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply distributed load to the model"""
-        from rapidcadpy.fea.utils import find_nodes_in_box
+        from .utils import find_nodes_in_box
         import torch
 
         bbox = geometry_info["bounding_box"]
@@ -671,7 +671,7 @@ class PointLoad(Load):
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size):
         """Apply point load to the model"""
-        from rapidcadpy.fea.utils import find_nodes_in_box
+        from .utils import find_nodes_in_box
 
         x, y, z = self.point
 
@@ -759,7 +759,7 @@ class PressureLoad(Load):
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply circular pressure load to the model"""
-        from rapidcadpy.fea.utils import find_nodes_in_box
+        from .utils import find_nodes_in_box
         import torch
         import math
 
@@ -888,7 +888,7 @@ class ConcentratedLoad(Load):
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply concentrated load to the model"""
-        from rapidcadpy.fea.utils import find_nodes_in_box
+        from .utils import find_nodes_in_box
 
         bbox = geometry_info["bounding_box"]
         load_nodes = None
@@ -1040,7 +1040,7 @@ class LinearDistributedLoad(Load):
         self.tolerance = tolerance
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
-        from rapidcadpy.fea.utils import find_nodes_in_box
+        from .utils import find_nodes_in_box
         import torch
 
         bbox = geometry_info["bounding_box"]

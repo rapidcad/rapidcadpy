@@ -5,11 +5,11 @@ Sketch2D module - Represents a 2D sketch face that can be extruded into a 3D sha
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, List, Optional
 
-from rapidcadpy.primitives import Line
-from rapidcadpy.shape import Shape
+from .primitives import Line
+from .shape import Shape
 
 if TYPE_CHECKING:
-    from rapidcadpy.app import App
+    from .app import App
 
 
 class Sketch2D(ABC):

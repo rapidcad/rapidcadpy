@@ -112,7 +112,7 @@ class FEAResults:
                     "Cannot display boundary conditions: model not available. "
                     "The FEA solver model must be stored in results.model to visualize conditions."
                 )
-            from rapidcadpy.fea.boundary_conditions import visualize_boundary_conditions
+            from .boundary_conditions import visualize_boundary_conditions
 
             conditions_plot = visualize_boundary_conditions(
                 self.model,
@@ -289,7 +289,7 @@ class FEAResults:
         Args:
             filename: Output VTK file path
         """
-        from rapidcadpy.fea.utils import export_to_vtk
+        from .utils import export_to_vtk
 
         # Prepare stress components for export
         if len(self.stress.shape) == 3:
