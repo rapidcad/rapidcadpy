@@ -423,21 +423,24 @@ def generate_pycadseq_code_from_deepcad_json(
 
 if __name__ == "__main__":
     import sys
+    import os
+    from pathlib import Path
 
     if len(sys.argv) < 2:
         print(
-            "Usage: python process_deepcad_to_pycadseq.py <json_file_path> [backend] [output_file_path]"
+            "Usage: python process_deepcad_to_pycadseq.py <json_file_or_directory> [backend] [output_file_or_directory]"
         )
         print("Backends: 'inventor' (default), 'occ'")
+        print("Note: If input is a directory, all .json files will be processed")
         sys.exit(1)
 
-    json_file = sys.argv[1]
+    json_path = sys.argv[1]
     backend = (
         sys.argv[2]
         if len(sys.argv) > 2 and sys.argv[2] in ["inventor", "occ"]
         else "inventor"
     )
-    output_file = (
+    output_path = (
         sys.argv[3]
         if len(sys.argv) > 3
         else (
@@ -447,12 +450,62 @@ if __name__ == "__main__":
         )
     )
 
-    try:
-        code = generate_pycadseq_code_from_deepcad_json(
-            json_file, backend=backend, output_file=output_file
-        )
-        print("Generated Python code:")
-        print("-" * 50)
-        print(code)
-    except Exception as e:
-        print(f"Error: {e}")
+    # Check if input is a directory or a file
+    input_path = Path(json_path)
+    is_directory = input_path.is_dir()
+
+    # Collect JSON files to process
+    if is_directory:
+        json_files = list(input_path.glob("*.json"))
+        if not json_files:
+            print(f"Error: No JSON files found in directory: {json_path}")
+            sys.exit(1)
+    else:
+        if not input_path.exists():
+            print(f"Error: File not found: {json_path}")
+            sys.exit(1)
+        json_files = [input_path]
+
+    # Print parsed arguments for verification
+    print("Parsed Arguments:")
+    print(f"  Input path: {json_path}")
+    print(f"  Input type: {'Directory' if is_directory else 'File'}")
+    print(f"  Files to process: {len(json_files)}")
+    print(f"  Backend: {backend}")
+    print(f"  Output path: {output_path}")
+    print("-" * 50)
+
+    # Process each JSON file
+    for json_file in json_files:
+        print(f"\nProcessing: {json_file.name}")
+        print("=" * 50)
+
+        # Determine output file for this JSON
+        if output_path:
+            output_file_path = Path(output_path)
+            if is_directory:
+                # If input is directory, create output directory if needed
+                output_file_path.mkdir(parents=True, exist_ok=True)
+                output_file = output_file_path / f"{json_file.stem}.py"
+            else:
+                # Single file output
+                output_file = output_file_path
+        else:
+            output_file = None
+
+        try:
+            code = generate_pycadseq_code_from_deepcad_json(
+                str(json_file),
+                backend=backend,
+                output_file=str(output_file) if output_file else None,
+            )
+            if not output_file:
+                print("Generated Python code:")
+                print("-" * 50)
+                print(code)
+        except Exception as e:
+            print(f"Error processing {json_file.name}: {e}")
+            continue
+
+    print("\n" + "=" * 50)
+    print(f"Processing complete. {len(json_files)} file(s) processed.")

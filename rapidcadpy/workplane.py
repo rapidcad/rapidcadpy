@@ -397,6 +397,14 @@ class Workplane(ABC):
 
         return self
 
+    def box(
+        self,
+        length: float,
+        width: float,
+        height: float,
+        centered: bool = True,
+    ) -> Any: ...
+
     def close(self) -> "Sketch2D":
         """
         Close the current sketch and construct the face.

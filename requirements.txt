@@ -3,6 +3,8 @@
 
 # Core numerical computing
 numpy>=1.20.0
+torch-fem
+netgen-mesher
 
 # Plotting and visualization
 plotly>=5.0.0

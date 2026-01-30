@@ -1,0 +1,2 @@
+step_file,success,num_constraints,num_loads,num_cylinders,constraint_area,load_area,cylinder_radii,load_direction,constraint_volume,load_volume,error,png_file,viz_error
+00000174_00001.step,True,2,1,1,1.0913938586578373,0.1656944,0.30,inward,0.2880001728000344,0.0,,00000174_00001.png,

@@ -1,0 +1,73 @@
+{
+  "meta": {
+    "problem_id": "DEEPCAD_AUTO",
+    "description": "Auto-generated load case from DeepCAD STEP.",
+    "analysis_type": "3d",
+    "source_step": "/home/ubuntu/rapidcadpy/test_count.step"
+  },
+  "design_domain": {
+    "units": "mm",
+    "bounds": {
+      "x_min": -5.0000001,
+      "y_min": -5.0000001,
+      "z_min": -5.0000001,
+      "x_max": 5.0000001,
+      "y_max": 5.0000001,
+      "z_max": 5.0000001
+    }
+  },
+  "spatial_selectors": [
+    {
+      "id": "constraint_region",
+      "type": "box_3d",
+      "query": {
+        "x_min": -5.5,
+        "y_min": -6.0000001,
+        "z_min": -6.0000001,
+        "x_max": -4.5,
+        "y_max": 6.0000001,
+        "z_max": 6.0000001
+      }
+    },
+    {
+      "id": "load_region",
+      "type": "box_3d",
+      "query": {
+        "x_min": 4.5,
+        "y_min": -6.0000001,
+        "z_min": -6.0000001,
+        "x_max": 5.5,
+        "y_max": 6.0000001,
+        "z_max": 6.0000001
+      }
+    }
+  ],
+  "boundary_conditions": [
+    {
+      "name": "fix_constraint",
+      "region_id": "constraint_region",
+      "type": "fixed_displacement",
+      "dof_lock": {
+        "x": true,
+        "y": true,
+        "z": true
+      }
+    }
+  ],
+  "loads": [
+    {
+      "name": "applied_load",
+      "region_id": "load_region",
+      "type": "distributed_force",
+      "direction": "-x",
+      "magnitude_newtons": 1000.0
+    }
+  ],
+  "material": {
+    "type": "isotropic",
+    "name": "Aluminium_6061",
+    "elastic_modulus_mpa": 69000,
+    "poissons_ratio": 0.33,
+    "density_g_cm3": 2.7
+  }
+}

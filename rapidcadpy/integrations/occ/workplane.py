@@ -53,3 +53,48 @@ class OccWorkplane(Workplane):
         self._pending_shapes = []
         self._current_position = Vertex(0, 0)
         self._loop_start = None
+
+    def box(
+        self, length: float, width: float, height: float, centered: bool = True
+    ) -> OccShape:
+        """
+        Create a 3D box shape.
+
+        Args:
+            length: Length of the box (X dimension)
+            width: Width of the box (Y dimension)
+            height: Height of the box (Z dimension)
+            centered: If True (default), box is centered at current position.
+                     If False, box extends from current position in positive directions.
+
+        Returns:
+            OccShape: The created box shape
+
+        Example:
+            # Create a centered box
+            box = app.work_plane("XY").box(10, 20, 30)
+
+            # Create a box from origin
+            box = app.work_plane("XY").box(10, 20, 30, centered=False)
+        """
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        # Determine the starting corner based on centered parameter
+        if centered:
+            x = self._current_position.x - length / 2
+            y = self._current_position.y - width / 2
+            z = -height / 2
+        else:
+            x = self._current_position.x
+            y = self._current_position.y
+            z = 0
+
+        # Create the box starting point
+        corner = gp_Pnt(x, y, z)
+
+        # Create the box
+        box_builder = BRepPrimAPI_MakeBox(corner, length, width, height)
+        solid = box_builder.Shape()
+
+        # Return as OccShape
+        return OccShape(obj=solid, app=self.app)

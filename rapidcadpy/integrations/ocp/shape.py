@@ -332,6 +332,42 @@ class OccShape(Shape):
 
         return self
 
+    def translate(self, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> "OccShape":
+        """
+        Translate (move) the shape by the given offsets.
+
+        This operation modifies the current shape in-place by translating
+        it along the X, Y, and Z axes.
+
+        Args:
+            x: Translation distance along X axis (default: 0.0)
+            y: Translation distance along Y axis (default: 0.0)
+            z: Translation distance along Z axis (default: 0.0)
+
+        Returns:
+            OccShape: Self (modified in-place) for method chaining
+
+        Example:
+            >>> shape.translate(10, 0, 0)  # Move 10 units along X
+            >>> shape.translate(5, 5, 5)   # Move 5 units along each axis
+            >>> shape.translate(z=10)      # Move 10 units along Z only
+        """
+        from OCP.gp import gp_Vec, gp_Trsf
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+
+        # Create translation vector (ensure float conversion)
+        translation_vec = gp_Vec(float(x), float(y), float(z))
+
+        # Create transformation
+        transform = gp_Trsf()
+        transform.SetTranslation(translation_vec)
+
+        # Apply transformation
+        transform_builder = BRepBuilderAPI_Transform(self.obj, transform, True)
+        self.obj = transform_builder.Shape()
+
+        return self
+
     def get_fea_analyzer(self, material, mesh_size, element_type="tet4"):
         """
         Get FEA analyzer for this OccShape.

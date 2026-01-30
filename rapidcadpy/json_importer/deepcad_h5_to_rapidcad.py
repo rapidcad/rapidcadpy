@@ -703,24 +703,26 @@ if __name__ == "__main__":
     if args.delete_existing:
         shutil.rmtree(os.path.dirname(H5_VEC_FOLDER) + "/cadquery_stl/")
         shutil.rmtree(os.path.dirname(H5_VEC_FOLDER) + "/cadquery/")
-    
+
     # Set up save cadquery save directory
     root_save_dir = create_save_dir(RAPIDCAD_FOLDER)
-    
+
     # Set up logging
     log_dir = os.path.dirname(H5_VEC_FOLDER) + "/logs"
     os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, f"conversion_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log")
-    
+    log_file = os.path.join(
+        log_dir, f"conversion_errors_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+    )
+
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(levelname)s - %(message)s',
+        format="%(asctime)s - %(levelname)s - %(message)s",
         handlers=[
             logging.FileHandler(log_file),
-            logging.StreamHandler()  # Also print to console
-        ]
+            logging.StreamHandler(),  # Also print to console
+        ],
     )
-    
+
     logging.info(f"Starting conversion process. Errors will be logged to: {log_file}")
 
     # file_path_ques = str(input("What file path would you like to save the generated python files to? (default: deepcad_derived/data/cad_vec/cadquery): "))
@@ -776,8 +778,11 @@ if __name__ == "__main__":
             logging.error(f"NotImplementedError converting {h5_file_path}: {e}")
         except Exception as e:
             print(f"Error converting file (Unexpected Error): {type(e).__name__}: {e}")
-            logging.error(f"Unexpected error converting {h5_file_path}: {type(e).__name__}: {e}", exc_info=True)
-        
+            logging.error(
+                f"Unexpected error converting {h5_file_path}: {type(e).__name__}: {e}",
+                exc_info=True,
+            )
+
         exit(0)
 
     sub_dirs = [str(i).zfill(4) for i in range(100)]
@@ -915,7 +920,7 @@ if __name__ == "__main__":
                         "code: "
                         + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
                     )
-            
+
             except NotImplementedError as e:
                 error_msg = f"NotImplementedError: {h5_vec_path} NO GENERATION: {e}"
                 print(f"ERROR: {error_msg}")
@@ -933,7 +938,7 @@ if __name__ == "__main__":
                         "code: "
                         + h5_vec_path.replace(H5_VEC_FOLDER, "").rsplit(".", 1)[0]
                     )
-            
+
             except Exception as e:
                 error_msg = f"Unexpected Error: {h5_vec_path} NO GENERATION: {type(e).__name__}: {e}"
                 print(f"ERROR: {error_msg}")
@@ -963,14 +968,16 @@ if __name__ == "__main__":
         """
         print(summary)
         logging.info(summary)
-        
+
         if no_code:
-            logging.warning(f"Files with no code generation in {sub_dir}: {no_code[:10]}{'...' if len(no_code) > 10 else ''}")
+            logging.warning(
+                f"Files with no code generation in {sub_dir}: {no_code[:10]}{'...' if len(no_code) > 10 else ''}"
+            )
         if no_stl:
-            logging.warning(f"Files with no STL generation in {sub_dir}: {no_stl[:10]}{'...' if len(no_stl) > 10 else ''}")
-    
-        
-    
+            logging.warning(
+                f"Files with no STL generation in {sub_dir}: {no_stl[:10]}{'...' if len(no_stl) > 10 else ''}"
+            )
+
     # for i, h5_vec_path in enumerate(h5_files):
 
     #     if '/0000/' in h5_vec_path:

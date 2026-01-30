@@ -1,0 +1,89 @@
+{
+  "meta": {
+    "problem_id": "DEEPCAD_AUTO",
+    "description": "Auto-generated load case from DeepCAD STEP.",
+    "analysis_type": "3d",
+    "source_step": "/mnt/data/deepcad_step/0000/00000174_00001.step"
+  },
+  "design_domain": {
+    "units": "mm",
+    "bounds": {
+      "x_min": -0.5000001,
+      "y_min": -0.5000001,
+      "z_min": -1e-07,
+      "x_max": 0.5000001,
+      "y_max": 0.5000001,
+      "z_max": 0.4000001
+    }
+  },
+  "spatial_selectors": [
+    {
+      "id": "constraint_region_1",
+      "type": "box_3d",
+      "query": {
+        "x_min": -0.6000001199999999,
+        "y_min": -0.6000001199999999,
+        "z_min": -0.05000001,
+        "x_max": 0.6000001199999999,
+        "y_max": 0.6000001199999999,
+        "z_max": 0.05000001
+      }
+    },
+    {
+      "id": "constraint_region_2",
+      "type": "box_3d",
+      "query": {
+        "x_min": -0.6000001199999999,
+        "y_min": -0.6000001199999999,
+        "z_min": 0.34999999000000004,
+        "x_max": 0.6000001199999999,
+        "y_max": 0.6000001199999999,
+        "z_max": 0.45000001
+      }
+    }
+  ],
+  "boundary_conditions": [
+    {
+      "name": "fix_constraint_1",
+      "region_id": "constraint_region_1",
+      "type": "fixed_displacement",
+      "dof_lock": {
+        "x": true,
+        "y": true,
+        "z": true
+      }
+    },
+    {
+      "name": "fix_constraint_2",
+      "region_id": "constraint_region_2",
+      "type": "fixed_displacement",
+      "dof_lock": {
+        "x": true,
+        "y": true,
+        "z": true
+      }
+    }
+  ],
+  "loads": [
+    {
+      "name": "pressure_cylinder",
+      "type": "pressure",
+      "center": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "radius": 0.3,
+      "pressure_mpa": 5.0,
+      "direction": "inward",
+      "normal_axis": "z"
+    }
+  ],
+  "material": {
+    "type": "isotropic",
+    "name": "Aluminium_6061",
+    "elastic_modulus_mpa": 69000,
+    "poissons_ratio": 0.33,
+    "density_g_cm3": 2.7
+  }
+}

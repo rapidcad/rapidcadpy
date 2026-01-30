@@ -28,10 +28,10 @@ def test_torch_fem_optimization_plot():
     print("Starting topology optimization...")
     print("Starting topology optimization...")
     result = analyzer.optimize(
-        volume_fraction=0.3, 
-        num_iterations=30,       
+        volume_fraction=0.3,
+        num_iterations=30,
         penalization=3.0,
-        filter_radius=1.0,        
+        filter_radius=1.0,
         verbose=True,
     )
 
@@ -39,4 +39,9 @@ def test_torch_fem_optimization_plot():
     print(result.summary())
     # Use interactive=False for headless environments (no display)
     # Higher threshold (0.5) shows only denser elements = clearer structure
-    result.show(display="solid", filename="torch_fem_optimization_plot.png", interactive=False, threshold=0.5)
+    result.show(
+        display="solid",
+        filename="torch_fem_optimization_plot.png",
+        interactive=False,
+        threshold=0.5,
+    )

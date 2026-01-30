@@ -16,6 +16,7 @@ try:
     from rapidcadpy.fea.materials import Material, MaterialProperties, CustomMaterial
     from rapidcadpy.fea.boundary_conditions import (
         FixedConstraint,
+        CylindricalConstraint,
         PinnedConstraint,
         RollerConstraint,
         DistributedLoad,
@@ -34,6 +35,7 @@ try:
         "MaterialProperties",
         "CustomMaterial",
         "FixedConstraint",
+        "CylindricalConstraint",
         "PinnedConstraint",
         "RollerConstraint",
         "DistributedLoad",
