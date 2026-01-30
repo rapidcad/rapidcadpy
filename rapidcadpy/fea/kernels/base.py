@@ -12,10 +12,10 @@ import numpy as np
 import pyvista as pv
 
 if TYPE_CHECKING:
-    from rapidcadpy.shape import Shape
-    from rapidcadpy.fea.materials import MaterialProperties
-    from rapidcadpy.fea.boundary_conditions import Load, BoundaryCondition
-    from rapidcadpy.fea.results import FEAResults, OptimizationResult
+    from ...shape import Shape
+    from ..materials import MaterialProperties
+    from ..boundary_conditions import Load, BoundaryCondition
+    from ..results import FEAResults, OptimizationResult
 
 
 class FEAKernel(ABC):
@@ -210,7 +210,7 @@ class FEAAnalyzer:
         self.shape = shape
         self.material = material
         if kernel == "torch-fem":
-            from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
+            from .torch_fem_kernel import TorchFEMKernel
 
             self.kernel = TorchFEMKernel(device=device, mesher=mesher)
         self.mesh_size = mesh_size
@@ -598,3 +598,73 @@ class FEAAnalyzer:
                 plotter.show()
             else:
                 plotter.show(jupyter_backend="static")
+
+    def export_gltf(
+        self,
+        filepath: str,
+        display: str = "conditions",
+    ) -> dict:
+        """
+        Export visualization data as glTF for web rendering.
+
+        Args:
+            filepath: Path to save the glTF file (without extension)
+            display: What to display. 'conditions' (default) shows mesh, loads,
+                    and constraints. 'mesh' shows only the mesh.
+
+        Returns:
+            Dictionary containing paths and metadata for frontend rendering
+        """
+        import trimesh
+
+        if display not in ["conditions", "mesh"]:
+            raise ValueError("display must be either 'conditions' or 'mesh'")
+
+        # Get visualization data from kernel
+        pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
+            self.kernel.get_visualization_data(
+                shape=self.shape,
+                material=self.material,
+                loads=self.loads,
+                constraints=self.constraints,
+                mesh_size=self.mesh_size,
+                element_type=self.element_type,
+                with_conditions=(display == "conditions"),
+            )
+        )
+
+        # Extract surface from volume mesh for glTF export
+        surface_mesh = pv_mesh.extract_surface()
+
+        # Convert PyVista surface mesh to trimesh for glTF export
+        faces = surface_mesh.faces.reshape(-1, 4)[:, 1:]  # Remove the count prefix
+        vertices = surface_mesh.points
+        mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+
+        # Export main mesh as glTF
+        mesh_path = f"{filepath}_mesh.gltf"
+        mesh.export(mesh_path)
+
+        # Prepare boundary condition data
+        result = {
+            "mesh": mesh_path,
+            "bounds": {
+                "min": nodes.min(axis=0).tolist(),
+                "max": nodes.max(axis=0).tolist(),
+            },
+        }
+
+        if display == "conditions":
+            # Export constraint points
+            constrained_nodes = nodes[constraint_mask]
+            loaded_nodes = nodes[force_mask]
+
+            result["constraints"] = (
+                constrained_nodes.tolist() if len(constrained_nodes) > 0 else []
+            )
+            result["loads"] = loaded_nodes.tolist() if len(loaded_nodes) > 0 else []
+            result["force_vectors"] = (
+                force_vectors.tolist() if len(force_vectors) > 0 else []
+            )
+
+        return result

@@ -1,5 +1,5 @@
 from typing import List, Union, Optional
-from rapidcadpy.shape import Shape
+from .shape import Shape
 
 
 class OccShape(Shape):
@@ -345,8 +345,8 @@ class OccShape(Shape):
             FEAAnalyzer instance, or None if dependencies unavailable
         """
         try:
-            from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
-            from rapidcadpy.fea.kernels.base import FEAAnalyzer
+            from .fea.kernels.torch_fem_kernel import TorchFEMKernel
+            from .fea.kernels.base import FEAAnalyzer
 
             if TorchFEMKernel.is_available():
                 kernel = TorchFEMKernel()

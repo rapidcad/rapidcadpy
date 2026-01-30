@@ -2,14 +2,14 @@ import tempfile
 import math
 from typing import TYPE_CHECKING, Optional, List, Union, Tuple, Dict
 
-from rapidcadpy.app import App
+from .app import App
 
 if TYPE_CHECKING:
-    from rapidcadpy.integrations.ocp.workplane import OccWorkplane
+    from .integrations.ocp.workplane import OccWorkplane
 
-from rapidcadpy.fea.boundary_conditions import BoundaryCondition, Load
-from rapidcadpy.fea.materials import MaterialProperties
-from rapidcadpy.integrations.ocp.workplane import OccWorkplane
+from .fea.boundary_conditions import BoundaryCondition, Load
+from .fea.materials import MaterialProperties
+from .integrations.ocp.workplane import OccWorkplane
 
 # Standard ISO metric thread data: designation -> (pitch, major_diameter)
 # Values in mm
@@ -53,7 +53,7 @@ class OpenCascadeOcpApp(App):
 
     @property
     def sketch_class(self):
-        from rapidcadpy.integrations.ocp.sketch2d import OccSketch2D
+        from .integrations.ocp.sketch2d import OccSketch2D
 
         return OccSketch2D
 
@@ -229,7 +229,7 @@ class OpenCascadeOcpApp(App):
                 length=15.0
             )
         """
-        from rapidcadpy.integrations.ocp.shape import OccShape
+        from .integrations.ocp.shape import OccShape
 
         # Parse thread designation to get pitch and major diameter (in mm)
         pitch_mm, major_diameter_mm = self._parse_thread_designation(designation)
@@ -718,7 +718,7 @@ class OpenCascadeOcpApp(App):
         else:
             # Multiple shapes - union them all together
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            from rapidcadpy.integrations.ocp.shape import OccShape
+            from .integrations.ocp.shape import OccShape
 
             # Start with the first shape
             combined_obj = self._shapes[0].obj
@@ -757,7 +757,7 @@ class OpenCascadeOcpApp(App):
         else:
             # Multiple shapes - union them all together
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            from rapidcadpy.integrations.ocp.shape import OccShape
+            from .integrations.ocp.shape import OccShape
 
             # Start with the first shape
             combined_obj = self._shapes[0].obj

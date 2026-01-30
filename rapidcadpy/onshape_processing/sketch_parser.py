@@ -1,11 +1,11 @@
 from typing import Dict, Optional
 
-from rapidcadpy.cad_types import Vertex
-from rapidcadpy.cadseq import Sketch
-from rapidcadpy.constraint import CoincidenceConstraint
-from rapidcadpy.onshape_processing.custom_onshape_client import CustomOnshapeClient
-from rapidcadpy.primitive import Primitive
-from rapidcadpy.workplane import Workplane as PlaneOld
+from .cad_types import Vertex
+from .cadseq import Sketch
+from .constraint import CoincidenceConstraint
+from .onshape_processing.custom_onshape_client import CustomOnshapeClient
+from .primitive import Primitive
+from .workplane import Workplane as PlaneOld
 
 
 class SketchParser:

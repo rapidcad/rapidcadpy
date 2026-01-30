@@ -1,9 +1,9 @@
 from collections import OrderedDict
 
-from rapidcadpy.cadseq import Sketch
-from rapidcadpy.extrude import Extrude
-from rapidcadpy.onshape_processing.extrude_parser import ExtrudeParser
-from rapidcadpy.onshape_processing.sketch_parser import SketchParser
+from .cadseq import Sketch
+from .extrude import Extrude
+from .onshape_processing.extrude_parser import ExtrudeParser
+from .onshape_processing.sketch_parser import SketchParser
 
 EXTENT_TYPE_MAP = {
     "BLIND": "OneSideFeatureExtentType",

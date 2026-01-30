@@ -1,10 +1,10 @@
 from typing import Any, Optional
 
 
-from rapidcadpy.app import App
-from rapidcadpy.cad_types import Vector, VectorLike, Vertex
-from rapidcadpy.workplane import Workplane
-from rapidcadpy.primitives import Line, Circle, Arc
+from .app import App
+from .cad_types import Vector, VectorLike, Vertex
+from .workplane import Workplane
+from .primitives import Line, Circle, Arc
 
 
 class OccWorkplane(Workplane):
@@ -34,7 +34,7 @@ class OccWorkplane(Workplane):
         Returns:
             New OccWorkplane with specified origin and normal
         """
-        from rapidcadpy.cad_types import Vector
+        from .cad_types import Vector
 
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
@@ -107,7 +107,7 @@ class OccWorkplane(Workplane):
         from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
         from OCP.gp import gp_Ax1, gp_Pnt, gp_Dir
         from math import radians
-        from rapidcadpy.integrations.ocp.sketch2d import OccSketch2D
+        from .integrations.ocp.sketch2d import OccSketch2D
 
         # Check if there are shapes to revolve
         if not self._pending_shapes:
@@ -146,7 +146,7 @@ class OccWorkplane(Workplane):
         self._clear_pending_shapes()
 
         # Return OccShape
-        from rapidcadpy.integrations.ocp.shape import OccShape
+        from .integrations.ocp.shape import OccShape
 
         # Handle different operations
         if operation in ["Cut", "CutOperation"]:
@@ -248,8 +248,8 @@ class OccWorkplane(Workplane):
             # Sweep the circle along the path
             shape = path.sweep(profile)
         """
-        from rapidcadpy.integrations.ocp.sketch2d import OccSketch2D
-        from rapidcadpy.integrations.ocp.shape import OccShape
+        from .integrations.ocp.sketch2d import OccSketch2D
+        from .integrations.ocp.shape import OccShape
 
         # Check if there are shapes to use as path
         if not self._pending_shapes:

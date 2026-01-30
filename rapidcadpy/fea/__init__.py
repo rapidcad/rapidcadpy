@@ -6,15 +6,15 @@ This module requires additional dependencies:
 """
 
 # Always export base classes (no torch dependency needed)
-from rapidcadpy.fea.kernels.base import FEAKernel, FEAAnalyzer
+from .kernels.base import FEAKernel, FEAAnalyzer
 
 try:
     import torch
     import pyvista
 
     # Export public API
-    from rapidcadpy.fea.materials import Material, MaterialProperties, CustomMaterial
-    from rapidcadpy.fea.boundary_conditions import (
+    from .materials import Material, MaterialProperties, CustomMaterial
+    from .boundary_conditions import (
         FixedConstraint,
         PinnedConstraint,
         RollerConstraint,
@@ -23,8 +23,8 @@ try:
         PressureLoad,
         visualize_boundary_conditions,
     )
-    from rapidcadpy.fea.results import FEAResults, OptimizationResult
-    from rapidcadpy.fea.kernels.torch_fem_kernel import TorchFEMKernel
+    from .results import FEAResults, OptimizationResult
+    from .kernels.torch_fem_kernel import TorchFEMKernel
 
     __all__ = [
         "FEAKernel",

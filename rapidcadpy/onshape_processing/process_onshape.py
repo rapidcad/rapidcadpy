@@ -1,5 +1,5 @@
-from rapidcadpy.onshape_processing.custom_onshape_client import CustomOnshapeClient
-from rapidcadpy.onshape_processing.feature_list_parser import FeatureListParser
+from .onshape_processing.custom_onshape_client import CustomOnshapeClient
+from .onshape_processing.feature_list_parser import FeatureListParser
 
 url = "https://cad.onshape.com/documents/12d7e85cddb60c8cdebe7c33/w/4170277dd65d229c60b56fee/e/41f95128c810bf7238d32d43"
 client = CustomOnshapeClient(

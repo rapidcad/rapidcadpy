@@ -6,13 +6,13 @@ and coordinate system representation (unified Plane functionality).
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from rapidcadpy.primitives import Arc, Circle, Line
+from .primitives import Arc, Circle, Line
 
 from .cad_types import Vector, VectorLike, Vertex
 
 if TYPE_CHECKING:
-    from rapidcadpy.app import App
-    from rapidcadpy.sketch2d import Sketch2D
+    from .app import App
+    from .sketch2d import Sketch2D
 
 
 class Workplane(ABC):
@@ -147,7 +147,7 @@ class Workplane(ABC):
         Returns:
             New workplane with specified origin and normal
         """
-        from rapidcadpy.cad_types import Vector
+        from .cad_types import Vector
 
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
@@ -170,7 +170,7 @@ class Workplane(ABC):
         """
         import numpy as np
 
-        from rapidcadpy.cad_types import Vector
+        from .cad_types import Vector
 
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
@@ -210,7 +210,7 @@ class Workplane(ABC):
 
         This method provides compatibility with the old PlaneOld.from_n_x_y_axes method.
         """
-        from rapidcadpy.cad_types import Vector
+        from .cad_types import Vector
 
         # Convert to vectors and normalize
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
@@ -511,7 +511,7 @@ class Workplane(ABC):
         """
         import numpy as np
 
-        from rapidcadpy.cad_types import Vector
+        from .cad_types import Vector
 
         # Normalize axis
         axis_vec = Vector(*axis) if not isinstance(axis, Vector) else axis

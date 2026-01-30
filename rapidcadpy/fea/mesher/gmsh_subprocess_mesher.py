@@ -12,7 +12,7 @@ from typing import Literal, Tuple
 import torch
 import os
 
-from rapidcadpy.fea.mesher.base import MesherBase
+from .base import MesherBase
 
 
 class GmshSubprocessMesher(MesherBase):

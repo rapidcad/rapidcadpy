@@ -13,16 +13,17 @@ from typing import TYPE_CHECKING, List, Tuple, Optional, Union
 
 from torchfem import Solid
 
-from rapidcadpy.fea.boundary_conditions import BoundaryCondition, Load
-from rapidcadpy.fea.materials import MaterialProperties
-from rapidcadpy.fea.mesher import MesherBase, NetgenMesher
-from rapidcadpy.fea.utils import get_geometry_properties
-from rapidcadpy.fea.kernels.base import FEAKernel
-from rapidcadpy.fea.results import FEAResults, OptimizationResult
+from ...fea.mesher.netgen_mesher import NetgenMesher, MesherBase
+
+from ..boundary_conditions import BoundaryCondition, Load
+from ..materials import MaterialProperties
+from ..utils import get_geometry_properties
+from .base import FEAKernel
+from ..results import FEAResults, OptimizationResult
 from torchfem.materials import IsotropicElasticity3D
 
 if TYPE_CHECKING:
-    from rapidcadpy.shape import Shape
+    from ...shape import Shape
 
 
 class TorchFEMKernel(FEAKernel):
@@ -64,13 +65,17 @@ class TorchFEMKernel(FEAKernel):
             self.mesher = NetgenMesher(num_threads=num_threads)
         elif isinstance(mesher, str):
             if mesher == "gmsh-subprocess":
-                from rapidcadpy.fea.mesher import GmshSubprocessMesher
+                from ..mesher import GmshSubprocessMesher
 
                 self.mesher = GmshSubprocessMesher(num_threads=num_threads)
             elif mesher == "netgen-subprocess":
-                from rapidcadpy.fea.mesher import NetgenSubprocessMesher
+                from ..mesher import NetgenSubprocessMesher
 
                 self.mesher = NetgenSubprocessMesher(num_threads=num_threads)
+            elif mesher == "gmsh-isolated":
+                from ..mesher import IsolatedGmshMesher
+
+                self.mesher = IsolatedGmshMesher(num_threads=num_threads)
             else:
                 raise ValueError(
                     f"Unknown mesher: {mesher}. Supported: 'netgen', 'gmsh', 'netgen-subprocess'"
@@ -216,7 +221,7 @@ class TorchFEMKernel(FEAKernel):
             constraints: List of boundary conditions to apply
         """
 
-        from rapidcadpy.fea.utils import get_geometry_info
+        from ..utils import get_geometry_info
 
         geometry_info = get_geometry_info(nodes)
 
@@ -292,7 +297,7 @@ class TorchFEMKernel(FEAKernel):
         Returns:
             FEAResults object
         """
-        from rapidcadpy.fea.utils import calculate_von_mises, get_geometry_info
+        from ..utils import calculate_von_mises, get_geometry_info
 
         u, f, sigma, F, alpha = solution
 

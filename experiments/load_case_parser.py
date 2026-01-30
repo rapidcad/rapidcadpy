@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
-from rapidcadpy.fea.boundary_conditions import (
+from ..rapidcadpy.fea.boundary_conditions import (
     DistributedLoad,
     PointLoad,
     ConcentratedLoad,
@@ -35,7 +35,7 @@ from rapidcadpy.fea.boundary_conditions import (
     FixedConstraint,
     CylindricalConstraint,
 )
-from rapidcadpy.fea.materials import Material
+from ..rapidcadpy.fea.materials import Material
 
 logger = logging.getLogger(__name__)
 
@@ -584,7 +584,7 @@ class MaterialDefinition:
         This finds the best matching material in the Material library
         by comparing Young's Modulus (E).
         """
-        from rapidcadpy.fea.materials import MaterialProperties
+        from ..rapidcadpy.fea.materials import MaterialProperties
 
         E = self.elastic_modulus_mpa
 
@@ -1055,7 +1055,7 @@ class LoadCase:
         return 7.85  # Default steel density
 
     def get_fea_analyzer(self, mesher: str = "netgen"):
-        from rapidcadpy.fea.kernels.base import FEAAnalyzer
+        from ..rapidcadpy.fea.kernels.base import FEAAnalyzer
 
         # Get constraints from load case
         constraints = self.get_constraints()
@@ -1108,7 +1108,7 @@ class LoadCase:
             try:
                 import tempfile
                 import os
-                from rapidcadpy import OpenCascadeOcpApp
+                from ..rapidcadpy import OpenCascadeOcpApp
 
                 app = OpenCascadeOcpApp()
 
