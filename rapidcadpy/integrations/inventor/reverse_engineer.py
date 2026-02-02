@@ -75,9 +75,6 @@ class InventorReverseEngineer:
         # Note: PartFeatures has collections for each feature type
         # We need to use a different approach to get the timeline order
 
-        # Method: Collect all features with their "index" in specific collections,
-        # then use the Name or internal ordering to reconstruct timeline
-
         extrude_features = part_features.ExtrudeFeatures
         revolve_features = part_features.RevolveFeatures
         thread_features = part_features.ThreadFeatures
@@ -176,7 +173,7 @@ class InventorReverseEngineer:
 
         # Generate code for each feature in order
         sketch_counter = 0
-        processed_sketches = set()
+        processed_sketches = {}  # Changed from set() to {}
 
         for feat_info in all_features:
             feat_type = feat_info["type"]
@@ -191,10 +188,10 @@ class InventorReverseEngineer:
                     sketch_counter += 1
                     wp_var = f"wp{sketch_counter}"
                     self._analyze_sketch(sketch, wp_var, sketch_counter)
-                    processed_sketches[sketch_name] = (wp_var, sketch_counter)
+                    processed_sketches[sketch_id] = (wp_var, sketch_counter)
                 else:
                     # Find the wp_var for this already-processed sketch
-                    wp_var = f"wp{list(processed_sketches).index(sketch_id) + 1}"
+                    wp_var, _ = processed_sketches[sketch_id]
 
                 self._analyze_feature(feature, feat_type, wp_var, sketch_counter)
 
@@ -372,7 +369,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f'{wp_var} = InventorApp.work_plane("{plane_name}", offset={self._fmt(offset)})',
+                    f'{wp_var} = app.work_plane("{plane_name}", offset={self._fmt(offset)})',
                     "",
                 ]
             )
@@ -709,9 +706,6 @@ class InventorReverseEngineer:
                 # Get Extrude details (distance, operation type)
                 extent = feature.Extent
                 extent_type = extent.Type
-                # kDistanceExtent = 20993
-                # kToNextExtent = 20994
-                # kFromToExtent = 20995
                 
                 dist = 1.0
                 symmetric = False
@@ -719,12 +713,39 @@ class InventorReverseEngineer:
                 try:
                     # In newer Inventor API, it might be separate defined object
                     # Simplified for typical extensive distance:
-                    if extent_type == 20993:  # Distance
+                    
+                    is_distance_extent = (
+                        extent_type == constants.kDistanceExtent 
+                        or extent_type == constants.kDistanceExtentObject
+                    )
+                    if is_distance_extent:  # Distance
                         # Check ExtentOne or Distance property
                         # Distance object usually has Value property
-                        dist = extent.Distance.Value
-                except Exception:
-                    pass
+                        # cast to DistanceExtent object
+                        try:
+                            extent = win32.CastTo(extent, "DistanceExtent")
+                        except Exception:
+                            print(f"Warning: Could not cast extent for {name} to DistanceExtent")
+
+                        try:
+                             dist = extent.Distance.Value
+                        except Exception as e:
+                             print(f"DEBUG: Error getting Distance.Value for {name}: {e}")
+                             dist = 1.0 # Default fallback
+                        
+                        # Determine direction to set sign of distance
+                        try:
+                            direction = extent.Direction
+                            
+                            if direction == constants.kNegativeExtentDirection: # Negative
+                                 dist = -dist
+                            elif direction == constants.kSymmetricExtentDirection: # Symmetric
+                                 symmetric = True
+                        except Exception as e:
+                            print(f"DEBUG: Error getting Direction for {name}: {e}")
+
+                except Exception as e:
+                    print(f"Warning: Could not get extrude distance for {name}: {e}")
                 
                 # Check for symmetric
                 # Might be property on Feature or Definition
@@ -746,9 +767,14 @@ class InventorReverseEngineer:
                 self.generated_code.append(
                     f"# Extrude: {name}"
                 )
-                self.generated_code.append(
-                    f'{wp_var}.extrude(distance={self._fmt(dist)}, operation="{op_str}")'
-                )
+                if symmetric:
+                    self.generated_code.append(
+                         f'{wp_var}.extrude(distance={self._fmt(dist)}, operation="{op_str}", symmetric=True)'
+                    )
+                else: 
+                    self.generated_code.append(
+                        f'{wp_var}.extrude(distance={self._fmt(dist)}, operation="{op_str}")'
+                    )
                 self.generated_code.append("")
                 
             elif feat_type == "revolve":
@@ -756,7 +782,7 @@ class InventorReverseEngineer:
                 angle_rad = 6.283185  # 360 deg
                 try:
                     extent = feature.Extent
-                    if extent.Type == 20995: # kAngleExtent
+                    if extent.Type == constants.kAngleExtent: 
                          angle_rad = extent.Angle.Value
                 except Exception:
                     pass
@@ -946,7 +972,7 @@ class InventorReverseEngineer:
             return info
         except Exception as e:
             print(f"Warning: Could not extract chamfer info: {e}")
-            return None
+            return {}
 
     def _generate_chamfer_code(self, chamfer_info: Dict) -> List[str]:
         """

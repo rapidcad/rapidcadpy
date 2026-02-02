@@ -6,6 +6,7 @@ import argparse
 import os
 import glob
 import sys
+import traceback
 from pathlib import Path
 
 # Add project root to path
@@ -96,6 +97,7 @@ def reverse_engineer_ipt_file(file_path, output_file, overwrite=False):
         return generated_code
     except Exception as e:
         print(f"✗ Error processing {file_path}: {e}")
+        traceback.print_exc()
         return None
 
 

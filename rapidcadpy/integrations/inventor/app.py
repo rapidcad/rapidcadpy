@@ -1,11 +1,11 @@
 import os
 from typing import TYPE_CHECKING, Optional
 
-from .app import App
-from .cad_types import VectorLike
+from rapidcadpy.app import App
+from rapidcadpy.cad_types import VectorLike
 
 if TYPE_CHECKING:
-    from .integrations.inventor.workplane import InventorWorkPlane
+    from .workplane import InventorWorkPlane
 
 
 class InventorApp(App):
@@ -18,7 +18,7 @@ class InventorApp(App):
                 "pywin32 is required for Inventor integration. Install with: pip install pywin32"
             )
 
-        from .integrations.inventor.workplane import InventorWorkPlane
+        from .workplane import InventorWorkPlane
 
         super().__init__(InventorWorkPlane)
         try:
@@ -73,9 +73,9 @@ class InventorApp(App):
     def work_plane(
         self,
         name: str = "XY",
+        offset: Optional[float] = None,
         origin: Optional[VectorLike] = None,
         normal: Optional[VectorLike] = None,
-        offset: Optional[float] = None,
         **kwargs,
     ) -> "InventorWorkPlane":
         """
@@ -83,15 +83,15 @@ class InventorApp(App):
 
         Args:
             name: Standard plane name ("XY", "XZ", "YZ") - used if origin/normal not provided
+            offset: Offset distance for the workplane
             origin: Origin point for custom workplane
             normal: Normal vector for custom workplane
-            offset: Offset distance for the workplane
             **kwargs: Additional arguments (like app parameter)
 
         Returns:
             InventorWorkPlane instance
         """
-        from .integrations.inventor.workplane import InventorWorkPlane
+        from .workplane import InventorWorkPlane
 
         if origin is not None and normal is not None:
             # Create custom workplane from origin and normal
@@ -114,7 +114,7 @@ class InventorApp(App):
             # Default to XY if unknown name
             return InventorWorkPlane.xy_plane(app=self)
 
-    def to_stl(self, file_name: str) -> None:
+    def to_stl(self, file_name: str, ascii: bool = False) -> None:
         """
         Export the shape to STL format using Autodesk Inventor COM API.
 
@@ -123,6 +123,7 @@ class InventorApp(App):
 
         Args:
             file_name: Path to the output STL file
+            ascii: Whether to export as ASCII STL (not fully implemented in Inventor yet)
         """
         try:
             import pythoncom
