@@ -65,135 +65,72 @@ class InventorReverseEngineer:
     def _analyze_sketches_and_features(self):
         """Analyze all features in their correct creation order."""
         # Get the PartFeatures collection which contains all features in order
-        part_features = self.comp_def.Features
+        features = self.comp_def.Features
         
-        # Build a list of all features in order using the AllFeatures collection
-        # This gives us the browser/timeline order
-        all_features_ordered = []
+        # Create lookups for specific feature types by name
+        extrudes = {f.Name: f for f in features.ExtrudeFeatures}
+        revolves = {f.Name: f for f in features.RevolveFeatures}
+        threads = {f.Name: f for f in features.ThreadFeatures}
+        chamfers = {f.Name: f for f in features.ChamferFeatures}
+        fillets = {f.Name: f for f in features.FilletFeatures}
         
-        # Iterate through all features in order
-        # Note: PartFeatures has collections for each feature type
-        # We need to use a different approach to get the timeline order
-        
-        # Method: Collect all features with their "index" in specific collections,
-        # then use the Name or internal ordering to reconstruct timeline
-        
-        extrude_features = part_features.ExtrudeFeatures
-        revolve_features = part_features.RevolveFeatures
-        thread_features = part_features.ThreadFeatures
-        chamfer_features = part_features.ChamferFeatures
-        fillet_features = part_features.FilletFeatures
-        
-        # Collect all features with metadata
-        all_features = []
-        
-        # Add extrude features
-        for i in range(1, extrude_features.Count + 1):
-            feature = extrude_features.Item(i)
-            if not feature.Suppressed:
-                sketch = feature.Profile.Parent
-                all_features.append({
-                    "feature": feature,
-                    "type": "extrude",
-                    "sketch": sketch,
-                    "sketch_index": self._get_sketch_index(sketch),
-                    "name": feature.Name,
-                })
-        
-        # Add revolve features
-        for i in range(1, revolve_features.Count + 1):
-            feature = revolve_features.Item(i)
-            if not feature.Suppressed:
-                sketch = feature.Profile.Parent
-                all_features.append({
-                    "feature": feature,
-                    "type": "revolve",
-                    "sketch": sketch,
-                    "sketch_index": self._get_sketch_index(sketch),
-                    "name": feature.Name,
-                })
-        
-        # Add thread features
-        for i in range(1, thread_features.Count + 1):
-            feature = thread_features.Item(i)
-            if not feature.Suppressed:
-                # Threads don't have a sketch, but we can try to find which face they depend on
-                # This helps us determine order based on which extrude/revolve created that face
-                dependent_sketch_index = self._get_thread_dependent_sketch_index(feature)
-                all_features.append({
-                    "feature": feature,
-                    "type": "thread",
-                    "sketch": None,
-                    "sketch_index": dependent_sketch_index,
-                    "name": feature.Name,
-                })
-        
-        # Add chamfer features
-        for i in range(1, chamfer_features.Count + 1):
-            feature = chamfer_features.Item(i)
-            if not feature.Suppressed:
-                dependent_sketch_index = self._get_chamfer_dependent_sketch_index(feature)
-                all_features.append({
-                    "feature": feature,
-                    "type": "chamfer",
-                    "sketch": None,
-                    "sketch_index": dependent_sketch_index,
-                    "name": feature.Name,
-                })
-        
-        # Add fillet features
-        for i in range(1, fillet_features.Count + 1):
-            feature = fillet_features.Item(i)
-            if not feature.Suppressed:
-                dependent_sketch_index = self._get_fillet_dependent_sketch_index(feature)
-                all_features.append({
-                    "feature": feature,
-                    "type": "fillet",
-                    "sketch": None,
-                    "sketch_index": dependent_sketch_index,
-                    "name": feature.Name,
-                })
-        
-        # Sort by sketch_index to maintain feature order
-        # Features that depend on later sketches come after features that depend on earlier sketches
-        all_features.sort(key=lambda x: (x["sketch_index"], x["name"]))
-        
-        # Generate code for each feature in order
         sketch_counter = 0
-        processed_sketches = set()
+        processed_sketches = {}  # Map sketch name -> (wp_var, sketch_index)
         
-        for feat_info in all_features:
-            feat_type = feat_info["type"]
-            feature = feat_info["feature"]
+        # Iterate through all features in the timeline (Browser) order
+        for i in range(1, features.Count + 1):
+            feature = features.Item(i)
+            if feature.Suppressed:
+                continue
             
-            if feat_type in ["extrude", "revolve"]:
-                # These features have sketches
-                sketch = feat_info["sketch"]
-                sketch_id = id(sketch)
+            name = feature.Name
+            
+            if name in extrudes:
+                real_feature = extrudes[name]
+                sketch = real_feature.Profile.Parent
+                sketch_name = sketch.Name
                 
-                if sketch_id not in processed_sketches:
+                if sketch_name not in processed_sketches:
                     sketch_counter += 1
                     wp_var = f"wp{sketch_counter}"
                     self._analyze_sketch(sketch, wp_var, sketch_counter)
-                    processed_sketches.add(sketch_id)
+                    processed_sketches[sketch_name] = (wp_var, sketch_counter)
                 else:
-                    # Find the wp_var for this already-processed sketch
-                    wp_var = f"wp{list(processed_sketches).index(sketch_id) + 1}"
+                    wp_var, _ = processed_sketches[sketch_name]
                 
-                self._analyze_feature(feature, feat_type, wp_var, sketch_counter)
+                # Analyze extrude with the sketch's workplane variable
+                self._analyze_feature(real_feature, "extrude", wp_var, processed_sketches[sketch_name][1])
                 
-            elif feat_type == "thread":
-                thread_info = self._analyze_thread_feature(feature)
+            elif name in revolves:
+                real_feature = revolves[name]
+                sketch = real_feature.Profile.Parent
+                sketch_name = sketch.Name
+                
+                if sketch_name not in processed_sketches:
+                    sketch_counter += 1
+                    wp_var = f"wp{sketch_counter}"
+                    self._analyze_sketch(sketch, wp_var, sketch_counter)
+                    processed_sketches[sketch_name] = (wp_var, sketch_counter)
+                else:
+                    wp_var, _ = processed_sketches[sketch_name]
+                
+                self._analyze_feature(real_feature, "revolve", wp_var, processed_sketches[sketch_name][1])
+            
+            elif name in threads:
+                real_feature = threads[name]
+                thread_info = self._analyze_thread_feature(real_feature)
                 thread_code = self._generate_thread_code(thread_info)
                 self.generated_code.append("")
-                self.generated_code.append(f"# Thread: {feat_info['name']}")
+                # Comment is added by _generate_thread_code
                 self.generated_code.extend(thread_code)
                 
-            elif feat_type == "chamfer":
-                self._analyze_single_chamfer_feature(feature)
+            elif name in chamfers:
+                real_feature = chamfers[name]
+                self._analyze_single_chamfer_feature(real_feature)
                 
-            elif feat_type == "fillet":
-                self._analyze_single_fillet_feature(feature)
+            elif name in fillets:
+                real_feature = fillets[name]
+                self._analyze_single_fillet_feature(real_feature)
 
     def _get_thread_dependent_sketch_index(self, thread_feature) -> float:
         """
@@ -232,13 +169,37 @@ class InventorReverseEngineer:
         Determine which sketch/feature the chamfer depends on.
         """
         try:
-            # Try to get the edges the chamfer is applied to
+            # Strategy 1: Look at the Faces created by the chamfer (Robust)
+            if hasattr(chamfer_feature, "Faces"):
+                faces = chamfer_feature.Faces
+                if faces.Count > 0:
+                    # Look at one face of the chamfer
+                    c_face = faces.Item(1)
+                    
+                    # Look at adjacent faces via edges
+                    for j in range(1, c_face.Edges.Count + 1):
+                        edge = c_face.Edges.Item(j)
+                        for k in range(1, edge.Faces.Count + 1):
+                            adj_face = edge.Faces.Item(k)
+                            
+                            # Check if this face belongs to another feature
+                            try:
+                                if hasattr(adj_face, "CreatedByFeature"):
+                                    parent = adj_face.CreatedByFeature
+                                    # Ensure it's not the chamfer itself (by name comparison)
+                                    if parent.Name != chamfer_feature.Name:
+                                        if hasattr(parent, "Profile"):
+                                            sketch = parent.Profile.Parent
+                                            return self._get_sketch_index(sketch) + 0.6
+                            except Exception:
+                                pass
+
+            # Strategy 2: Old/Deprecated Edges approach
             if hasattr(chamfer_feature, "Edges"):
                 edges = chamfer_feature.Edges
                 if edges and edges.Count > 0:
                     edge = edges.Item(1)
                     
-                    # Get the faces connected to this edge
                     if hasattr(edge, "Faces") and edge.Faces.Count > 0:
                         face = edge.Faces.Item(1)
                         
@@ -281,15 +242,19 @@ class InventorReverseEngineer:
         """Analyze and generate code for a single chamfer feature."""
         # Reuse existing chamfer logic but for a single feature
         try:
+            # Note: _analyze_chamfers in previous code (now removed/refactored) 
+            # might have handled Collections. we need _extract_chamfer_info to handle single feature.
             chamfer_info = self._extract_chamfer_info(chamfer_feature)
             if chamfer_info:
                 self.generated_code.append("")
                 self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
                 chamfer_code = self._generate_chamfer_code(chamfer_info)
                 self.generated_code.extend(chamfer_code)
+            else:
+                 self.generated_code.append(f"# Chamfer: Could not extract edge position for {chamfer_feature.Name}")
         except Exception as e:
             self.generated_code.append(f"# Warning: Could not process chamfer {chamfer_feature.Name}: {e}")
-    
+
     def _analyze_single_fillet_feature(self, fillet_feature):
         """Analyze and generate code for a single fillet feature."""
         try:
@@ -321,7 +286,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f'{wp_var} = app.work_plane("{plane_name}", offset={self._fmt(offset)})',
+                    f'{wp_var} = InventorApp.work_plane("{plane_name}", offset={self._fmt(offset)})',
                     "",
                 ]
             )
@@ -329,7 +294,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f'{wp_var} = app.work_plane("{plane_name}")',
+                    f'{wp_var} = InventorApp.work_plane("{plane_name}")',
                     "",
                 ]
             )
@@ -337,10 +302,9 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f"{wp_var} = app.work_plane(",
+                    f"{wp_var} = InventorApp.work_plane(",
                     f"    origin={self._fmt3(origin)},",
-                    f"    normal={self._fmt3(normal)},",
-                    "    app=app",
+                    f"    normal={self._fmt3(normal)}",
                     ")",
                     "",
                 ]
@@ -350,7 +314,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f'{wp_var} = app.work_plane("XY")',
+                    f'{wp_var} = InventorApp.work_plane("XY")',
                     "",
                 ]
             )
@@ -492,7 +456,7 @@ class InventorReverseEngineer:
                     start_angle = arc.StartAngle
                     end_angle = arc.EndAngle
                 except AttributeError:
-                    # Calculate angles from points if properties not available
+                    # Calculate angles from points if not available
                     start_angle = math.atan2(
                         start_pt.Y - center_pt.Y, start_pt.X - center_pt.X
                     )
@@ -606,146 +570,205 @@ class InventorReverseEngineer:
         return abs(p1[0] - p2[0]) < tolerance and abs(p1[1] - p2[1]) < tolerance
 
     def _generate_path_code(self, path: List[Dict], wp_var: str):
-        """Generate code for a connected path."""
+        """Generate code for a connected path of lines and arcs."""
         if not path:
             return
 
-        first_element = path[0]
-        code_line = f"{wp_var}.move_to({self._fmt(first_element['start'][0])}, {self._fmt(first_element['start'][1])})"
+        # Start at the first point
+        start_pt = path[0]["start"]
+        
+        # Build the command chain as a single line
+        code_str = f"{wp_var}.move_to({self._fmt(start_pt[0])}, {self._fmt(start_pt[1])})"
 
-        # Chain all elements
         for element in path:
+            end_pt = element["end"]
+            
             if element["type"] == "line":
-                code_line += f".line_to({self._fmt(element['end'][0])}, {self._fmt(element['end'][1])})"
+                code_str += f".line_to({self._fmt(end_pt[0])}, {self._fmt(end_pt[1])})"
             elif element["type"] == "arc":
-                # Calculate middle point for three_point_arc
-                center = element["center"]
-                start = element["start"]
-                end = element["end"]
+                center_pt = element["center"]
                 radius = element["radius"]
-
-                # Calculate middle point on arc
-                start_angle = math.atan2(start[1] - center[1], start[0] - center[0])
-                end_angle = math.atan2(end[1] - center[1], end[0] - center[0])
-
-                # Handle angle wrapping
-                if end_angle < start_angle:
-                    end_angle += 2 * math.pi
-
-                mid_angle = (start_angle + end_angle) / 2
-                mid_x = center[0] + radius * math.cos(mid_angle)
-                mid_y = center[1] + radius * math.sin(mid_angle)
-
-                code_line += f".three_point_arc({self._fmt2((mid_x, mid_y))}, {self._fmt2((end[0], end[1]))})"
-
-        self.generated_code.append(code_line)
+                start_angle = element["start_angle"]
+                end_angle = element["end_angle"]
+                
+                # Calculate midpoint on the arc for three_point_arc
+                # Assume CCW traversal for Inventor SketchArcs
+                diff = end_angle - start_angle
+                while diff <= 0:
+                    diff += 2 * math.pi
+                while diff > 2 * math.pi:
+                    diff -= 2 * math.pi
+                
+                mid_angle = start_angle + (diff / 2.0)
+                mid_x = center_pt[0] + radius * math.cos(mid_angle)
+                mid_y = center_pt[1] + radius * math.sin(mid_angle)
+                
+                code_str += (
+                    f".three_point_arc("
+                    f"p1=({self._fmt(mid_x)}, {self._fmt(mid_y)}), "
+                    f"p2=({self._fmt(end_pt[0])}, {self._fmt(end_pt[1])})"
+                    f")"
+                )
+                
+        self.generated_code.append(code_str)
 
     def _analyze_feature(
-        self, feature, feature_type: str, wp_var: str, feature_num: int
+        self, feature, feat_type: str, wp_var: str, sketch_counter: int
     ):
-        """Analyze a 3D feature and generate code."""
-        if feature_type == "extrude":
-            self._analyze_extrude_feature(feature, wp_var, feature_num)
-        elif feature_type == "revolve":
-            self._analyze_revolve_feature(feature, wp_var, feature_num)
-
-    def _analyze_extrude_feature(self, feature, wp_var: str, feature_num: int):
-        """Analyze an extrude feature."""
-        # Get distance
-        extent = feature.Extent
+        """Analyze extrude or revolve feature."""
         try:
-            distance_extent = win32.CastTo(extent, "DistanceExtent")
-
-            direction = distance_extent.Direction
-            if direction == constants.kNegativeExtentDirection:
-                distance = -round(distance_extent.Distance.Value, 6)
-            else:
-                distance = round(distance_extent.Distance.Value, 6)
-            if direction == constants.kSymmetricExtentDirection:
-                symmetric = "symmetric=True"
-            else:
-                symmetric = "symmetric=False"
-
-            # Get operation type
-            operation_map = {
-                constants.kNewBodyOperation: "NewBodyFeatureOperation",
-                constants.kJoinOperation: "JoinBodyFeatureOperation",
-                constants.kCutOperation: "Cut",
-                constants.kIntersectOperation: "Intersect",
-            }
-            operation = operation_map.get(feature.Operation, "NewBodyFeatureOperation")
-
-            self.generated_code.extend(
-                [
-                    f"# Extrude feature {feature_num}",
-                    f"shape{feature_num} = {wp_var}.extrude({self._fmt(distance)}, '{operation}', {symmetric})",
-                    "",
-                ]
-            )
-        except Exception as e:
-            raise RuntimeError(f"Failed to analyze extrude feature: {e}")
-
-    def _analyze_revolve_feature(self, feature, wp_var: str, feature_num: int):
-        """Analyze a revolve feature."""
-        extent = feature.Extent
-        extent_type = feature.ExtentType
-        # Get angle
-        if extent_type == constants.kAngleExtent:
-            # Cast to AngleExtent to get the angle
-            angle_extent = win32.CastTo(extent, "AngleExtent")
-            angle = round(angle_extent.Angle.Value, 6)
-        elif extent_type == constants.kFullSweepExtent:
-            # Full revolution (360 degrees = 2*pi radians)
-            angle = 6.283185307179586  # 2*pi
-        else:
-            raise ValueError("Unsupported revolve extent type.")
-
-        # Convert angle from radians to revolutions for numeric stability
-        angle = angle / (2 * math.pi)
-
-        # Get axis (default to Z)
-        axis = "Z"
-        axis_entity = feature.AxisEntity
-
-        # Determine which basis vector (X, Y, or Z) the axis is aligned with
-        if hasattr(axis_entity, "Geometry"):
-            axis_geom = axis_entity.Geometry
-            if hasattr(axis_geom, "Direction"):
-                direction = axis_geom.Direction
+            name = feature.Name
+            
+            if feat_type == "extrude":
+                # Get Extrude details (distance, operation type)
+                extent = feature.Extent
+                extent_type = extent.Type
+                # kDistanceExtent = 20993
+                # kToNextExtent = 20994
+                # kFromToExtent = 20995
+                
+                dist = 1.0
+                symmetric = False
+                
                 try:
-                    if abs(direction.X) == 1.0:
-                        axis = "X"
-                    elif abs(direction.Y) == 1.0:
-                        axis = "Y"
-                    elif abs(direction.Z) == 1.0:
-                        axis = "Z"
+                    # In newer Inventor API, it might be separate defined object
+                    # Simplified for typical extensive distance:
+                    if extent_type == 20993:  # Distance
+                        # Check ExtentOne or Distance property
+                        # Distance object usually has Value property
+                        dist = extent.Distance.Value
                 except Exception:
                     pass
-        elif hasattr(axis_entity, "Name"):
-            name = (axis_entity.Name or "").upper()
-            if "X" in name:
-                axis = "X"
-            elif "Y" in name:
-                axis = "Y"
-            elif "Z" in name:
-                axis = "Z"
-
-        # Get operation type
-        operation_map = {
-            constants.kNewBodyOperation: "NewBodyFeatureOperation",
-            constants.kJoinOperation: "JoinBodyFeatureOperation",
-            constants.kCutOperation: "Cut",
-            constants.kIntersectOperation: "Intersect",
-        }
-        operation = operation_map.get(feature.Operation, "NewBodyFeatureOperation")
-
-        self.generated_code.extend(
-            [
-                f"# Revolve feature {feature_num}",
-                f"shape{feature_num} = {wp_var}.revolve({self._fmt(angle)}, '{axis}', '{operation}')",
-                "",
-            ]
-        )
+                
+                # Check for symmetric
+                # Might be property on Feature or Definition
+                
+                op_type = feature.Operation
+                # kJoinOperation = 20737
+                # kCutOperation = 20738
+                # kIntersectOperation = 20739
+                # kNewBodyOperation = 20740
+                
+                op_str = "NewBodyFeatureOperation"
+                if op_type == 20737:
+                    op_str = "JoinBodyFeatureOperation"
+                elif op_type == 20738:  # Cut
+                    op_str = "Cut"
+                elif op_type == 20739:
+                    op_str = "Intersect"
+                
+                self.generated_code.append(
+                    f"# Extrude: {name}"
+                )
+                self.generated_code.append(
+                    f'{wp_var}.extrude(distance={self._fmt(dist)}, operation="{op_str}")'
+                )
+                self.generated_code.append("")
+                
+            elif feat_type == "revolve":
+                # Revolve details
+                angle_rad = 6.283185  # 360 deg
+                try:
+                    extent = feature.Extent
+                    if extent.Type == 20995: # kAngleExtent
+                         angle_rad = extent.Angle.Value
+                except Exception:
+                    pass
+                
+                op_type = feature.Operation
+                # Operation mapping (RapidCAD Py constants/strings)
+                # kJoinOperation = 20737
+                # kCutOperation = 20738
+                # kIntersectOperation = 20739
+                # kNewBodyOperation = 20740
+                
+                op_str = "NewBodyFeatureOperation"
+                if op_type == 20737:
+                    op_str = "JoinBodyFeatureOperation"
+                elif op_type == 20738:
+                    op_str = "Cut" # Matches Workplane.revolve logic
+                elif op_type == 20739:
+                    op_str = "Intersect"
+                
+                # Axis determination
+                # RapidCAD Py Revolve expects axis="X", "Y", or "Z"
+                axis_char = "X" # Default
+                
+                try:
+                    if hasattr(feature, "AxisEntity"):
+                        axis_ent = feature.AxisEntity
+                        # Check for WorkAxis or Line alignment
+                        # WorkAxes often have names like "X Axis", "Y Axis", "Z Axis"
+                        axis_name = getattr(axis_ent, "Name", "")
+                        
+                        if "X" in axis_name and "Axis" in axis_name:
+                            axis_char = "X"
+                        elif "Y" in axis_name and "Axis" in axis_name:
+                            axis_char = "Y"
+                        elif "Z" in axis_name and "Axis" in axis_name:
+                            axis_char = "Z"
+                        else:
+                            # Try geometry analysis
+                            geom = None
+                            if hasattr(axis_ent, "Geometry"):
+                                geom = axis_ent.Geometry # Line or LineSegment
+                            elif hasattr(axis_ent, "Line"):
+                                geom = axis_ent.Line.Geometry
+                            
+                            if geom:
+                                dir_vec = None
+                                if hasattr(geom, "Direction"):
+                                    dir_vec = geom.Direction
+                                elif hasattr(geom, "StartPoint") and hasattr(geom, "EndPoint"):
+                                    # Create direction from points
+                                    dx = geom.EndPoint.X - geom.StartPoint.X
+                                    dy = geom.EndPoint.Y - geom.StartPoint.Y
+                                    dz = geom.EndPoint.Z - geom.StartPoint.Z
+                                    mag = math.sqrt(dx*dx + dy*dy + dz*dz)
+                                    if mag > 1e-9:
+                                        dir_vec = [dx/mag, dy/mag, dz/mag]
+                                
+                                if dir_vec:
+                                    # Check alignment (handling win32 objects or lists)
+                                    vx = 0.0
+                                    vy = 0.0
+                                    vz = 0.0
+                                    
+                                    # Use getattr to avoid static type checker complaints about missing attributes
+                                    if hasattr(dir_vec, "X"):
+                                        vx = getattr(dir_vec, "X")
+                                        vy = getattr(dir_vec, "Y")
+                                        vz = getattr(dir_vec, "Z")
+                                    else:
+                                        # Assume list/tuple if attributes missing
+                                        vx = dir_vec[0]
+                                        vy = dir_vec[1]
+                                        vz = dir_vec[2]
+                                    
+                                    if abs(vx) > 0.9: axis_char = "X"
+                                    elif abs(vy) > 0.9: axis_char = "Y"
+                                    elif abs(vz) > 0.9: axis_char = "Z"
+                except Exception as e:
+                    print(f"Warning: Could not determine revolve axis: {e}")
+                
+                # Angle in "Turns" (0.0 - 1.0) because InventorWorkPlane.revolve does angle * 2 * pi
+                # But wait, InventorWorkPlane.revolve calls AddByAngle(..., angle * 2 * PI, ...)
+                # Inventor AddByAngle expects Radians.
+                # So if we pass 1.0 (turn), it passes 2*PI radians (360 deg). Correct.
+                # So we need to convert radians to turns.
+                angle_turns = angle_rad / (2 * math.pi)
+                
+                self.generated_code.append(
+                    f"# Revolve: {name}"
+                )
+                self.generated_code.append(
+                    f"{wp_var}.revolve(angle={self._fmt(angle_turns)}, axis=\"{axis_char}\", operation=\"{op_str}\")"
+                )
+                self.generated_code.append("")
+                
+        except Exception as e:
+            self.generated_code.append(f"# Error analyzing feature {feature.Name}: {e}")
+            self.generated_code.append("")
 
     def _analyze_chamfer_feature(self):
         # Identify chamfered edges
@@ -813,25 +836,124 @@ class InventorReverseEngineer:
                 "distance": chamfer_def.Distance.Value if hasattr(chamfer_def, "Distance") else 0.1,
             }
             
-            # Try to get edge information
-            if hasattr(chamfer_feature, "Edges"):
-                edges = chamfer_feature.Edges
-                if edges and edges.Count > 0:
-                    edge = edges.Item(1)
-                    if edge.CurveType == 5124:  # Circular edge
-                        geom = edge.Geometry
-                        if hasattr(geom, "Center"):
-                            center = geom.Center
-                            info["x"] = round(center.X, 6)
-                            info["y"] = round(center.Y, 6)
-                            info["z"] = round(center.Z, 6)
-                        if hasattr(geom, "Radius"):
-                            info["radius"] = round(geom.Radius, 6)
-            
+            # --- Strategy 1: ChamferEdges (Deprecated/Simple) ---
+            edge = None
+            if hasattr(chamfer_feature, "ChamferEdges"):
+                try:
+                    edges = chamfer_feature.ChamferEdges
+                    if edges and edges.Count > 0:
+                        edge = edges.Item(1)
+                except Exception:
+                    pass
+
+            if edge:
+                 try:
+                    if edge.CurveType == 5124: # kCircleCurve
+                         # Logic for extracting from deprecated/simple edge
+                         geom = edge.Geometry
+                         if hasattr(geom, "Center"):
+                             info["x"] = round(geom.Center.X, 6)
+                             info["y"] = round(geom.Center.Y, 6)
+                             info["z"] = round(geom.Center.Z, 6)
+                         if hasattr(geom, "Radius"):
+                             info["radius"] = round(geom.Radius, 6)
+                         return info
+                 except Exception:
+                     pass
+
+            # --- Strategy 2: Analyze Chamfer Faces (Robust) ---
+            # Reconstruct the original edge location by analyzing the chamfer face boundaries
+            if hasattr(chamfer_feature, "Faces"):
+                try:
+                    faces = chamfer_feature.Faces
+                    # kCylinderSurface = 5890
+                    
+                    for i in range(1, faces.Count + 1):
+                        c_face = faces.Item(i)
+                        
+                        # Find circular edges on this chamfer face
+                        circ_edges = []
+                        for j in range(1, c_face.Edges.Count + 1):
+                            e = c_face.Edges.Item(j)
+                            if e.CurveType == 5124: # kCircleCurve
+                                circ_edges.append(e)
+                        
+                        if len(circ_edges) >= 2:
+                            # We found a band with at least 2 circular edges.
+                            # Identify which matches the cylinder and which matches the side/flat face.
+                            
+                            cyl_edge = None
+                            side_edge = None
+                            
+                            e1 = circ_edges[0]
+                            e2 = circ_edges[1]
+                            
+                            # Helper to check if edge connects to a cylinder
+                            def is_connected_to_cylinder(ed):
+                                for k in range(1, ed.Faces.Count + 1):
+                                    f = ed.Faces.Item(k)
+                                    # Check if it's a cylinder and NOT the chamfer face itself
+                                    # Since checking object identity is hard, check if SurfaceType is Cylinder
+                                    if f.SurfaceType == 5890: 
+                                        return True
+                                return False
+                            
+                            e1_cyl = is_connected_to_cylinder(e1)
+                            e2_cyl = is_connected_to_cylinder(e2)
+                            
+                            if e1_cyl and not e2_cyl:
+                                cyl_edge = e1
+                                side_edge = e2
+                            elif e2_cyl and not e1_cyl:
+                                cyl_edge = e2
+                                side_edge = e1
+                            
+                            # If we identified both, we can reconstruct the corner
+                            # Original Edge Radius = Cylinder Radius = Radius of cyl_edge
+                            # Original Edge X = X position of side_edge
+                            
+                            if cyl_edge and side_edge:
+                                c_geom = cyl_edge.Geometry
+                                s_geom = side_edge.Geometry
+                                
+                                info["radius"] = round(c_geom.Radius, 6)
+                                info["x"] = round(s_geom.Center.X, 6)
+                                info["y"] = round(s_geom.Center.Y, 6)
+                                info["z"] = round(s_geom.Center.Z, 6)
+                                
+                                print(f"  Chamfer reconstruction: Connected edge logic success. R={info['radius']}, X={info['x']}")
+                                return info
+                                
+                             # Fallback: Max radius logic (works for external chamfers)
+                             # If we assume external chamfer on shaft:
+                             # Orig Radius = Max(R1, R2)
+                             # Orig X position = X of edge with Min Radius
+                            
+                            r1 = e1.Geometry.Radius
+                            r2 = e2.Geometry.Radius
+                            
+                            if r1 > r2:
+                                info["radius"] = round(r1, 6)
+                                info["x"] = round(e2.Geometry.Center.X, 6)
+                            else:
+                                info["radius"] = round(r2, 6)
+                                info["x"] = round(e1.Geometry.Center.X, 6)
+                                
+                            # Fill Y/Z from the X-defining edge
+                            xc_edge = e2 if r1 > r2 else e1
+                            info["y"] = round(xc_edge.Geometry.Center.Y, 6)
+                            info["z"] = round(xc_edge.Geometry.Center.Z, 6)
+                            
+                            print(f"  Chamfer reconstruction: Max radius logic used. R={info['radius']}, X={info['x']}")
+                            return info
+
+                except Exception as e:
+                    print(f"Warning: Chamfer face analysis failed: {e}")
+
             return info
         except Exception as e:
             print(f"Warning: Could not extract chamfer info: {e}")
-            return None
+            return {}  # Return empty dict instead of None
     
     def _generate_chamfer_code(self, chamfer_info: Dict) -> List[str]:
         """
