@@ -15,7 +15,7 @@ from OCC.Core.BRepBuilderAPI import (
 from OCC.Core.TopTools import TopTools_ListOfShape
 from OCC.Core.TopoDS import TopoDS_Compound
 from rapidcadpy.integrations.occ.shape import OccShape
-from rapidcadpy.primitives import Circle, Line
+from rapidcadpy.primitives import Arc, Circle, Line
 from rapidcadpy.sketch2d import Sketch2D
 
 
@@ -75,6 +75,33 @@ class OccSketch2D(Sketch2D):
 
             # Create edge from circle
             return BRepBuilderAPI_MakeEdge(circle_gp).Edge()
+        elif isinstance(primitive, Arc):
+            # Convert arc to 3D
+            center_3d = self._workplane._to_3d(primitive.center[0], primitive.center[1])
+            center = gp_Pnt(center_3d[0], center_3d[1], center_3d[2])
+
+            normal = gp_Dir(
+                float(self._workplane.normal_vector[0]),
+                float(self._workplane.normal_vector[1]),
+                float(self._workplane.normal_vector[2]),
+            )
+
+            x_dir = gp_Dir(
+                float(self._workplane._local_x[0]),
+                float(self._workplane._local_x[1]),
+                float(self._workplane._local_x[2]),
+            )
+
+            circle_gp = gp_Circ(gp_Ax2(center, normal, x_dir), primitive.radius)
+
+            start_angle_rad = primitive.start_angle * (3.141592653589793 / 180.0)
+            end_angle_rad = primitive.end_angle * (3.141592653589793 / 180.0)
+
+            return BRepBuilderAPI_MakeEdge(
+                circle_gp, start_angle_rad, end_angle_rad
+            ).Edge()
+        else:
+            raise TypeError(f"Unsupported primitive type: {type(primitive)}")
 
     def _make_wire(self):
         num_primitives = len(self._primitives)

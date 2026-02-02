@@ -12,13 +12,13 @@ from typing import Literal, Tuple
 import torch
 import os
 
-from rapidcadpy.fea.mesher.base import MesherBase
+from .base import MesherBase
 
 
 class GmshSubprocessMesher(MesherBase):
     """
     GMSH mesher that runs as a subprocess.
-    
+
     This implementation avoids library conflicts by running GMSH as an external
     process rather than using Python bindings.
     """
@@ -39,10 +39,7 @@ class GmshSubprocessMesher(MesherBase):
         """Check if GMSH is available in PATH."""
         try:
             result = subprocess.run(
-                ["gmsh", "--version"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["gmsh", "--version"], capture_output=True, text=True, timeout=5
             )
             return result.returncode == 0
         except (subprocess.SubprocessError, FileNotFoundError):
@@ -95,7 +92,9 @@ class GmshSubprocessMesher(MesherBase):
         self.validate_inputs(filename, element_type, dim)
 
         if dim != 3:
-            raise ValueError("GMSH subprocess mesher currently only supports 3D meshing")
+            raise ValueError(
+                "GMSH subprocess mesher currently only supports 3D meshing"
+            )
 
         # Create temporary output file
         with tempfile.NamedTemporaryFile(suffix=".msh", delete=False) as tmp:
@@ -107,21 +106,27 @@ class GmshSubprocessMesher(MesherBase):
                 self.gmsh_path,
                 str(filename),
                 "-3",  # 3D meshing
-                "-format", "msh4",  # MSH 4.1 format
-                "-o", str(msh_path),
-                "-clmax", str(mesh_size),  # Maximum element size
+                "-format",
+                "msh4",  # MSH 4.1 format
+                "-o",
+                str(msh_path),
+                "-clmax",
+                str(mesh_size),  # Maximum element size
                 # Robustness options
-                "-algo", "del3d",     # Delaunay 3D (generally more robust for complex 3D shapes)
+                "-algo",
+                "del3d",  # Delaunay 3D (generally more robust for complex 3D shapes)
                 # "-algo", "front3d", # Alternative: Frontal 3D (try if Delaunay fails)
-                "-optimize_netgen",   # Optimize mesh quality using Netgen algorithm
-                "-check",             # Check for mesh errors
+                "-optimize_netgen",  # Optimize mesh quality using Netgen algorithm
+                "-check",  # Check for mesh errors
             ]
 
             # Add element order (1 for linear, 2 for quadratic)
             if element_type == "tet4":
                 cmd.extend(["-order", "1"])
             elif element_type == "tet10":
-                cmd.extend(["-order", "2", "-optimize_ho"]) # Optimize high-order meshes
+                cmd.extend(
+                    ["-order", "2", "-optimize_ho"]
+                )  # Optimize high-order meshes
 
             # Run GMSH
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
@@ -131,18 +136,20 @@ class GmshSubprocessMesher(MesherBase):
                     print(result.stdout)
             else:
                 result = subprocess.run(
-                    cmd, 
-                    check=True, 
+                    cmd,
+                    check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.DEVNULL,
-                    text=True
+                    text=True,
                 )
 
             # Parse the MSH file
             nodes, elements = self._parse_msh4(msh_path, element_type)
 
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
-                print(f"  ✓ Mesh generated: {nodes.shape[0]} nodes, {elements.shape[0]} elements")
+                print(
+                    f"  ✓ Mesh generated: {nodes.shape[0]} nodes, {elements.shape[0]} elements"
+                )
 
             return nodes, elements
 
@@ -183,12 +190,12 @@ class GmshSubprocessMesher(MesherBase):
             "tet4": 4,
             "tet10": 11,
         }
-        
+
         target_elem_code = element_type_map.get(element_type)
         if target_elem_code is None:
             raise ValueError(f"Unsupported element type for parsing: {element_type}")
 
-        with open(msh_path, 'r') as f:
+        with open(msh_path, "r") as f:
             lines = f.readlines()
 
         i = 0
@@ -200,9 +207,9 @@ class GmshSubprocessMesher(MesherBase):
                 i += 1
                 # MSH 4.1 format: numEntityBlocks numNodes minNodeTag maxNodeTag
                 header = lines[i].strip().split()
-                if len(header) < 2: 
-                     i+=1 
-                     continue
+                if len(header) < 2:
+                    i += 1
+                    continue
                 num_entity_blocks = int(header[0])
                 num_nodes = int(header[1])
                 i += 1
@@ -223,14 +230,14 @@ class GmshSubprocessMesher(MesherBase):
                     # Read node coordinates and populate map
                     for j in range(num_nodes_in_block):
                         coords = [float(x) for x in lines[i].strip().split()]
-                        
+
                         # Store standard 3D coords (ignore parametric if any)
                         nodes_list.append(coords[:3])
-                        
+
                         # Map tag to current index
                         current_idx = len(nodes_list) - 1
                         node_tag_map[node_tags[j]] = current_idx
-                        
+
                         i += 1
 
                 # Skip $EndNodes
@@ -241,9 +248,9 @@ class GmshSubprocessMesher(MesherBase):
                 i += 1
                 # MSH 4.1 format: numEntityBlocks numElements minElementTag maxElementTag
                 header = lines[i].strip().split()
-                if len(header) < 2: 
-                     i+=1 
-                     continue
+                if len(header) < 2:
+                    i += 1
+                    continue
                 num_entity_blocks = int(header[0])
                 i += 1
 
@@ -262,12 +269,12 @@ class GmshSubprocessMesher(MesherBase):
                             # First value is element tag, rest are node tags
                             # Use map to get correct local index
                             try:
-                                elem_nodes = [node_tag_map[int(x)] for x in parts[1:]] 
+                                elem_nodes = [node_tag_map[int(x)] for x in parts[1:]]
                                 elements_list.append(elem_nodes)
                             except KeyError:
                                 # This can happen if GMSH drops nodes or we missed some.
                                 # Should generally not happen in a valid mesh.
-                                pass 
+                                pass
                             i += 1
                     else:
                         # Skip elements of other types

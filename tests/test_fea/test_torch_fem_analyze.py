@@ -7,7 +7,6 @@ import torch
 import numpy as np
 import os
 
-
 # Check if FEA dependencies are available
 try:
     import pyvista as pv

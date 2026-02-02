@@ -142,7 +142,7 @@ def render_plotly_line(edge: Any, dashed: bool = False, plane: Any = None) -> An
     from pycad.geometry.circle import Circle as PyCadCircle
     from pycad.geometry.line import Line as PyCadLine
 
-    from rapidcadpy.primitive import Arc, Circle, Line
+    from .primitive import Arc, Circle, Line
 
     if isinstance(edge, Line) or isinstance(edge, PyCadLine):
         if plane:
@@ -245,7 +245,7 @@ def render_plotly_line(edge: Any, dashed: bool = False, plane: Any = None) -> An
 
 
 def redner_arc_midpoints(arc):
-    from rapidcadpy.primitive import Arc
+    from .primitive import Arc
 
     if isinstance(arc, Arc):
         mid = arc.get_mid_point()
@@ -259,7 +259,7 @@ def redner_arc_midpoints(arc):
 
 
 def render_arc_centerpoints(arc):
-    from rapidcadpy.primitive import Arc
+    from .primitive import Arc
 
     if isinstance(arc, Arc):
         return go.Scatter(
@@ -272,7 +272,7 @@ def render_arc_centerpoints(arc):
 
 
 def render_arc_angles(arc):
-    from rapidcadpy.primitive import Arc
+    from .primitive import Arc
 
     if isinstance(arc, Arc):
         start_angle = arc.start_angle
@@ -299,7 +299,7 @@ def render_arc_angles(arc):
 
 
 def render_arc_ref_vec(arc):
-    from rapidcadpy.primitive import Arc
+    from .primitive import Arc
 
     if isinstance(arc, Arc):
         center = np.array(arc.center)  # Assuming center is a tuple or Vertex
@@ -320,7 +320,7 @@ def render_arc_ref_vec(arc):
 
 
 def render_choord_and_normal(arc):
-    from rapidcadpy.primitive import Arc
+    from .primitive import Arc
 
     if isinstance(arc, Arc):
         start_to_end_vector = arc.end_point - arc.start_point
@@ -350,7 +350,7 @@ def render_choord_and_normal(arc):
 
 
 def render_arrow_chord(edge):
-    from rapidcadpy.primitive import Arc
+    from .primitive import Arc
 
     if isinstance(edge, Arc):
         start = (edge.start_point.x, edge.start_point.y)
@@ -376,7 +376,7 @@ def render_arrow_chord(edge):
 
 
 def render_constructed_center_point(arc):
-    from rapidcadpy.primitive import Arc
+    from .primitive import Arc
 
     if isinstance(arc, Arc):
         sweep_angle = arc.end_angle - arc.start_angle

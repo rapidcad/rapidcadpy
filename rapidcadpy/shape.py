@@ -2,13 +2,13 @@ from abc import ABC, abstractmethod
 from ast import Load
 from typing import TYPE_CHECKING, List, Optional, Union
 
-from rapidcadpy.fea.boundary_conditions import BoundaryCondition
-from rapidcadpy.fea.kernels.base import FEAAnalyzer
-from rapidcadpy.fea.materials import Material, MaterialProperties
-from rapidcadpy.fea.results import FEAResults
+from .fea.boundary_conditions import BoundaryCondition
+from .fea.kernels.base import FEAAnalyzer
+from .fea.materials import Material, MaterialProperties
+from .fea.results import FEAResults
 
 if TYPE_CHECKING:
-    from rapidcadpy.app import App
+    from .app import App
 
 
 class Shape(ABC):
@@ -73,7 +73,7 @@ class Shape(ABC):
             FEAResults object with stress, displacement, and analysis data
 
         Example:
-            >>> from rapidcadpy.fea import Material, DistributedLoad, FixedConstraint
+            >>> from .fea import Material, DistributedLoad, FixedConstraint
             >>> beam = wp.rect(10, 10).extrude(100)
             >>> result = beam.analyze(
             ...     material=Material.ALUMINUM_6061_T6,

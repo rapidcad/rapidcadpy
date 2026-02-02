@@ -1,4 +1,4 @@
-from rapidcadpy.onshape_processing.custom_onshape_client import CustomOnshapeClient
+from .onshape_processing.custom_onshape_client import CustomOnshapeClient
 
 EXTENT_TYPE_MAP = {
     "BLIND": "OneSideFeatureExtentType",

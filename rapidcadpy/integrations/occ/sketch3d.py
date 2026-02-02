@@ -10,7 +10,7 @@ from typing import Any
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
 from OCC.Core.gp import gp_Pnt
 
-from rapidcadpy.sketch3d import Polyline3D, Sketch3D
+from .sketch3d import Polyline3D, Sketch3D
 
 
 class OccSketch3D(Sketch3D):
@@ -59,7 +59,7 @@ class OccSketch3D(Sketch3D):
         from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
         from typing import cast
 
-        from rapidcadpy.integrations.occ.shape import OccShape
+        from .integrations.occ.shape import OccShape
 
         spine = self.wire()
         radius = diameter / 2.0
@@ -159,7 +159,7 @@ class OccSketch3D(Sketch3D):
         from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
         from typing import cast
 
-        from rapidcadpy.integrations.occ.shape import OccShape
+        from .integrations.occ.shape import OccShape
 
         spine = self.wire()
         profile_wire = profile._make_wire()

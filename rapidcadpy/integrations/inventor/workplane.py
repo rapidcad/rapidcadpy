@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from win32com.client import constants
 
 from rapidcadpy import Workplane
-from rapidcadpy.cad_types import VectorLike, Vertex
-from rapidcadpy.integrations.inventor.shape import InventorShape
+from .cad_types import VectorLike, Vertex
+from .integrations.inventor.shape import InventorShape
 
 if TYPE_CHECKING:
     pass

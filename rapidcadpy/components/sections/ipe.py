@@ -3,7 +3,7 @@
 This module provides parametric IPE sections as 2D profile factories.
 
 Usage:
-    from rapidcadpy.components import profiles
+    from .components import profiles
     wp = app.work_plane("XY")
     profile = profiles.ipe("IPE80").sketch(wp)
 """
@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from rapidcadpy.components.sections.base import Section2D
-from rapidcadpy.sketch2d import Sketch2D
+from .base import Section2D
+from ...sketch2d import Sketch2D
 
 
 @dataclass(frozen=True)

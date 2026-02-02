@@ -5,19 +5,19 @@ from typing import Any, Optional
 import win32com.client as win32
 from win32com.client import Dispatch, constants, gencache
 
-from rapidcadpy.cad import Cad
-from rapidcadpy.cad_types import Vector, Vertex
-from rapidcadpy.extrude import Extrude
-from rapidcadpy.integrations.base_integration import BaseIntegration
-from rapidcadpy.machining_feature import (
+from .cad import Cad
+from .cad_types import Vector, Vertex
+from .extrude import Extrude
+from .integrations.base_integration import BaseIntegration
+from .machining_feature import (
     CounterSunkHole,
     MachiningFeature,
     ParallelKeyway,
 )
-from rapidcadpy.primitive import Arc, Circle, Line
-from rapidcadpy.sketch import Sketch
-from rapidcadpy.sketch_extrude import Extrude
-from rapidcadpy.wire import Wire
+from .primitive import Arc, Circle, Line
+from .sketch import Sketch
+from .sketch_extrude import Extrude
+from .wire import Wire
 
 
 class InventorIntegration(BaseIntegration):
@@ -666,7 +666,7 @@ class InventorIntegration(BaseIntegration):
             Line primitive (for now, can be extended to Inventor-specific object)
         """
         # For now, just return the Line primitive. In a full implementation, this would use Inventor's API.
-        from rapidcadpy.primitive import Line
+        from .primitive import Line
 
         return Line(start_point=start, end_point=end)
 

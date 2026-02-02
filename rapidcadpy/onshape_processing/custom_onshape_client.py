@@ -1,4 +1,4 @@
-from rapidcadpy.apikey.python.onshapepy.client import Client
+from .apikey.python.onshapepy.client import Client
 
 
 class CustomOnshapeClient(Client):

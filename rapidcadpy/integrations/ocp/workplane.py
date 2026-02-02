@@ -1,10 +1,10 @@
 from typing import Any, Optional
 
 
-from rapidcadpy.app import App
-from rapidcadpy.cad_types import Vector, VectorLike, Vertex
-from rapidcadpy.workplane import Workplane
-from rapidcadpy.primitives import Line, Circle, Arc
+from .app import App
+from .cad_types import Vector, VectorLike, Vertex
+from .workplane import Workplane
+from .primitives import Line, Circle, Arc
 
 
 class OccWorkplane(Workplane):
@@ -34,7 +34,7 @@ class OccWorkplane(Workplane):
         Returns:
             New OccWorkplane with specified origin and normal
         """
-        from rapidcadpy.cad_types import Vector
+        from .cad_types import Vector
 
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
@@ -87,6 +87,53 @@ class OccWorkplane(Workplane):
 
         return self
 
+    def box(
+        self, length: float, width: float, height: float, centered: bool = True
+    ) -> "OccShape":
+        """
+        Create a 3D box shape.
+
+        Args:
+            length: Length of the box (X dimension)
+            width: Width of the box (Y dimension)
+            height: Height of the box (Z dimension)
+            centered: If True (default), box is centered at current position.
+                     If False, box extends from current position in positive directions.
+
+        Returns:
+            OccShape: The created box shape
+
+        Example:
+            # Create a centered box
+            box = app.work_plane("XY").box(10, 20, 30)
+
+            # Create a box from origin
+            box = app.work_plane("XY").box(10, 20, 30, centered=False)
+        """
+        from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
+        from OCP.gp import gp_Pnt
+        from rapidcadpy.integrations.ocp.shape import OccShape
+
+        # Determine the starting corner based on centered parameter
+        if centered:
+            x = self._current_position.x - length / 2
+            y = self._current_position.y - width / 2
+            z = -height / 2
+        else:
+            x = self._current_position.x
+            y = self._current_position.y
+            z = 0
+
+        # Create the box starting point
+        corner = gp_Pnt(x, y, z)
+
+        # Create the box
+        box_builder = BRepPrimAPI_MakeBox(corner, length, width, height)
+        solid = box_builder.Shape()
+
+        # Return as OccShape
+        return OccShape(obj=solid, app=self.app)
+
     def revolve(
         self,
         angle: float,
@@ -107,7 +154,7 @@ class OccWorkplane(Workplane):
         from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
         from OCP.gp import gp_Ax1, gp_Pnt, gp_Dir
         from math import radians
-        from rapidcadpy.integrations.ocp.sketch2d import OccSketch2D
+        from .integrations.ocp.sketch2d import OccSketch2D
 
         # Check if there are shapes to revolve
         if not self._pending_shapes:
@@ -146,7 +193,7 @@ class OccWorkplane(Workplane):
         self._clear_pending_shapes()
 
         # Return OccShape
-        from rapidcadpy.integrations.ocp.shape import OccShape
+        from .integrations.ocp.shape import OccShape
 
         # Handle different operations
         if operation in ["Cut", "CutOperation"]:
@@ -248,8 +295,8 @@ class OccWorkplane(Workplane):
             # Sweep the circle along the path
             shape = path.sweep(profile)
         """
-        from rapidcadpy.integrations.ocp.sketch2d import OccSketch2D
-        from rapidcadpy.integrations.ocp.shape import OccShape
+        from .integrations.ocp.sketch2d import OccSketch2D
+        from .integrations.ocp.shape import OccShape
 
         # Check if there are shapes to use as path
         if not self._pending_shapes:

@@ -12,13 +12,13 @@ from typing import Literal, Tuple
 import torch
 import os
 
-from rapidcadpy.fea.mesher.base import MesherBase
+from .base import MesherBase
 
 
 class NetgenSubprocessMesher(MesherBase):
     """
     Netgen mesher that runs as a subprocess.
-    
+
     This implementation avoids library conflicts by running Netgen as an external
     process rather than using Python bindings.
     """
@@ -39,10 +39,7 @@ class NetgenSubprocessMesher(MesherBase):
         """Check if Netgen is available in PATH."""
         try:
             result = subprocess.run(
-                ["netgen", "-h"],
-                capture_output=True,
-                text=True,
-                timeout=5
+                ["netgen", "-h"], capture_output=True, text=True, timeout=5
             )
             return result.returncode == 0
         except (subprocess.SubprocessError, FileNotFoundError):
@@ -95,12 +92,14 @@ class NetgenSubprocessMesher(MesherBase):
         self.validate_inputs(filename, element_type, dim)
 
         if dim != 3:
-            raise ValueError("Netgen subprocess mesher currently only supports 3D meshing")
+            raise ValueError(
+                "Netgen subprocess mesher currently only supports 3D meshing"
+            )
 
         # Create temporary output files
         with tempfile.NamedTemporaryFile(suffix=".vol", delete=False) as tmp_vol:
             vol_path = tmp_vol.name
-        
+
         with tempfile.NamedTemporaryFile(suffix=".msh", delete=False) as tmp_msh:
             msh_path = tmp_msh.name
 
@@ -109,12 +108,15 @@ class NetgenSubprocessMesher(MesherBase):
             cmd_vol = [
                 self.netgen_path,
                 str(filename),
-                "-meshfile", str(vol_path),
-                "-maxh", str(mesh_size),
-                "-meshfiletype", "Netgen Mesh",
+                "-meshfile",
+                str(vol_path),
+                "-maxh",
+                str(mesh_size),
+                "-meshfiletype",
+                "Netgen Mesh",
                 "-batchmode",
             ]
-            
+
             # Set element order
             if element_type == "tet10":
                 cmd_vol.append("-secondorder")
@@ -122,46 +124,52 @@ class NetgenSubprocessMesher(MesherBase):
             # Run Netgen to create .vol file
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  Running Netgen mesher: {' '.join(cmd_vol)}")
-                result = subprocess.run(cmd_vol, check=True, capture_output=True, text=True)
+                result = subprocess.run(
+                    cmd_vol, check=True, capture_output=True, text=True
+                )
                 if result.stdout:
                     print(result.stdout)
             else:
                 result = subprocess.run(
-                    cmd_vol, 
-                    check=True, 
+                    cmd_vol,
+                    check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
-                    text=True
+                    text=True,
                 )
 
             # Convert .vol to .msh format for easier parsing
             cmd_export = [
                 self.netgen_path,
                 vol_path,
-                "-meshfile", str(msh_path),
-                "-meshfiletype", "GMSH Format",
+                "-meshfile",
+                str(msh_path),
+                "-meshfiletype",
+                "GMSH Format",
                 "-batchmode",
             ]
-            
+
             subprocess.run(
                 cmd_export,
                 check=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                text=True
+                text=True,
             )
 
             # Parse the MSH file (Netgen exports GMSH 2.0 format)
             nodes, elements = self._parse_gmsh2(msh_path, element_type)
 
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
-                print(f"  ✓ Mesh generated: {nodes.shape[0]} nodes, {elements.shape[0]} elements")
+                print(
+                    f"  ✓ Mesh generated: {nodes.shape[0]} nodes, {elements.shape[0]} elements"
+                )
 
             return nodes, elements
 
         except subprocess.CalledProcessError as e:
             # Determine which command failed
-            cmd_str = ' '.join(e.cmd) if e.cmd else 'unknown'
+            cmd_str = " ".join(e.cmd) if e.cmd else "unknown"
             raise RuntimeError(
                 f"Netgen meshing failed with exit code {e.returncode}.\n"
                 f"Command: {cmd_str}\n"
@@ -198,12 +206,12 @@ class NetgenSubprocessMesher(MesherBase):
             "tet4": 4,
             "tet10": 11,
         }
-        
+
         target_elem_code = element_type_map.get(element_type)
         if target_elem_code is None:
             raise ValueError(f"Unsupported element type for parsing: {element_type}")
 
-        with open(msh_path, 'r') as f:
+        with open(msh_path, "r") as f:
             lines = f.readlines()
 
         i = 0
@@ -239,14 +247,16 @@ class NetgenSubprocessMesher(MesherBase):
                     # GMSH 2.0 format: elmNumber elmType numTags tags... nodeIndices...
                     elem_type_code = int(parts[1])
                     num_tags = int(parts[2])
-                    
+
                     # Only process elements of the target type
                     if elem_type_code == target_elem_code:
                         # Node indices start after: elmNumber, elmType, numTags, and tags
                         node_start = 3 + num_tags
-                        elem_nodes = [int(parts[j]) - 1 for j in range(node_start, len(parts))]  # Convert to 0-based
+                        elem_nodes = [
+                            int(parts[j]) - 1 for j in range(node_start, len(parts))
+                        ]  # Convert to 0-based
                         elements_list.append(elem_nodes)
-                    
+
                     i += 1
 
                 # Skip $EndElements

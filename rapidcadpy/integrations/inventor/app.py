@@ -1,11 +1,11 @@
 import os
 from typing import TYPE_CHECKING, Optional
 
-from rapidcadpy.app import App
-from rapidcadpy.cad_types import VectorLike
+from .app import App
+from .cad_types import VectorLike
 
 if TYPE_CHECKING:
-    from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane
+    from .integrations.inventor.workplane import InventorWorkPlane
 
 
 class InventorApp(App):
@@ -18,7 +18,7 @@ class InventorApp(App):
                 "pywin32 is required for Inventor integration. Install with: pip install pywin32"
             )
 
-        from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane
+        from .integrations.inventor.workplane import InventorWorkPlane
 
         super().__init__(InventorWorkPlane)
         try:
@@ -91,7 +91,7 @@ class InventorApp(App):
         Returns:
             InventorWorkPlane instance
         """
-        from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane
+        from .integrations.inventor.workplane import InventorWorkPlane
 
         if origin is not None and normal is not None:
             # Create custom workplane from origin and normal

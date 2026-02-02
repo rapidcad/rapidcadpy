@@ -9,7 +9,7 @@ Note:
   table (EN 10365 / DIN 1025-1), we can swap in exact values.
 
 Usage:
-    from rapidcadpy.components import profiles
+    from .components import profiles
     profile = profiles.ipn("IPN80").sketch(wp)
 """
 
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from rapidcadpy.components.sections.base import Section2D
+from ...components.sections.base import Section2D
 
 
 @dataclass(frozen=True)

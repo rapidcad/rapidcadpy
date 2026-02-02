@@ -15,7 +15,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Iterable, List, Sequence, Tuple
 
-from rapidcadpy.shape import Shape
+from .shape import Shape
 
 Point3D = Tuple[float, float, float]
 

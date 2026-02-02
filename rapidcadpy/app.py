@@ -1,15 +1,15 @@
 import tempfile
 from typing import TYPE_CHECKING, List, Optional, Type, Union
 
-from rapidcadpy.fea.results import FEAResults
+from .fea.results import FEAResults
 
 if TYPE_CHECKING:
     pass
 
-from rapidcadpy.fea.boundary_conditions import BoundaryCondition, Load
-from rapidcadpy.fea.materials import MaterialProperties
-from rapidcadpy.shape import Shape
-from rapidcadpy.workplane import Workplane
+from .fea.boundary_conditions import BoundaryCondition, Load
+from .fea.materials import MaterialProperties
+from .shape import Shape
+from .workplane import Workplane
 
 
 class App:
@@ -465,7 +465,7 @@ class App:
         """
         import pyvista as pv
         import numpy as np
-        from rapidcadpy.primitives import Line, Circle, Arc
+        from .primitives import Line, Circle, Arc
 
         # Process each primitive in the sketch
         for primitive in sketch_primitives:

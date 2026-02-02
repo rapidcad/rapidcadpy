@@ -13,16 +13,17 @@ from typing import TYPE_CHECKING, List, Tuple, Optional, Union
 
 from torchfem import Solid
 
-from rapidcadpy.fea.boundary_conditions import BoundaryCondition, Load
-from rapidcadpy.fea.materials import MaterialProperties
-from rapidcadpy.fea.mesher import MesherBase, NetgenMesher
-from rapidcadpy.fea.utils import get_geometry_properties
-from rapidcadpy.fea.kernels.base import FEAKernel
-from rapidcadpy.fea.results import FEAResults, OptimizationResult
+from ...fea.mesher.netgen_mesher import NetgenMesher, MesherBase
+
+from ..boundary_conditions import BoundaryCondition, Load
+from ..materials import MaterialProperties
+from ..utils import get_geometry_properties
+from .base import FEAKernel
+from ..results import FEAResults, OptimizationResult
 from torchfem.materials import IsotropicElasticity3D
 
 if TYPE_CHECKING:
-    from rapidcadpy.shape import Shape
+    from ...shape import Shape
 
 
 class TorchFEMKernel(FEAKernel):
@@ -64,11 +65,17 @@ class TorchFEMKernel(FEAKernel):
             self.mesher = NetgenMesher(num_threads=num_threads)
         elif isinstance(mesher, str):
             if mesher == "gmsh-subprocess":
-                from rapidcadpy.fea.mesher import GmshSubprocessMesher
+                from ..mesher import GmshSubprocessMesher
+
                 self.mesher = GmshSubprocessMesher(num_threads=num_threads)
             elif mesher == "netgen-subprocess":
-                from rapidcadpy.fea.mesher import NetgenSubprocessMesher
+                from ..mesher import NetgenSubprocessMesher
+
                 self.mesher = NetgenSubprocessMesher(num_threads=num_threads)
+            elif mesher == "gmsh-isolated":
+                from ..mesher import IsolatedGmshMesher
+
+                self.mesher = IsolatedGmshMesher(num_threads=num_threads)
             else:
                 raise ValueError(
                     f"Unknown mesher: {mesher}. Supported: 'netgen', 'gmsh', 'netgen-subprocess'"
@@ -171,7 +178,9 @@ class TorchFEMKernel(FEAKernel):
             print(f"  Elements: {model.n_elem}")
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(model, nodes, elements, loads, constraints, mesh_size=mesh_size)
+        self._apply_boundary_conditions(
+            model, nodes, elements, loads, constraints, mesh_size=mesh_size
+        )
 
         solution = model.solve()
 
@@ -212,7 +221,7 @@ class TorchFEMKernel(FEAKernel):
             constraints: List of boundary conditions to apply
         """
 
-        from rapidcadpy.fea.utils import get_geometry_info
+        from ..utils import get_geometry_info
 
         geometry_info = get_geometry_info(nodes)
 
@@ -229,7 +238,9 @@ class TorchFEMKernel(FEAKernel):
 
         # Apply constraints
         for constraint in constraints:
-            num_nodes = constraint.apply(model, nodes, elements, geometry_info=geometry_info, mesh_size=mesh_size)
+            num_nodes = constraint.apply(
+                model, nodes, elements, geometry_info=geometry_info, mesh_size=mesh_size
+            )
             if num_nodes is not None:
                 total_constrained += num_nodes
             if os.getenv("RCADPY_VERBOSE") == "1":
@@ -239,7 +250,9 @@ class TorchFEMKernel(FEAKernel):
 
         # Apply loads
         for load in loads:
-            num_nodes = load.apply(model, nodes, elements, geometry_info, mesh_size=mesh_size)
+            num_nodes = load.apply(
+                model, nodes, elements, geometry_info, mesh_size=mesh_size
+            )
             if num_nodes is not None:
                 total_loaded += num_nodes
             if os.getenv("RCADPY_VERBOSE") == "1":
@@ -252,7 +265,7 @@ class TorchFEMKernel(FEAKernel):
             )
         if total_loaded == 0:
             print("  ⚠ WARNING: No loads were applied!")
-        
+
         # Check connectivity between loaded and constrained nodes
         if total_constrained > 0 and total_loaded > 0:
             self._validate_connectivity(model, nodes, elements)
@@ -284,7 +297,7 @@ class TorchFEMKernel(FEAKernel):
         Returns:
             FEAResults object
         """
-        from rapidcadpy.fea.utils import calculate_von_mises, get_geometry_info
+        from ..utils import calculate_von_mises, get_geometry_info
 
         u, f, sigma, F, alpha = solution
 
@@ -434,7 +447,9 @@ class TorchFEMKernel(FEAKernel):
             print(f"  DOFs: {model.n_dofs}")
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(model, nodes, elements, loads, constraints, mesh_size=mesh_size)
+        self._apply_boundary_conditions(
+            model, nodes, elements, loads, constraints, mesh_size=mesh_size
+        )
 
         # Step 4: Initialize optimization variables
         n_elem = model.n_elem
@@ -715,34 +730,34 @@ class TorchFEMKernel(FEAKernel):
     ) -> bool:
         """
         Validate that loaded and constrained nodes are connected via the mesh.
-        
+
         Uses BFS to find connected components and checks if all loaded and
         constrained nodes belong to the same component.
-        
+
         Args:
             model: torchfem.Solid model with applied boundary conditions
             nodes: Mesh nodes
             elements: Mesh elements
-            
+
         Raises:
             RuntimeError: If loaded and constrained nodes are disconnected
         """
         from collections import deque
-        
+
         # Find constrained and loaded nodes
         constraint_mask = model.constraints.any(dim=1).cpu().numpy()
         force_mask = (model.forces.abs() > 1e-10).any(dim=1).cpu().numpy()
-        
+
         constrained_nodes = set(np.where(constraint_mask)[0])
         loaded_nodes = set(np.where(force_mask)[0])
-        
+
         if len(constrained_nodes) == 0 or len(loaded_nodes) == 0:
             return True  # Nothing to check
-        
+
         # Build adjacency list from elements
         n_nodes = nodes.shape[0]
         adjacency = [set() for _ in range(n_nodes)]
-        
+
         elements_np = elements.cpu().numpy()
         for elem in elements_np:
             # For each element, connect all pairs of nodes
@@ -750,25 +765,25 @@ class TorchFEMKernel(FEAKernel):
                 for j in range(i + 1, len(elem)):
                     adjacency[elem[i]].add(elem[j])
                     adjacency[elem[j]].add(elem[i])
-        
+
         # Find connected component containing constrained nodes using BFS
         visited = set()
         queue = deque(constrained_nodes)
         visited.update(constrained_nodes)
-        
+
         while queue:
             node = queue.popleft()
             for neighbor in adjacency[node]:
                 if neighbor not in visited:
                     visited.add(neighbor)
                     queue.append(neighbor)
-        
+
         # Check if all loaded nodes are in the same component
         disconnected_loads = loaded_nodes - visited
-        
+
         if disconnected_loads:
             return False
-        
+
         return True
 
     def get_visualization_data(
@@ -835,7 +850,10 @@ class TorchFEMKernel(FEAKernel):
             # Create VTK cell array for tetrahedra
             n_cells = elements_np.shape[0]
             cells = np.hstack(
-                [np.full((n_cells, 1), 4, dtype=np.int64), elements_np]  # 4 nodes per tet
+                [
+                    np.full((n_cells, 1), 4, dtype=np.int64),
+                    elements_np,
+                ]  # 4 nodes per tet
             ).ravel()
 
             # Cell types: VTK_TETRA = 10
@@ -861,7 +879,9 @@ class TorchFEMKernel(FEAKernel):
         )
 
         # Step 3: Apply boundary conditions
-        self._apply_boundary_conditions(model, nodes, elements, loads, constraints, mesh_size=mesh_size)
+        self._apply_boundary_conditions(
+            model, nodes, elements, loads, constraints, mesh_size=mesh_size
+        )
 
         # Step 4: Create PyVista mesh
         nodes_np = nodes.cpu().numpy()

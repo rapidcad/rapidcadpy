@@ -7,11 +7,11 @@ from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCC.Core.gp import gp_Pnt, gp_Vec
 from OCC.Core.TopoDS import TopoDS_Compound
 
-from rapidcadpy.app import App
-from rapidcadpy.cad_types import Vector, VectorLike, Vertex
-from rapidcadpy.integrations.occ.shape import OccShape
-from rapidcadpy.primitives import Line
-from rapidcadpy.workplane import Workplane
+from .app import App
+from .cad_types import Vector, VectorLike, Vertex
+from .integrations.occ.shape import OccShape
+from .primitives import Line
+from .workplane import Workplane
 
 
 class OccWorkplane(Workplane):
@@ -36,7 +36,7 @@ class OccWorkplane(Workplane):
         Returns:
             New OccWorkplane with specified origin and normal
         """
-        from rapidcadpy.cad_types import Vector
+        from .cad_types import Vector
 
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
@@ -53,3 +53,48 @@ class OccWorkplane(Workplane):
         self._pending_shapes = []
         self._current_position = Vertex(0, 0)
         self._loop_start = None
+
+    def box(
+        self, length: float, width: float, height: float, centered: bool = True
+    ) -> OccShape:
+        """
+        Create a 3D box shape.
+
+        Args:
+            length: Length of the box (X dimension)
+            width: Width of the box (Y dimension)
+            height: Height of the box (Z dimension)
+            centered: If True (default), box is centered at current position.
+                     If False, box extends from current position in positive directions.
+
+        Returns:
+            OccShape: The created box shape
+
+        Example:
+            # Create a centered box
+            box = app.work_plane("XY").box(10, 20, 30)
+
+            # Create a box from origin
+            box = app.work_plane("XY").box(10, 20, 30, centered=False)
+        """
+        from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+
+        # Determine the starting corner based on centered parameter
+        if centered:
+            x = self._current_position.x - length / 2
+            y = self._current_position.y - width / 2
+            z = -height / 2
+        else:
+            x = self._current_position.x
+            y = self._current_position.y
+            z = 0
+
+        # Create the box starting point
+        corner = gp_Pnt(x, y, z)
+
+        # Create the box
+        box_builder = BRepPrimAPI_MakeBox(corner, length, width, height)
+        solid = box_builder.Shape()
+
+        # Return as OccShape
+        return OccShape(obj=solid, app=self.app)
