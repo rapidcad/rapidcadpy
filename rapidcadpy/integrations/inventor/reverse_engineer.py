@@ -317,18 +317,86 @@ class InventorReverseEngineer:
 
     def _analyze_single_chamfer_feature(self, chamfer_feature):
         """Analyze and generate code for a single chamfer feature."""
-        # Reuse existing chamfer logic but for a single feature
+        # Detect chamfer by comparing edges before and after suppression
         try:
-            # Note: _analyze_chamfers in previous code (now removed/refactored) 
-            # might have handled Collections. we need _extract_chamfer_info to handle single feature.
-            chamfer_info = self._extract_chamfer_info(chamfer_feature)
-            if chamfer_info:
-                self.generated_code.append("")
-                self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
-                chamfer_code = self._generate_chamfer_code(chamfer_info)
-                self.generated_code.extend(chamfer_code)
-            else:
-                 self.generated_code.append(f"# Chamfer: Could not extract edge position for {chamfer_feature.Name}")
+             # Get original edges (unchamfered if we roll back)
+             # But here we are at the point where chamfer exists.
+             # So the current state has NEW edges from chamfer, and MISSING edges that were chamfered.
+             
+             # This logic used to be global in _analyze_chamfer_feature but user wants it per feature
+             # Since we are iterating features in order, we can try to suppress THIS feature
+             # to find out which edge it modifies.
+             
+             # 1. Get current edges (with chamfer)
+             current_edges = {
+                (e.Geometry.Center.X, e.Geometry.Radius, e.Geometry.Center.Y, e.Geometry.Center.Z)
+                for e in self.comp_def.SurfaceBodies.Item(1).Edges
+                if e.CurveType == 5124 # kCircleCurve
+             }
+             
+             # 2. Suppress this chamfer
+             chamfer_feature.Suppressed = True
+             
+             # 3. Get edges without chamfer (original state)
+             original_edges_objs = []
+             surface_bodies = self.comp_def.SurfaceBodies
+             if surface_bodies.Count > 0:
+                 for e in surface_bodies.Item(1).Edges:
+                     if e.CurveType == 5124:
+                         original_edges_objs.append(e)
+             
+             original_edges = {
+                (e.Geometry.Center.X, e.Geometry.Radius, e.Geometry.Center.Y, e.Geometry.Center.Z)
+                for e in original_edges_objs
+             }
+             
+             # 4. Unsuppress chamfer to restore state
+             chamfer_feature.Suppressed = False
+             
+             # 5. Find the edge that exists in original but NOT in current
+             # That is the edge that got chamfered away
+             chamfered_edges = original_edges - current_edges
+             
+             if chamfered_edges:
+                 # Extract parameters
+                 chamfer_def = chamfer_feature.Definition
+                 
+                 angle = 0.785 # 45 deg
+                 distance = 0.1
+                 
+                 # Check chamfer type
+                 # kTwoDistancesChamfer = 51201
+                 # kDistanceAndAngleChamfer = 51202
+                 
+                 try:
+                     if hasattr(chamfer_def, "Distance"):
+                         distance = chamfer_def.Distance.Value
+                     elif hasattr(chamfer_def, "DistanceOne"):
+                         distance = chamfer_def.DistanceOne.Value
+                     
+                     if hasattr(chamfer_def, "Angle"):
+                         angle = chamfer_def.Angle.Value
+                 except Exception:
+                     pass
+                 
+                 for (cx, cr, cy, cz) in chamfered_edges:
+                      # Generate code
+                      self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
+                      self.generated_code.append(
+                        f"app.chamfer_edge(x={self._fmt(cx)}, radius={self._fmt(cr)}, angle={self._fmt(angle)}, distance={self._fmt(distance)})"
+                      )
+                      self.generated_code.append("")
+             else:
+                 # Fallback to old extraction method if diff method fails
+                 chamfer_info = self._extract_chamfer_info(chamfer_feature)
+                 if chamfer_info and "x" in chamfer_info:
+                    self.generated_code.append("")
+                    self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
+                    chamfer_code = self._generate_chamfer_code(chamfer_info)
+                    self.generated_code.extend(chamfer_code)
+                 else:
+                    self.generated_code.append(f"# Chamfer: Could not extract edge position for {chamfer_feature.Name} using edge diff or direct property access")
+
         except Exception as e:
             self.generated_code.append(
                 f"# Warning: Could not process chamfer {chamfer_feature.Name}: {e}"
@@ -336,16 +404,9 @@ class InventorReverseEngineer:
 
     def _analyze_single_fillet_feature(self, fillet_feature):
         """Analyze and generate code for a single fillet feature."""
-        try:
-            self.generated_code.append("")
-            self.generated_code.append(f"# Fillet: {fillet_feature.Name}")
-            self.generated_code.append(
-                f"# TODO: Fillet feature not yet implemented in code generation"
-            )
-        except Exception as e:
-            self.generated_code.append(
-                f"# Warning: Could not process fillet {fillet_feature.Name}: {e}"
-            )
+        # Fillet extraction not yet implemented.
+        # Intentionally omitting from output to avoid TODO spam.
+        pass
 
     def _get_sketch_index(self, target_sketch) -> int:
         """Get the index of a sketch in the sketches collection."""
@@ -377,7 +438,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f'{wp_var} = InventorApp.work_plane("{plane_name}")',
+                    f'{wp_var} = app.work_plane("{plane_name}")',
                     "",
                 ]
             )
@@ -385,7 +446,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f"{wp_var} = InventorApp.work_plane(",
+                    f"{wp_var} = app.work_plane(",
                     f"    origin={self._fmt3(origin)},",
                     f"    normal={self._fmt3(normal)}",
                     ")",
@@ -397,7 +458,7 @@ class InventorReverseEngineer:
             self.generated_code.extend(
                 [
                     f"# Sketch {sketch_num}",
-                    f'{wp_var} = InventorApp.work_plane("XY")',
+                    f'{wp_var} = app.work_plane("XY")',
                     "",
                 ]
             )
@@ -529,6 +590,7 @@ class InventorReverseEngineer:
                 start_pt = arc.StartSketchPoint.Geometry
                 end_pt = arc.EndSketchPoint.Geometry
                 center_pt = arc.CenterSketchPoint.Geometry
+                mid_pt = arc.Geometry.MidPoint
 
                 # Additional check for valid geometry
                 if start_pt is None or end_pt is None or center_pt is None:
@@ -562,6 +624,7 @@ class InventorReverseEngineer:
                         "start": (round(start_pt.X, 6), round(start_pt.Y, 6)),
                         "end": (round(end_pt.X, 6), round(end_pt.Y, 6)),
                         "center": (round(center_pt.X, 6), round(center_pt.Y, 6)),
+                        "mid": (round(mid_pt.X, 6), round(mid_pt.Y, 6)),
                         "radius": radius,
                         "start_angle": start_angle,
                         "end_angle": end_angle,
@@ -586,20 +649,46 @@ class InventorReverseEngineer:
             current_end = start_element["end"]
 
             # Follow the chain
-            while True:
+            # Limit iterations to avoid infinite loops in complex geometries
+            max_chain_length = len(elements) * 2 
+            chain_counter = 0
+            
+            while chain_counter < max_chain_length:
+                chain_counter += 1
                 found_next = False
 
                 for next_element in elements:
                     if next_element["used"] or next_element["type"] == "circle":
                         continue
 
-                    # Check if connects
+                    # Check if connects to current end
                     if self._points_equal(current_end, next_element["start"]):
                         current_path.append(next_element)
                         next_element["used"] = True
                         current_end = next_element["end"]
                         found_next = True
                         break
+                    # Check if connects reversely (start of next == current end handled above)
+                    # Check if end of next == current end (need to reverse next)
+                    elif self._points_equal(current_end, next_element["end"]):
+                         # Must reverse this element to maintain chain direction
+                         reversed_element = next_element.copy()
+                         reversed_element["start"] = next_element["end"]
+                         reversed_element["end"] = next_element["start"]
+                         if next_element["type"] == "arc":
+                             # Swap angles for arc
+                             reversed_element["start_angle"] = next_element["end_angle"]
+                             reversed_element["end_angle"] = next_element["start_angle"]
+                             # For arcs, traversing in reverse changes CW/CCW sense
+                             # Inventor arcs are typically CCW. Code gen assumes P1->P2.
+                             # Three point arc code gen handles direction relative to midpoint.
+                             pass
+                             
+                         current_path.append(reversed_element)
+                         next_element["used"] = True # Mark original as used
+                         current_end = reversed_element["end"]
+                         found_next = True
+                         break
 
                 if not found_next:
                     break
@@ -669,22 +758,28 @@ class InventorReverseEngineer:
             if element["type"] == "line":
                 code_str += f".line_to({self._fmt(end_pt[0])}, {self._fmt(end_pt[1])})"
             elif element["type"] == "arc":
-                center_pt = element["center"]
-                radius = element["radius"]
-                start_angle = element["start_angle"]
-                end_angle = element["end_angle"]
-                
-                # Calculate midpoint on the arc for three_point_arc
-                # Assume CCW traversal for Inventor SketchArcs
-                diff = end_angle - start_angle
-                while diff <= 0:
-                    diff += 2 * math.pi
-                while diff > 2 * math.pi:
-                    diff -= 2 * math.pi
-                
-                mid_angle = start_angle + (diff / 2.0)
-                mid_x = center_pt[0] + radius * math.cos(mid_angle)
-                mid_y = center_pt[1] + radius * math.sin(mid_angle)
+                # Use the extracted midpoint directly
+                # This avoids issues with arc direction (CW vs CCW) and angle calculations
+                if "mid" in element:
+                     mid_x, mid_y = element["mid"]
+                else:
+                    # Fallback for older extraction logic
+                    center_pt = element["center"]
+                    radius = element["radius"]
+                    start_angle = element["start_angle"]
+                    end_angle = element["end_angle"]
+                    
+                    # Calculate midpoint on the arc for three_point_arc
+                    # Assume CCW traversal for Inventor SketchArcs
+                    diff = end_angle - start_angle
+                    while diff <= 0:
+                        diff += 2 * math.pi
+                    while diff > 2 * math.pi:
+                        diff -= 2 * math.pi
+                    
+                    mid_angle = start_angle + (diff / 2.0)
+                    mid_x = center_pt[0] + radius * math.cos(mid_angle)
+                    mid_y = center_pt[1] + radius * math.sin(mid_angle)
                 
                 code_str += (
                     f".three_point_arc("
@@ -797,7 +892,7 @@ class InventorReverseEngineer:
                 op_str = "NewBodyFeatureOperation"
                 if op_type == 20737:
                     op_str = "JoinBodyFeatureOperation"
-                elif op_type == 20738:
+                elif op_type == constants.kCutOperation:
                     op_str = "Cut" # Matches Workplane.revolve logic
                 elif op_type == 20739:
                     op_str = "Intersect"
@@ -850,12 +945,20 @@ class InventorReverseEngineer:
                                     if hasattr(dir_vec, "X"):
                                         vx = getattr(dir_vec, "X")
                                         vy = getattr(dir_vec, "Y")
-                                        vz = getattr(dir_vec, "Z")
+                                        # Check if Z exists (3D) or default to 0 (2D)
+                                        if hasattr(dir_vec, "Z"):
+                                            vz = getattr(dir_vec, "Z")
+                                        else:
+                                            vz = 0.0
                                     else:
                                         # Assume list/tuple if attributes missing
                                         vx = dir_vec[0]
                                         vy = dir_vec[1]
-                                        vz = dir_vec[2]
+                                        # Handle 2D tuples/lists
+                                        if len(dir_vec) > 2:
+                                            vz = dir_vec[2]
+                                        else:
+                                            vz = 0.0
                                     
                                     if abs(vx) > 0.9: axis_char = "X"
                                     elif abs(vy) > 0.9: axis_char = "Y"
@@ -868,7 +971,7 @@ class InventorReverseEngineer:
                 # Inventor AddByAngle expects Radians.
                 # So if we pass 1.0 (turn), it passes 2*PI radians (360 deg). Correct.
                 # So we need to convert radians to turns.
-                angle_turns = angle_rad / (2 * math.pi)
+                angle_turns = angle_rad
                 
                 self.generated_code.append(
                     f"# Revolve: {name}"

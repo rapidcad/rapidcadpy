@@ -189,7 +189,7 @@ if __name__ == "__main__":
         output_dir = "C:\\Users\\Administrator\\Documents\\shaft_llm_data\\1"
         # Try to use a file we know exists in the workspace for testing behavior
         # test_file = "tests/test_files/1.ipt"
-        reverse_engineer_directory(input_dir, output_dir, recursive=True) 
+        reverse_engineer_directory(input_dir, output_dir, recursive=True, overwrite=args.overwrite) 
         #if os.path.exists(test_file):
         #     reverse_engineer_ipt_file(os.path.abspath(test_file), "99.py")
         #else:
