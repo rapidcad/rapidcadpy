@@ -854,9 +854,9 @@ class InventorReverseEngineer:
                 op_str = "NewBodyFeatureOperation"
                 if op_type == 20737:
                     op_str = "JoinBodyFeatureOperation"
-                elif op_type == 20738:  # Cut
+                elif op_type == constants.kCutOperation:
                     op_str = "Cut"
-                elif op_type == 20739:
+                elif op_type == constants.kIntersectOperation:
                     op_str = "Intersect"
                 
                 self.generated_code.append(
