@@ -185,11 +185,12 @@ if __name__ == "__main__":
         # parser.print_help()
         
         # Default test logic (modified to use relative paths if files match)
-        input_dir = "C:\\Users\\Administrator\\Documents\\sample_2025_11_18_11_16\\1"
-        output_dir = "C:\\Users\\Administrator\\Documents\\shaft_llm_data\\1"
+        input_dir = "C:\\Users\\Administrator\\Documents\\sample_withJSON\\3"
+        output_dir = "C:\\Users\\Administrator\\Documents\\shaft_llm_data\\7"
         # Try to use a file we know exists in the workspace for testing behavior
-        # test_file = "tests/test_files/1.ipt"
-        reverse_engineer_directory(input_dir, output_dir, recursive=True, overwrite=args.overwrite) 
+        test_file = "C:\\Users\\Administrator\\Documents\\sample_withJSON\\3\\99.ipt"
+        reverse_engineer_directory(input_dir, output_dir, recursive=True, overwrite=args.overwrite)
+        #reverse_engineer_ipt_file(os.path.abspath(test_file), "99.py") 
         #if os.path.exists(test_file):
         #     reverse_engineer_ipt_file(os.path.abspath(test_file), "99.py")
         #else:

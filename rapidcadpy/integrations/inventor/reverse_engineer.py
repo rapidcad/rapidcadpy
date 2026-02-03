@@ -1303,11 +1303,20 @@ class InventorReverseEngineer:
 
             # Thread length
             try:
-                if hasattr(thread_spec, "ThreadLength"):
-                    length = thread_spec.ThreadLength
+                if hasattr(thread_spec, "ThreadDirection"):
+                    length = thread_spec.ThreadDirection.Length
+                    thread_x_axis = thread_spec.ThreadDirection.X
+                    if thread_x_axis < 0:
+                        thread_axis = "-X"
+                    elif thread_x_axis > 0:
+                        thread_axis = "X"
+                    else:
+                        thread_axis = "Y"
                     thread_info["length"] = length
                     thread_info["length_cm"] = length  # Already in cm
-            except Exception:
+                    thread_info["full_depth"] = False
+                    thread_info["thread_axis"] = thread_axis
+            except Exception as e:
                 pass
 
             # Full length or partial
@@ -1415,10 +1424,15 @@ class InventorReverseEngineer:
         code_lines.append(f"    thread_type='{thread_type}',")
         code_lines.append(f"    right_handed={thread_info.get('right_handed', True)},")
 
+        # Add thread axis if available
+        if "thread_axis" in thread_info:
+            code_lines.append(f"    thread_axis='{thread_info['thread_axis']}',")
+
         if not thread_info.get("full_length"):
             length = thread_info.get("length_cm", 0)
             if length > 0:
                 code_lines.append(f"    length={self._fmt(length)},")
+                code_lines.append(f"    full_length=False,")
         else:
             code_lines.append(f"    full_length=True,")
 
