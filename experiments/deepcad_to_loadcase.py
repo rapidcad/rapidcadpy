@@ -27,8 +27,11 @@ import csv
 import math
 import random
 
-# Import load case parser for visualization
+# Add parent directory to path for relative imports to work
+sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent))
+
+# Import load case parser for visualization
 from load_case_parser import parse_load_case
 
 # CadQuery and OCP imports
