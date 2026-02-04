@@ -25,8 +25,15 @@ import numpy as np
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+import sys
 
-from ..rapidcadpy.fea.boundary_conditions import (
+# Add parent directory to sys.path to handle both module and script execution
+_current_file = Path(__file__).resolve()
+_parent_dir = _current_file.parent.parent
+if str(_parent_dir) not in sys.path:
+    sys.path.insert(0, str(_parent_dir))
+
+from rapidcadpy.fea.boundary_conditions import (
     DistributedLoad,
     PointLoad,
     ConcentratedLoad,
@@ -35,7 +42,7 @@ from ..rapidcadpy.fea.boundary_conditions import (
     FixedConstraint,
     CylindricalConstraint,
 )
-from ..rapidcadpy.fea.materials import Material
+from rapidcadpy.fea.materials import Material
 
 logger = logging.getLogger(__name__)
 
