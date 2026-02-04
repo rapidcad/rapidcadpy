@@ -35,7 +35,8 @@ except ImportError:
 
 try:
     from .integrations.inventor.app import InventorApp
-except ImportError:
+except ImportError as e:
+    print(f"Warning: Could not import InventorApp due to: {e}")
     InventorApp = None
 
 # Essential primitives for fluent modeling

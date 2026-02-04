@@ -634,21 +634,71 @@ class InventorApp(App):
                         continue
 
                     # Heuristic for start edge:
-                    # - If external, we usually want the edge at the start of the cylinder?
-                    # - If internal, same?
-                    # Simple heuristic: Use start_edge = face.Edges.Item(1)
-                    # And try both directions if it fails? Or assume Item(1) works?
-                    # Let's try to be smarter if we have offset/length logic, but for full length, Item(1) is fine.
+                    # If thread_axis is specified, pick the edge with the most positive/negative
+                    # coordinate along that axis so the thread starts at the “entering” end.
+                    # Fallback to Item(1) if we cannot evaluate edge positions.
+
+                    def _edge_axis_value(e, axis_letter: str) -> Optional[float]:
+                        try:
+                            geom = e.Geometry
+                            center = getattr(geom, "Center", None)
+                            if center is not None:
+                                return getattr(center, axis_letter)
+                        except Exception:
+                            pass
+                        try:
+                            rb = e.Evaluator.RangeBox
+                            min_pt = rb.MinPoint
+                            max_pt = rb.MaxPoint
+                            min_v = getattr(min_pt, axis_letter)
+                            max_v = getattr(max_pt, axis_letter)
+                            return (min_v + max_v) * 0.5
+                        except Exception:
+                            return None
 
                     start_edge = face.Edges.Item(1)
+                    if thread_axis is not None:
+                        axis_letter = thread_axis.replace("-", "").upper()
+                        if axis_letter in ("X", "Y", "Z") and face.Edges.Count > 0:
+                            best_edge = None
+                            best_value = None
+                            for i in range(1, face.Edges.Count + 1):
+                                e = face.Edges.Item(i)
+                                v = _edge_axis_value(e, axis_letter)
+                                if v is None:
+                                    continue
+                                if best_value is None:
+                                    best_value = v
+                                    best_edge = e
+                                else:
+                                    if thread_axis.startswith("-"):
+                                        if v > best_value:
+                                            best_value = v
+                                            best_edge = e
+                                    else:
+                                        if v < best_value:
+                                            best_value = v
+                                            best_edge = e
+                            if best_edge is not None:
+                                start_edge = best_edge
 
                     # Determine if we need to reverse the direction based on thread_axis
                     direction_reversed = False
                     if thread_axis is not None:
                         # thread_axis specifies the direction the thread extends
                         # "-X", "-Y", "-Z" indicate negative direction
-                        if thread_axis.startswith("-"):
-                            direction_reversed = True
+                        axis_letter = thread_axis.replace("-", "").upper()
+                        desired_sign = -1.0 if thread_axis.startswith("-") else 1.0
+                        axis_vec = getattr(face.Geometry, "AxisVector", None)
+                        comp = None
+                        if axis_vec is not None and axis_letter in ("X", "Y", "Z"):
+                            comp = getattr(axis_vec, axis_letter, None)
+                        if comp is not None and abs(comp) > 1e-9:
+                            # If the cylinder axis points opposite the desired direction,
+                            # reverse the thread direction.
+                            direction_reversed = (comp * desired_sign) < 0
+                        else:
+                            direction_reversed = thread_axis.startswith("-")
 
                     # Add the thread feature using the info object
                     # Signature per docs:
