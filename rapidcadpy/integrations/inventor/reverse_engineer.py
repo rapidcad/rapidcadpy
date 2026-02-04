@@ -1151,104 +1151,14 @@ class InventorReverseEngineer:
 
                 if face is not None:
                     try:
-                        # Get face geometry for position and radius
-                        geom = face.Geometry
-
-                        # Method 1: Try to get BasePoint and Radius directly
-                        if hasattr(geom, "BasePoint") and hasattr(geom, "Radius"):
-                            try:
-                                base_pt = geom.BasePoint
-                                thread_info["x"] = round(base_pt.X, 6)
-                                thread_info["y"] = round(base_pt.Y, 6)
-                                thread_info["z"] = round(base_pt.Z, 6)
-                                thread_info["radius"] = round(geom.Radius, 6)
-                                print(
-                                    f"Thread face position (BasePoint): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})"
-                                )
-                                print(f"Thread face radius: {thread_info['radius']}")
-                            except Exception as e:
-                                print(
-                                    f"Warning: BasePoint/Radius extraction failed: {e}"
-                                )
-
-                        # Method 2: Get from circular edges (similar to chamfer approach)
-                        if "x" not in thread_info or "radius" not in thread_info:
-                            try:
-                                edges = face.Edges
-                                for e_idx in range(1, edges.Count + 1):
-                                    edge = edges.Item(e_idx)
-                                    # Look for circular edges (CurveType 5124)
-                                    if edge.CurveType == 5124:
-                                        edge_geom = edge.Geometry
-                                        if hasattr(edge_geom, "Center") and hasattr(
-                                            edge_geom, "Radius"
-                                        ):
-                                            center = edge_geom.Center
-                                            thread_info["x"] = round(center.X, 6)
-                                            thread_info["y"] = round(center.Y, 6)
-                                            thread_info["z"] = round(center.Z, 6)
-                                            thread_info["radius"] = round(
-                                                edge_geom.Radius, 6
-                                            )
-                                            print(
-                                                f"Thread face position (from edge): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})"
-                                            )
-                                            print(
-                                                f"Thread face radius (from edge): {thread_info['radius']}"
-                                            )
-                                            break
-                            except Exception as e:
-                                print(f"Warning: Edge extraction failed: {e}")
-
-                        # Method 3: Use face evaluator range box
-                        if "x" not in thread_info or "radius" not in thread_info:
-                            try:
-                                evaluator = face.Evaluator
-                                range_box = evaluator.RangeBox
-                                min_pt = range_box.MinPoint
-                                max_pt = range_box.MaxPoint
-
-                                if "x" not in thread_info:
-                                    thread_info["x"] = round(
-                                        (min_pt.X + max_pt.X) / 2, 6
-                                    )
-                                    thread_info["y"] = round(
-                                        (min_pt.Y + max_pt.Y) / 2, 6
-                                    )
-                                    thread_info["z"] = round(
-                                        (min_pt.Z + max_pt.Z) / 2, 6
-                                    )
-                                    print(
-                                        f"Thread face position (from range): ({thread_info['x']}, {thread_info['y']}, {thread_info['z']})"
-                                    )
-
-                                if "radius" not in thread_info:
-                                    # Try to get radius from geometry again
-                                    if hasattr(geom, "Radius"):
-                                        thread_info["radius"] = round(geom.Radius, 6)
-                                        print(
-                                            f"Thread face radius (from geom): {thread_info['radius']}"
-                                        )
-                            except Exception as e:
-                                print(f"Warning: Range box extraction failed: {e}")
-
-                        # Get cylinder axis direction for better matching
-                        if hasattr(geom, "AxisVector"):
-                            try:
-                                axis_vec = geom.AxisVector
-                                # Determine primary axis direction
-                                if abs(axis_vec.X) > 0.9:
-                                    thread_info["axis"] = "X"
-                                elif abs(axis_vec.Y) > 0.9:
-                                    thread_info["axis"] = "Y"
-                                elif abs(axis_vec.Z) > 0.9:
-                                    thread_info["axis"] = "Z"
-                                print(
-                                    f"Thread face axis: {thread_info.get('axis', 'Unknown')}"
-                                )
-                            except Exception as e:
-                                print(f"Warning: Axis extraction failed: {e}")
-
+                        thread_start_x = thread_feature.StartEdge.Item(1).Geometry.StartPoint.X
+                        thread_start_y = thread_feature.StartEdge.Item(1).Geometry.StartPoint.Y
+                        thread_start_z = thread_feature.StartEdge.Item(1).Geometry.StartPoint.Z
+                        radius = thread_feature.StartEdge.Item(1).Geometry.Radius
+                        thread_info["x"] = round(thread_start_x, 6)
+                        thread_info["y"] = round(thread_start_y, 6)
+                        thread_info["z"] = round(thread_start_z, 6)
+                        thread_info["radius"] = round(radius, 6)
                     except Exception as e:
                         print(f"Warning: Could not extract face geometry: {e}")
                         import traceback
