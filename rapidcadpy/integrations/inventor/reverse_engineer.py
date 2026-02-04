@@ -75,113 +75,20 @@ class InventorReverseEngineer:
         # Note: PartFeatures has collections for each feature type
         # We need to use a different approach to get the timeline order
 
-        extrude_features = part_features.ExtrudeFeatures
-        revolve_features = part_features.RevolveFeatures
-        thread_features = part_features.ThreadFeatures
-        chamfer_features = part_features.ChamferFeatures
-        fillet_features = part_features.FilletFeatures
-
-        # Collect all features with metadata
-        all_features = []
-
-        # Add extrude features
-        for i in range(1, extrude_features.Count + 1):
-            feature = extrude_features.Item(i)
-            if not feature.Suppressed:
-                sketch = feature.Profile.Parent
-                all_features.append(
-                    {
-                        "feature": feature,
-                        "type": "extrude",
-                        "sketch": sketch,
-                        "sketch_index": self._get_sketch_index(sketch),
-                        "name": feature.Name,
-                    }
-                )
-
-        # Add revolve features
-        for i in range(1, revolve_features.Count + 1):
-            feature = revolve_features.Item(i)
-            if not feature.Suppressed:
-                sketch = feature.Profile.Parent
-                all_features.append(
-                    {
-                        "feature": feature,
-                        "type": "revolve",
-                        "sketch": sketch,
-                        "sketch_index": self._get_sketch_index(sketch),
-                        "name": feature.Name,
-                    }
-                )
-
-        # Add thread features
-        for i in range(1, thread_features.Count + 1):
-            feature = thread_features.Item(i)
-            if not feature.Suppressed:
-                # Threads don't have a sketch, but we can try to find which face they depend on
-                # This helps us determine order based on which extrude/revolve created that face
-                dependent_sketch_index = self._get_thread_dependent_sketch_index(
-                    feature
-                )
-                all_features.append(
-                    {
-                        "feature": feature,
-                        "type": "thread",
-                        "sketch": None,
-                        "sketch_index": dependent_sketch_index,
-                        "name": feature.Name,
-                    }
-                )
-
-        # Add chamfer features
-        for i in range(1, chamfer_features.Count + 1):
-            feature = chamfer_features.Item(i)
-            if not feature.Suppressed:
-                dependent_sketch_index = self._get_chamfer_dependent_sketch_index(
-                    feature
-                )
-                all_features.append(
-                    {
-                        "feature": feature,
-                        "type": "chamfer",
-                        "sketch": None,
-                        "sketch_index": dependent_sketch_index,
-                        "name": feature.Name,
-                    }
-                )
-
-        # Add fillet features
-        for i in range(1, fillet_features.Count + 1):
-            feature = fillet_features.Item(i)
-            if not feature.Suppressed:
-                dependent_sketch_index = self._get_fillet_dependent_sketch_index(
-                    feature
-                )
-                all_features.append(
-                    {
-                        "feature": feature,
-                        "type": "fillet",
-                        "sketch": None,
-                        "sketch_index": dependent_sketch_index,
-                        "name": feature.Name,
-                    }
-                )
-
-        # Sort by sketch_index to maintain feature order
-        # Features that depend on later sketches come after features that depend on earlier sketches
-        all_features.sort(key=lambda x: (x["sketch_index"], x["name"]))
-
-        # Generate code for each feature in order
+        # Iterate through all features in order
         sketch_counter = 0
-        processed_sketches = {}  # Changed from set() to {}
+        processed_sketches = {}
 
-        for feat_info in all_features:
-            feat_type = feat_info["type"]
-            feature = feat_info["feature"]
+        num_features = part_features.Count
+        for i in range(1, num_features + 1):
+            feature = part_features.Item(i)
+            
+            if feature.Suppressed:
+                continue
 
-            if feat_type in ["extrude", "revolve"]:
-                # These features have sketches
-                sketch = feat_info["sketch"]
+            if feature.Type == constants.kExtrudeFeatureObject:
+                feature = win32.CastTo(feature, "ExtrudeFeature")
+                sketch = feature.Profile.Parent
                 sketch_id = id(sketch)
 
                 if sketch_id not in processed_sketches:
@@ -190,22 +97,39 @@ class InventorReverseEngineer:
                     self._analyze_sketch(sketch, wp_var, sketch_counter)
                     processed_sketches[sketch_id] = (wp_var, sketch_counter)
                 else:
-                    # Find the wp_var for this already-processed sketch
                     wp_var, _ = processed_sketches[sketch_id]
 
-                self._analyze_feature(feature, feat_type, wp_var, sketch_counter)
+                self._analyze_feature(feature, "extrude", wp_var, sketch_counter)
 
-            elif feat_type == "thread":
+            elif feature.Type == constants.kRevolveFeatureObject:
+                feature = win32.CastTo(feature, "RevolveFeature")
+                sketch = feature.Profile.Parent
+                sketch_id = id(sketch)
+
+                if sketch_id not in processed_sketches:
+                    sketch_counter += 1
+                    wp_var = f"wp{sketch_counter}"
+                    self._analyze_sketch(sketch, wp_var, sketch_counter)
+                    processed_sketches[sketch_id] = (wp_var, sketch_counter)
+                else:
+                    wp_var, _ = processed_sketches[sketch_id]
+
+                self._analyze_feature(feature, "revolve", wp_var, sketch_counter)
+
+            elif feature.Type == constants.kThreadFeatureObject:
+                feature = win32.CastTo(feature, "ThreadFeature")
                 thread_info = self._analyze_thread_feature(feature)
                 thread_code = self._generate_thread_code(thread_info)
                 self.generated_code.append("")
                 # Comment is added by _generate_thread_code
                 self.generated_code.extend(thread_code)
 
-            elif feat_type == "chamfer":
+            elif feature.Type == constants.kChamferFeatureObject:
+                feature = win32.CastTo(feature, "ChamferFeature")
                 self._analyze_single_chamfer_feature(feature)
 
-            elif feat_type == "fillet":
+            elif feature.Type == constants.kFilletFeatureObject:
+                feature = win32.CastTo(feature, "FilletFeature")
                 self._analyze_single_fillet_feature(feature)
 
     def _get_thread_dependent_sketch_index(self, thread_feature) -> float:
@@ -1355,30 +1279,3 @@ class InventorReverseEngineer:
 
         return code_lines
 
-    def _analyze_thread_features(self):
-        """
-        Process all thread features in the part and add code generation.
-        """
-        try:
-            thread_features = self.comp_def.Features.ThreadFeatures
-
-            if thread_features.Count == 0:
-                return
-
-            self.generated_code.append("")
-            self.generated_code.append("# === Thread Features ===")
-
-            for i in range(1, thread_features.Count + 1):
-                thread_feature = thread_features.Item(i)
-
-                # Skip suppressed features if needed
-                if thread_feature.Suppressed:
-                    continue
-
-                thread_info = self._analyze_thread_feature(thread_feature)
-                thread_code = self._generate_thread_code(thread_info)
-                self.generated_code.extend(thread_code)
-                self.generated_code.append("")
-
-        except Exception as e:
-            print(f"Error processing thread features: {e}")
