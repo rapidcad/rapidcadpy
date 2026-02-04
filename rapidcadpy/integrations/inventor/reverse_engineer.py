@@ -1075,13 +1075,21 @@ class InventorReverseEngineer:
 
                 if face is not None:
                     try:
-                        thread_start_x = thread_feature.StartEdge.Item(1).Geometry.StartPoint.X
-                        thread_start_y = thread_feature.StartEdge.Item(1).Geometry.StartPoint.Y
-                        thread_start_z = thread_feature.StartEdge.Item(1).Geometry.StartPoint.Z
-                        radius = thread_feature.StartEdge.Item(1).Geometry.Radius
-                        thread_info["x"] = round(thread_start_x, 6)
-                        thread_info["y"] = round(thread_start_y, 6)
-                        thread_info["z"] = round(thread_start_z, 6)
+                        # Use geometry center (on axis) instead of start point (on profile)
+                        start_edge = thread_feature.StartEdge.Item(1)
+                        if start_edge.GeometryType == constants.kCircleCurve or start_edge.GeometryType == 5124: # kCircleCurve
+                             center = start_edge.Geometry.Center
+                             thread_info["x"] = round(center.X, 6)
+                             thread_info["y"] = round(center.Y, 6)
+                             thread_info["z"] = round(center.Z, 6)
+                        else:
+                             # Fallback for non-circular start edges (rare for threads)
+                             pt = start_edge.Geometry.StartPoint
+                             thread_info["x"] = round(pt.X, 6)
+                             thread_info["y"] = round(pt.Y, 6)
+                             thread_info["z"] = round(pt.Z, 6)
+                             
+                        radius = start_edge.Geometry.Radius
                         thread_info["radius"] = round(radius, 6)
                     except Exception as e:
                         print(f"Warning: Could not extract face geometry: {e}")
