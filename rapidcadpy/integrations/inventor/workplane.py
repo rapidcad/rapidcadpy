@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING, Any, Optional
 from win32com.client import constants
 
 from rapidcadpy import Workplane
-from .cad_types import VectorLike, Vertex
-from .integrations.inventor.shape import InventorShape
+from rapidcadpy.cad_types import VectorLike, Vertex
+from .shape import InventorShape
 
 if TYPE_CHECKING:
     pass
@@ -303,16 +303,16 @@ class InventorWorkPlane(Workplane):
         self,
         distance: float,
         operation: str = "NewBodyFeatureOperation",
-        both: bool = False,
         symmetric: bool = False,
+        **kwargs,
     ) -> InventorShape:
         """Extrude all sketches in the workplane.
 
         Args:
             distance: Extrusion distance (positive or negative)
             operation: Operation type for extrusion
-            both: Whether to extrude both directions (deprecated, use symmetric instead)
             symmetric: Whether to extrude symmetrically in both directions
+            **kwargs: Additional arguments (like 'both' for backward compatibility)
 
         Returns:
             InventorShape representing the last extruded body (or combined result)
@@ -325,6 +325,9 @@ class InventorWorkPlane(Workplane):
             "Intersect": constants.kIntersectOperation,
             "NewBodyFeatureOperation": constants.kNewBodyOperation,
         }.get(operation, constants.kNewBodyOperation)
+
+        # Handle 'both' for backward compatibility
+        both = kwargs.get("both", False)
 
         # Determine extrusion direction
         if symmetric or both:
@@ -356,7 +359,7 @@ class InventorWorkPlane(Workplane):
         # Extrude each valid sketch
         for sketch_idx, sketch in enumerate(valid_sketches):
             # Always create a single composite profile per sketch.
-            # This preserves inner loops (holes) as voids during extrusion.
+            # This preserves inner loops (holes) during extrusion.
             try:
                 # Ensure a composite profile exists in the collection
                 if sketch.Profiles.Count == 0:
@@ -500,9 +503,9 @@ class InventorWorkPlane(Workplane):
                 work_axis = self.app.comp_def.WorkAxes.Item(1)
             else:
                 raise RuntimeError("No work axes available for revolve operation")
-        angle = angle * 2 * math.pi
+        # angle = revolution * 2 * math.pi
         try:
-            if abs(angle - 2 * math.pi) < 1e-6 or abs(angle - 360) < 1e-3:
+            if abs(angle - 2 * math.pi) < 1e-4:
                 # Full revolve (360 degrees)
                 revolve_feature = self.app.comp_def.Features.RevolveFeatures.AddFull(
                     profile, work_axis, rev_op

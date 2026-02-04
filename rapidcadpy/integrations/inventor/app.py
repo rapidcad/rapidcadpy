@@ -1,11 +1,11 @@
 import os
 from typing import TYPE_CHECKING, Optional
 
-from .app import App
-from .cad_types import VectorLike
+from rapidcadpy.app import App
+from rapidcadpy.cad_types import VectorLike
 
 if TYPE_CHECKING:
-    from .integrations.inventor.workplane import InventorWorkPlane
+    from .workplane import InventorWorkPlane
 
 
 class InventorApp(App):
@@ -18,7 +18,7 @@ class InventorApp(App):
                 "pywin32 is required for Inventor integration. Install with: pip install pywin32"
             )
 
-        from .integrations.inventor.workplane import InventorWorkPlane
+        from .workplane import InventorWorkPlane
 
         super().__init__(InventorWorkPlane)
         try:
@@ -73,9 +73,9 @@ class InventorApp(App):
     def work_plane(
         self,
         name: str = "XY",
+        offset: Optional[float] = None,
         origin: Optional[VectorLike] = None,
         normal: Optional[VectorLike] = None,
-        offset: Optional[float] = None,
         **kwargs,
     ) -> "InventorWorkPlane":
         """
@@ -83,15 +83,15 @@ class InventorApp(App):
 
         Args:
             name: Standard plane name ("XY", "XZ", "YZ") - used if origin/normal not provided
+            offset: Offset distance for the workplane
             origin: Origin point for custom workplane
             normal: Normal vector for custom workplane
-            offset: Offset distance for the workplane
             **kwargs: Additional arguments (like app parameter)
 
         Returns:
             InventorWorkPlane instance
         """
-        from .integrations.inventor.workplane import InventorWorkPlane
+        from .workplane import InventorWorkPlane
 
         if origin is not None and normal is not None:
             # Create custom workplane from origin and normal
@@ -114,7 +114,7 @@ class InventorApp(App):
             # Default to XY if unknown name
             return InventorWorkPlane.xy_plane(app=self)
 
-    def to_stl(self, file_name: str) -> None:
+    def to_stl(self, file_name: str, ascii: bool = False) -> None:
         """
         Export the shape to STL format using Autodesk Inventor COM API.
 
@@ -123,6 +123,7 @@ class InventorApp(App):
 
         Args:
             file_name: Path to the output STL file
+            ascii: Whether to export as ASCII STL (not fully implemented in Inventor yet)
         """
         try:
             import pythoncom
@@ -428,6 +429,7 @@ class InventorApp(App):
         full_length: bool = True,
         offset: float = 0.0,
         modeled: bool = False,
+        thread_axis: Optional[str] = None,
         tol: float = 1e-3,
     ) -> int:
         """Apply a thread to cylindrical faces that match given geometric properties.
@@ -449,6 +451,7 @@ class InventorApp(App):
             full_length: Whether thread spans the full face length
             offset: Offset from face start for thread placement
             modeled: True for modeled thread (actual geometry), False for cosmetic
+            thread_axis: Thread direction ("X", "Y", "Z", "-X", "-Y", "-Z") - determines which direction the length applies to
             tol: Tolerance for matching position and radius
 
         Returns:
@@ -461,6 +464,10 @@ class InventorApp(App):
             # Internal thread in a hole with full position specification
             app.add_thread(x=0, y=0, z=5, radius=0.35, axis='Z',
                           designation="M7x1", thread_type="internal")
+            
+            # Thread with specified direction and length
+            app.add_thread(x=37.1925, radius=4.0, axis='X', thread_axis='-X',
+                          designation="M80x2", thread_type="external", length=1.7)
         """
         try:
             import win32com.client as win32
@@ -635,6 +642,14 @@ class InventorApp(App):
 
                     start_edge = face.Edges.Item(1)
 
+                    # Determine if we need to reverse the direction based on thread_axis
+                    direction_reversed = False
+                    if thread_axis is not None:
+                        # thread_axis specifies the direction the thread extends
+                        # "-X", "-Y", "-Z" indicate negative direction
+                        if thread_axis.startswith("-"):
+                            direction_reversed = True
+
                     # Add the thread feature using the info object
                     # Signature per docs:
                     # ThreadFeatures.Add(Face, StartEdge, ThreadInfo, [DirectionReversed], [FullDepth], [ThreadDepth], [ThreadOffset])
@@ -644,7 +659,7 @@ class InventorApp(App):
                         if full_length:
                             # Face, StartEdge, ThreadInfo, DirectionReversed, FullDepth
                             thread_feature = thread_features.Add(
-                                face, start_edge, thread_info, False, True
+                                face, start_edge, thread_info, direction_reversed, True
                             )
                         else:
                             # Face, StartEdge, ThreadInfo, DirectionReversed, FullDepth, ThreadDepth, ThreadOffset
@@ -655,7 +670,7 @@ class InventorApp(App):
                                 face,
                                 start_edge,
                                 thread_info,
-                                False,  # DirectionReversed
+                                direction_reversed,  # DirectionReversed
                                 False,  # FullDepth
                                 float(depth),
                                 float(offset),

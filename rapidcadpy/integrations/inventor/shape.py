@@ -2,7 +2,7 @@ import os
 
 from win32com.client import constants
 
-from .shape import Shape
+from rapidcadpy.shape import Shape
 
 
 class InventorShape(Shape):

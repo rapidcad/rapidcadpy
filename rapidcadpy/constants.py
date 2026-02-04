@@ -48,6 +48,16 @@ EXTENT_TYPE = [
     "SymmetricFeatureExtentType",
     "TwoSidesFeatureExtentType",
 ]
+
+# Inventor API Constants
+kPlaneAndOffsetWorkPlane = 12546
+kDistanceExtent = 20993
+kDistanceExtentObject = 83917824
+kPositiveExtentDirection = 20995
+kNegativeExtentDirection = 20996
+kSymmetricExtentDirection = 20997
+kAngleExtent = 20995
+
 NODE_TYPES = ["primitive"]
 CONSTRAINT_TYPES = [
     "horizontal",
