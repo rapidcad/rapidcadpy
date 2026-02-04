@@ -2,14 +2,14 @@ import tempfile
 import math
 from typing import TYPE_CHECKING, Optional, List, Union, Tuple, Dict
 
-from .app import App
+from ...app import App
 
 if TYPE_CHECKING:
-    from .integrations.ocp.workplane import OccWorkplane
+    from .workplane import OccWorkplane
 
-from .fea.boundary_conditions import BoundaryCondition, Load
-from .fea.materials import MaterialProperties
-from .integrations.ocp.workplane import OccWorkplane
+from ...fea.boundary_conditions import BoundaryCondition, Load
+from ...fea.materials import MaterialProperties
+from .workplane import OccWorkplane
 
 # Standard ISO metric thread data: designation -> (pitch, major_diameter)
 # Values in mm
@@ -53,7 +53,7 @@ class OpenCascadeOcpApp(App):
 
     @property
     def sketch_class(self):
-        from .integrations.ocp.sketch2d import OccSketch2D
+        from .sketch2d import OccSketch2D
 
         return OccSketch2D
 
@@ -178,10 +178,11 @@ class OpenCascadeOcpApp(App):
         thread_class: str = "6H",
         thread_type: str = "external",
         right_handed: bool = True,
-        length: Optional[float] = None,
+        length: float = 5.0,
         full_length: bool = True,
         offset: float = 0.0,
         modeled: bool = True,
+        thread_axis: Optional[str] = None,
         tol: float = 1e-3,
     ) -> "OccShape":
         """Create a modeled thread using helical sweep.
@@ -204,6 +205,7 @@ class OpenCascadeOcpApp(App):
             full_length: Whether thread spans the full length (if True, uses length param)
             offset: Offset from start point for thread placement
             modeled: True for modeled thread geometry (always True for OCC)
+            thread_axis: Thread direction ("X", "Y", "Z", "-X", "-Y", "-Z") - determines which direction the length applies to
             tol: Tolerance for geometric operations
 
         Returns:
@@ -228,8 +230,14 @@ class OpenCascadeOcpApp(App):
                 thread_type="internal",
                 length=15.0
             )
+
+            # Thread with specified direction
+            thread = app.add_thread(
+                x=37.1925, radius=4.0, axis='X', thread_axis='-X',
+                designation="M80x2", thread_type="external", length=1.7
+            )
         """
-        from .integrations.ocp.shape import OccShape
+        from .shape import OccShape
 
         # Parse thread designation to get pitch and major diameter (in mm)
         pitch_mm, major_diameter_mm = self._parse_thread_designation(designation)
@@ -242,7 +250,15 @@ class OpenCascadeOcpApp(App):
         x = x if x is not None else 0.0
         y = y if y is not None else 0.0
         z = z if z is not None else 0.0
-        axis = axis if axis is not None else "Z"
+        
+        # If thread_axis is specified, extract the axis from it
+        # thread_axis can be "X", "Y", "Z", "-X", "-Y", or "-Z"
+        if thread_axis is not None:
+            # Extract the axis letter (remove leading '-' if present)
+            axis_from_thread = thread_axis.lstrip('-').upper()
+            axis = axis_from_thread
+        else:
+            axis = axis if axis is not None else "Z"
 
         if length is None:
             raise ValueError("Thread length must be specified")
@@ -274,17 +290,32 @@ class OpenCascadeOcpApp(App):
 
             thread_depth = 5.0 / 8.0 * H
 
+        # Determine direction based on thread_axis
+        # The thread_axis parameter specifies which direction the thread extends
+        # The x, y, z coordinates are the starting edge of the thread
+        # For negative directions ("-X", "-Y", "-Z"), use negative length to reverse helix
+        effective_length = length
+        effective_offset = offset
+        
+        if thread_axis is not None:
+            is_negative = thread_axis.startswith("-")
+            
+            if is_negative:
+                # For negative direction: use negative length to signal reverse direction
+                # The provided x, y, z is already the starting edge position
+                effective_length = -length
+
         # Create the helical thread geometry
         thread_shape = self._create_thread_helix(
             center=(x, y, z),
             axis=axis.upper(),
             pitch=pitch,
-            length=length,
+            length=effective_length,
             thread_radius=thread_radius,
             thread_depth=thread_depth,
             right_handed=right_handed,
             is_internal=(thread_type.lower() == "internal"),
-            offset=offset,
+            offset=effective_offset,
         )
 
         # For internal threads, apply as a cut operation to existing shapes
@@ -507,8 +538,8 @@ class OpenCascadeOcpApp(App):
             axis_dir: Direction of helix axis
             perp_dir: Perpendicular direction for starting point
             radius: Helix radius
-            pitch: Distance per revolution
-            length: Total helix length along axis
+            pitch: Distance per revolution (always positive)
+            length: Total helix length along axis (negative for reverse direction)
             right_handed: True for right-hand helix
 
         Returns:
@@ -519,9 +550,13 @@ class OpenCascadeOcpApp(App):
         from OCP.TColgp import TColgp_Array1OfPnt
         from OCP.GeomAPI import GeomAPI_PointsToBSpline
 
+        # Handle negative length (reverse direction)
+        reverse_direction = length < 0
+        abs_length = abs(length)
+
         # Calculate number of points for smooth helix
         # Use more points for longer threads
-        num_turns = length / pitch
+        num_turns = abs_length / pitch
         points_per_turn = 36  # 10 degree increments
         total_points = max(int(num_turns * points_per_turn) + 1, 10)
 
@@ -532,6 +567,12 @@ class OpenCascadeOcpApp(App):
         ax = axis_dir.X()
         ay = axis_dir.Y()
         az = axis_dir.Z()
+        
+        # Reverse axis direction if length was negative
+        if reverse_direction:
+            ax = -ax
+            ay = -ay
+            az = -az
 
         # Get perpendicular vectors for helix
         px = perp_dir.X()
@@ -548,7 +589,7 @@ class OpenCascadeOcpApp(App):
             t = i / (total_points - 1)  # Parameter from 0 to 1
 
             # Position along axis
-            h = t * length
+            h = t * abs_length
 
             # Angle for this position
             angle = t * num_turns * 2 * math.pi
@@ -718,7 +759,7 @@ class OpenCascadeOcpApp(App):
         else:
             # Multiple shapes - union them all together
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            from .integrations.ocp.shape import OccShape
+            from .shape import OccShape
 
             # Start with the first shape
             combined_obj = self._shapes[0].obj
@@ -757,7 +798,7 @@ class OpenCascadeOcpApp(App):
         else:
             # Multiple shapes - union them all together
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            from .integrations.ocp.shape import OccShape
+            from .shape import OccShape
 
             # Start with the first shape
             combined_obj = self._shapes[0].obj

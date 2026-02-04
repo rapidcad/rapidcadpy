@@ -1,5 +1,5 @@
 from typing import List, Union, Optional
-from .shape import Shape
+from ...shape import Shape
 
 
 class OccShape(Shape):

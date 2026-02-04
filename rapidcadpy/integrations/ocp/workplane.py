@@ -1,10 +1,11 @@
+from math import degrees, pi
 from typing import Any, Optional
 
 
-from .app import App
-from .cad_types import Vector, VectorLike, Vertex
-from .workplane import Workplane
-from .primitives import Line, Circle, Arc
+from ...app import App
+from ...cad_types import Vector, VectorLike, Vertex
+from ...workplane import Workplane
+from ...primitives import Line, Circle, Arc
 
 
 class OccWorkplane(Workplane):
@@ -144,7 +145,7 @@ class OccWorkplane(Workplane):
         Revolve the current sketch around a specified axis.
 
         Args:
-            angle: Angle in degrees to revolve (360 for full revolution)
+            angle: Angle in radians
             axis: Axis to revolve around ('X', 'Y', or 'Z')
             operation: Operation type (default 'NewBodyFeatureOperation')
 
@@ -153,8 +154,7 @@ class OccWorkplane(Workplane):
         """
         from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
         from OCP.gp import gp_Ax1, gp_Pnt, gp_Dir
-        from math import radians
-        from .integrations.ocp.sketch2d import OccSketch2D
+        from .sketch2d import OccSketch2D
 
         # Check if there are shapes to revolve
         if not self._pending_shapes:
@@ -182,8 +182,9 @@ class OccWorkplane(Workplane):
         revolve_axis = gp_Ax1(axis_origin, axis_dir)
 
         # Perform the revolve operation
+        # Testing: BRepPrimAPI_MakeRevol might expect radians despite documentation
         revol_builder = BRepPrimAPI_MakeRevol(
-            face, revolve_axis, radians(angle * 360), True
+            face, revolve_axis, angle, True
         )
 
         # Get the resulting shape
@@ -193,7 +194,7 @@ class OccWorkplane(Workplane):
         self._clear_pending_shapes()
 
         # Return OccShape
-        from .integrations.ocp.shape import OccShape
+        from .shape import OccShape
 
         # Handle different operations
         if operation in ["Cut", "CutOperation"]:
@@ -295,8 +296,8 @@ class OccWorkplane(Workplane):
             # Sweep the circle along the path
             shape = path.sweep(profile)
         """
-        from .integrations.ocp.sketch2d import OccSketch2D
-        from .integrations.ocp.shape import OccShape
+        from .sketch2d import OccSketch2D
+        from .shape import OccShape
 
         # Check if there are shapes to use as path
         if not self._pending_shapes:

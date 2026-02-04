@@ -17,9 +17,9 @@ from OCP.gp import gp_Pnt
 from OCP.gp import gp_Ax2, gp_Circ, gp_Dir
 from OCP.TopTools import TopTools_ListOfShape
 from OCP.TopoDS import TopoDS_Compound
-from .integrations.ocp.shape import OccShape
-from .primitives import Arc, Circle, Line
-from .sketch2d import Sketch2D
+from .shape import OccShape
+from ...primitives import Arc, Circle, Line
+from ...sketch2d import Sketch2D
 
 
 class OccSketch2D(Sketch2D):
@@ -204,43 +204,53 @@ class OccSketch2D(Sketch2D):
         face = self._make_face()
 
         if symmetric:
-            # For symmetric extrusion, translate the face back by distance/2,
-            # then extrude by the full distance
-            from OCP.gp import gp_Trsf
-            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+            # For symmetric extrusion, extrude by full distance in both directions
+            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+            
+            # Calculate full distance vector in each direction
+            up_dir_vec_positive = self._workplane.normal_vector * distance
+            up_dir_vec_negative = self._workplane.normal_vector * (-distance)
 
-            # Calculate translation vector (move back by half distance)
-            half_distance = distance / 2.0
-            translate_vec = self._workplane.normal_vector * (-half_distance)
-
-            # Create translation transformation
-            transform = gp_Trsf()
-            transform.SetTranslation(
-                gp_Vec(
-                    float(translate_vec[0]),
-                    float(translate_vec[1]),
-                    float(translate_vec[2]),
-                )
+            # Convert to gp_Vec
+            extrude_vector_positive = gp_Vec(
+                float(up_dir_vec_positive[0]), 
+                float(up_dir_vec_positive[1]), 
+                float(up_dir_vec_positive[2])
+            )
+            extrude_vector_negative = gp_Vec(
+                float(up_dir_vec_negative[0]), 
+                float(up_dir_vec_negative[1]), 
+                float(up_dir_vec_negative[2])
             )
 
-            # Apply transformation to face
-            transform_builder = BRepBuilderAPI_Transform(face, transform, True)
-            face = transform_builder.Shape()
+            # Create extrusion in positive direction
+            prism_builder_positive: Any = BRepPrimAPI_MakePrism(face, extrude_vector_positive, True)
+            extruded_positive = prism_builder_positive.Shape()
 
-            # Now extrude by the full distance
-            up_dir_vec = self._workplane.normal_vector * distance
+            # Create extrusion in negative direction
+            prism_builder_negative: Any = BRepPrimAPI_MakePrism(face, extrude_vector_negative, True)
+            extruded_negative = prism_builder_negative.Shape()
+
+            # Fuse both extrusions
+            fuse_builder = BRepAlgoAPI_Fuse(extruded_positive, extruded_negative)
+            fuse_builder.Build()
+            
+            if not fuse_builder.IsDone():
+                raise RuntimeError("Failed to fuse symmetric extrusions")
+            
+            extruded_shape = fuse_builder.Shape()
         else:
             # Normal extrusion
             up_dir_vec = self._workplane.normal_vector * distance
 
-        # Convert to gp_Vec using indexing to avoid attribute access issues
-        extrude_vector = gp_Vec(
-            float(up_dir_vec[0]), float(up_dir_vec[1]), float(up_dir_vec[2])
-        )
+            # Convert to gp_Vec using indexing to avoid attribute access issues
+            extrude_vector = gp_Vec(
+                float(up_dir_vec[0]), float(up_dir_vec[1]), float(up_dir_vec[2])
+            )
 
-        # Create the prism (extrusion)
-        prism_builder: Any = BRepPrimAPI_MakePrism(face, extrude_vector, True)
-        extruded_shape = prism_builder.Shape()
+            # Create the prism (extrusion)
+            prism_builder: Any = BRepPrimAPI_MakePrism(face, extrude_vector, True)
+            extruded_shape = prism_builder.Shape()
 
         # Handle different operations
         if operation in ["Cut", "CutOperation"]:
