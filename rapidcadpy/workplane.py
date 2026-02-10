@@ -85,7 +85,7 @@ class Workplane(ABC):
     ) -> "Workplane":
         cls.normal_vector = Vector(0, 1, 0)
         cls.app = app
-        workplane = cls(app=app)
+        workplane = app.work_plane_class(app=app)
 
         # Apply offset if provided (offset is along the normal direction)
         if offset is not None:

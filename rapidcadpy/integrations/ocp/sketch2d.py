@@ -94,23 +94,35 @@ class OccSketch2D(Sketch2D):
                 f"Primitive type {type(primitive)} not supported in OCC sketch."
             )
 
+    def _silent_fail_enabled(self) -> bool:
+        return bool(getattr(self.app, "silent_geometry_failures", False))
+
     def _make_wire(self):
         num_primitives = len(self._primitives)
 
         if num_primitives == 0:
+            if self._silent_fail_enabled():
+                return None
             raise ValueError("Cannot create wire: no primitives in sketch")
 
         # Convert 2D primitives to 3D edges
-        occ_edges_list = TopTools_ListOfShape()
-        for primitive in self._primitives:
-            edge = self._primitive_to_edge(primitive)
-            occ_edges_list.Append(edge)
+        try:
+            occ_edges_list = TopTools_ListOfShape()
+            for primitive in self._primitives:
+                edge = self._primitive_to_edge(primitive)
+                occ_edges_list.Append(edge)
+        except Exception:
+            if self._silent_fail_enabled():
+                return None
+            raise
 
         wire_builder = BRepBuilderAPI_MakeWire()
         wire_builder.Add(occ_edges_list)
         wire_builder.Build()
 
         if not wire_builder.IsDone():
+            if self._silent_fail_enabled():
+                return None
             error_code = wire_builder.Error()
 
             # Map error codes to human-readable messages
@@ -143,6 +155,8 @@ class OccSketch2D(Sketch2D):
         num_edges = len(self._primitives)
 
         if num_edges == 0:
+            if self._silent_fail_enabled():
+                return None
             raise ValueError(
                 "Face construction failed: No sketch elements found. "
                 "Create a sketch (e.g., rect(), circle(), line_to()) before extruding."
@@ -150,7 +164,11 @@ class OccSketch2D(Sketch2D):
 
         try:
             wires = self._make_wire()
+            if wires is None:
+                return None
         except Exception as e:
+            if self._silent_fail_enabled():
+                return None
             raise ValueError(
                 f"Face construction failed: Could not create wire from {num_edges} edge(s). "
                 f"The sketch edges may not form a valid closed loop. "
@@ -161,6 +179,8 @@ class OccSketch2D(Sketch2D):
         status = BOPAlgo_Tools.WiresToFaces_s(wires, rv)
 
         if not status:
+            if self._silent_fail_enabled():
+                return None
             raise ValueError(
                 f"Face construction failed: BOPAlgo_Tools.WiresToFaces_s returned False. "
                 f"The wire with {num_edges} edge(s) could not be converted to a face. "
@@ -176,6 +196,8 @@ class OccSketch2D(Sketch2D):
         if explorer.More():
             return explorer.Current()
         else:
+            if self._silent_fail_enabled():
+                return None
             raise ValueError(
                 f"Face construction failed: No face found in the resulting compound. "
                 f"Wire was created from {num_edges} edge(s) but did not produce a face. "
@@ -202,43 +224,59 @@ class OccSketch2D(Sketch2D):
             OccShape: The extruded 3D solid (or modified existing shape for cut operations)
         """
         face = self._make_face()
+        if face is None:
+            return None
 
         if symmetric:
             # For symmetric extrusion, extrude by full distance in both directions
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            
+
             # Calculate full distance vector in each direction
             up_dir_vec_positive = self._workplane.normal_vector * distance
             up_dir_vec_negative = self._workplane.normal_vector * (-distance)
 
             # Convert to gp_Vec
             extrude_vector_positive = gp_Vec(
-                float(up_dir_vec_positive[0]), 
-                float(up_dir_vec_positive[1]), 
-                float(up_dir_vec_positive[2])
+                float(up_dir_vec_positive[0]),
+                float(up_dir_vec_positive[1]),
+                float(up_dir_vec_positive[2]),
             )
             extrude_vector_negative = gp_Vec(
-                float(up_dir_vec_negative[0]), 
-                float(up_dir_vec_negative[1]), 
-                float(up_dir_vec_negative[2])
+                float(up_dir_vec_negative[0]),
+                float(up_dir_vec_negative[1]),
+                float(up_dir_vec_negative[2]),
             )
 
             # Create extrusion in positive direction
-            prism_builder_positive: Any = BRepPrimAPI_MakePrism(face, extrude_vector_positive, True)
+            prism_builder_positive: Any = BRepPrimAPI_MakePrism(
+                face, extrude_vector_positive, True
+            )
             extruded_positive = prism_builder_positive.Shape()
 
             # Create extrusion in negative direction
-            prism_builder_negative: Any = BRepPrimAPI_MakePrism(face, extrude_vector_negative, True)
+            prism_builder_negative: Any = BRepPrimAPI_MakePrism(
+                face, extrude_vector_negative, True
+            )
             extruded_negative = prism_builder_negative.Shape()
 
             # Fuse both extrusions
             fuse_builder = BRepAlgoAPI_Fuse(extruded_positive, extruded_negative)
+            fuse_builder.SetFuzzyValue(1e-5)  # Handle small gaps/overlaps
             fuse_builder.Build()
-            
+
             if not fuse_builder.IsDone():
                 raise RuntimeError("Failed to fuse symmetric extrusions")
-            
+
             extruded_shape = fuse_builder.Shape()
+
+            # Apply ShapeFix to heal any geometry issues from fusion
+            from OCP.ShapeFix import ShapeFix_Shape
+
+            fixer = ShapeFix_Shape(extruded_shape)
+            fixer.SetPrecision(1e-5)
+            fixer.SetMaxTolerance(0.01)
+            fixer.Perform()
+            extruded_shape = fixer.Shape()
         else:
             # Normal extrusion
             up_dir_vec = self._workplane.normal_vector * distance
@@ -297,11 +335,22 @@ class OccSketch2D(Sketch2D):
                     try:
                         # Union the extruded shape with the existing shape
                         fuse_builder = BRepAlgoAPI_Fuse(last_shape.obj, extruded_shape)
+                        fuse_builder.SetFuzzyValue(1e-5)  # Handle small gaps/overlaps
                         fuse_builder.Build()
 
                         if fuse_builder.IsDone():
                             # Update the existing shape with the union result
-                            last_shape.obj = fuse_builder.Shape()
+                            result_shape = fuse_builder.Shape()
+
+                            # Apply ShapeFix to heal any geometry issues from fusion
+                            from OCP.ShapeFix import ShapeFix_Shape
+
+                            fixer = ShapeFix_Shape(result_shape)
+                            fixer.SetPrecision(1e-5)
+                            fixer.SetMaxTolerance(0.01)
+                            fixer.Perform()
+
+                            last_shape.obj = fixer.Shape()
                             return last_shape
                     except Exception:
                         pass

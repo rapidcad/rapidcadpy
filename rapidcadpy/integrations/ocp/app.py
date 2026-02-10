@@ -2,6 +2,8 @@ import tempfile
 import math
 from typing import TYPE_CHECKING, Optional, List, Union, Tuple, Dict
 
+from trimesh import tol
+
 from ...app import App
 
 if TYPE_CHECKING:
@@ -47,9 +49,12 @@ ISO_METRIC_THREADS: Dict[str, Tuple[float, float]] = {
 
 
 class OpenCascadeOcpApp(App):
-    def __init__(self):
 
-        super().__init__(OccWorkplane)
+    @property
+    def workplane_class(self):
+        from .workplane import OccWorkplane
+
+        return OccWorkplane
 
     @property
     def sketch_class(self):
@@ -250,12 +255,12 @@ class OpenCascadeOcpApp(App):
         x = x if x is not None else 0.0
         y = y if y is not None else 0.0
         z = z if z is not None else 0.0
-        
+
         # If thread_axis is specified, extract the axis from it
         # thread_axis can be "X", "Y", "Z", "-X", "-Y", or "-Z"
         if thread_axis is not None:
             # Extract the axis letter (remove leading '-' if present)
-            axis_from_thread = thread_axis.lstrip('-').upper()
+            axis_from_thread = thread_axis.lstrip("-").upper()
             axis = axis_from_thread
         else:
             axis = axis if axis is not None else "Z"
@@ -296,10 +301,10 @@ class OpenCascadeOcpApp(App):
         # For negative directions ("-X", "-Y", "-Z"), use negative length to reverse helix
         effective_length = length
         effective_offset = offset
-        
+
         if thread_axis is not None:
             is_negative = thread_axis.startswith("-")
-            
+
             if is_negative:
                 # For negative direction: use negative length to signal reverse direction
                 # The provided x, y, z is already the starting edge position
@@ -567,7 +572,7 @@ class OpenCascadeOcpApp(App):
         ax = axis_dir.X()
         ay = axis_dir.Y()
         az = axis_dir.Z()
-        
+
         # Reverse axis direction if length was negative
         if reverse_direction:
             ax = -ax
@@ -759,6 +764,7 @@ class OpenCascadeOcpApp(App):
         else:
             # Multiple shapes - union them all together
             from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+            from OCP.ShapeFix import ShapeFix_Shape
             from .shape import OccShape
 
             # Start with the first shape
@@ -768,6 +774,8 @@ class OpenCascadeOcpApp(App):
             for shape in self._shapes[1:]:
                 if hasattr(shape, "obj"):
                     fuse_builder = BRepAlgoAPI_Fuse(combined_obj, shape.obj)
+                    # Use fuzzy tolerance to handle small gaps/overlaps
+                    fuse_builder.SetFuzzyValue(1e-5)
                     fuse_builder.Build()
 
                     if fuse_builder.IsDone():
@@ -776,6 +784,13 @@ class OpenCascadeOcpApp(App):
                         # If fuse fails, try to continue with what we have
                         pass
 
+            # Apply ShapeFix to heal any geometry issues from fusion
+            fixer = ShapeFix_Shape(combined_obj)
+            fixer.SetPrecision(1e-6)
+            fixer.SetMaxTolerance(1e-3)
+            fixer.Perform()
+            combined_obj = fixer.Shape()
+
             # Create a combined shape and export
             combined_shape = OccShape(obj=combined_obj, app=self)
             combined_shape.to_step(file_name)
@@ -783,7 +798,8 @@ class OpenCascadeOcpApp(App):
     def to_stl(self, file_name: str, ascii: bool = False) -> None:
         """Export all shapes in the app to a single STL file.
 
-        All shapes are combined using union operations before export.
+        When multiple shapes exist, they are written to the same STL file.
+        Note: Some STL viewers may show them as separate objects.
 
         Args:
             file_name: Path to the output STL file
@@ -796,25 +812,72 @@ class OpenCascadeOcpApp(App):
             # Single shape - export directly
             self._shapes[0].to_stl(file_name, ascii=ascii)
         else:
-            # Multiple shapes - union them all together
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-            from .shape import OccShape
+            # Multiple shapes - write all to the same STL file
+            from OCP.BRepMesh import BRepMesh_IncrementalMesh
+            from OCP.StlAPI import StlAPI_Writer
+            from OCP.TopoDS import TopoDS_Compound, TopoDS_Builder
 
-            # Start with the first shape
-            combined_obj = self._shapes[0].obj
+            # Create a compound to hold all shapes
+            compound = TopoDS_Compound()
+            builder = TopoDS_Builder()
+            builder.MakeCompound(compound)
 
-            # Fuse with each subsequent shape
-            for shape in self._shapes[1:]:
+            # Add all shapes to the compound
+            for shape in self._shapes:
                 if hasattr(shape, "obj"):
-                    fuse_builder = BRepAlgoAPI_Fuse(combined_obj, shape.obj)
-                    fuse_builder.Build()
+                    builder.Add(compound, shape.obj)
 
-                    if fuse_builder.IsDone():
-                        combined_obj = fuse_builder.Shape()
-                    else:
-                        # If fuse fails, try to continue with what we have
-                        pass
+            # Mesh the compound
+            tolerance = 1e-3
+            angular_tolerance = 0.1
+            BRepMesh_IncrementalMesh(compound, tolerance, True, angular_tolerance, True)
 
-            # Create a combined shape and export
-            combined_shape = OccShape(obj=combined_obj, app=self)
-            combined_shape.to_stl(file_name, ascii=ascii)
+            # Write to STL
+            writer = StlAPI_Writer()
+            writer.ASCIIMode = ascii
+            writer.Write(compound, file_name)
+
+    def wrapped(self):
+        """Union all registered shapes and return the underlying TopoDS_Shape.
+
+        Returns:
+            TopoDS_Shape: The fused OCC shape (equivalent to .val().wrapped)
+        """
+        if not self._shapes:
+            raise ValueError("No shapes registered with app")
+
+        # Single shape - return its underlying TopoDS_Shape
+        if len(self._shapes) == 1:
+            shape = self._shapes[0]
+            if not hasattr(shape, "obj"):
+                raise ValueError("Shape has no geometry to wrap")
+            return shape.obj
+
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+        from OCP.ShapeFix import ShapeFix_Shape
+
+        # Start with the first shape
+        combined_obj = self._shapes[0].obj
+
+        # Fuse with each subsequent shape
+        for shape in self._shapes[1:]:
+            if not hasattr(shape, "obj"):
+                continue
+
+            fuse_builder = BRepAlgoAPI_Fuse(combined_obj, shape.obj)
+            # Use fuzzy tolerance to handle small gaps/overlaps
+            fuse_builder.SetFuzzyValue(1e-5)
+            fuse_builder.Build()
+
+            if fuse_builder.IsDone():
+                combined_obj = fuse_builder.Shape()
+
+        # Heal any geometry issues from fusion
+        fixer = ShapeFix_Shape(combined_obj)
+        fixer.SetPrecision(1e-6)
+        fixer.SetMaxTolerance(1e-3)
+        fixer.Perform()
+        combined_obj = fixer.Shape()
+
+        # Return the underlying TopoDS_Shape (equivalent to .val().wrapped)
+        return combined_obj

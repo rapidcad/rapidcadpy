@@ -16,6 +16,15 @@ class OccWorkplane(Workplane):
             self._setup_coordinate_system()
 
     @classmethod
+    def xy_plane(cls, app, offset=None) -> "OccWorkplane":
+        """Set the workplane to the XY plane."""
+        wp = cls(app=app)
+        wp.normal_vector = Vector(0, 0, 1)
+        app.register_workplane(wp)
+        wp._setup_coordinate_system()
+        return wp
+
+    @classmethod
     def create_offset_plane(
         cls, app: App, name: str = "XY", offset: float = 0
     ) -> Workplane:
@@ -158,6 +167,8 @@ class OccWorkplane(Workplane):
 
         # Check if there are shapes to revolve
         if not self._pending_shapes:
+            if getattr(self.app, "silent_geometry_failures", False):
+                return None
             raise ValueError("No shapes to revolve - sketch is empty")
 
         # Create a Sketch2D from pending shapes to use existing _make_wire and _make_face
@@ -166,7 +177,14 @@ class OccWorkplane(Workplane):
         )
 
         # Build the face to revolve
-        face = sketch2d._make_face()
+        try:
+            face = sketch2d._make_face()
+            if face is None:
+                return None
+        except Exception:
+            if getattr(self.app, "silent_geometry_failures", False):
+                return None
+            raise
 
         # Map axis string to direction
         axis_map = {
@@ -183,9 +201,12 @@ class OccWorkplane(Workplane):
 
         # Perform the revolve operation
         # Testing: BRepPrimAPI_MakeRevol might expect radians despite documentation
-        revol_builder = BRepPrimAPI_MakeRevol(
-            face, revolve_axis, angle, True
-        )
+        try:
+            revol_builder = BRepPrimAPI_MakeRevol(face, revolve_axis, angle, True)
+        except Exception:
+            if getattr(self.app, "silent_geometry_failures", False):
+                return None
+            raise
 
         # Get the resulting shape
         solid = revol_builder.Shape()
@@ -327,3 +348,14 @@ class OccWorkplane(Workplane):
         self._clear_pending_shapes()
 
         return result
+
+    def chamfer(
+        self,
+        x: float,
+        radius: float,
+        angle: float,
+        distance: float,
+        tol: float = 1e-3,
+    ):
+        """Alias for chamfer_edge to match Inventor's chamfer method name."""
+        return self.app.chamfer_edge(x, radius, angle, distance, tol)

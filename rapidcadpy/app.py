@@ -13,18 +13,23 @@ from .workplane import Workplane
 
 
 class App:
-    def __init__(self, work_plane_class: Type[Workplane] = Workplane):
-        self.work_plane_class = work_plane_class
+    def __init__(
+        self,
+        work_plane_class: Type[Workplane] = Workplane,
+        silent_geometry_failures: bool = True,
+    ):
         self._workplanes: List[Workplane] = []
         self._shapes: List["Shape"] = []
+        # If True, geometry operations will fail silently and be discarded
+        self.silent_geometry_failures = silent_geometry_failures
 
     def work_plane(self, name: str, offset: Optional[float] = None) -> Workplane:
         if name.upper() == "XY":
-            return self.work_plane_class.xy_plane(app=self, offset=offset)
+            return self.workplane_class.xy_plane(app=self, offset=offset)
         elif name.upper() == "XZ":
-            return self.work_plane_class.xz_plane(app=self, offset=offset)
+            return self.workplane_class.xz_plane(app=self, offset=offset)
         elif name.upper() == "YZ":
-            return self.work_plane_class.yz_plane(app=self, offset=offset)
+            return self.workplane_class.yz_plane(app=self, offset=offset)
         else:
             raise ValueError(f"Unknown workplane: {name}")
 
