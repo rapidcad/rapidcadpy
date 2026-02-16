@@ -105,19 +105,18 @@ class OccSketch2D(Sketch2D):
                 return None
             raise ValueError("Cannot create wire: no primitives in sketch")
 
-        # Convert 2D primitives to 3D edges
+        # Convert 2D primitives to 3D edges and add them one by one
+        # Note: Adding edges one-by-one ensures proper connectivity
+        wire_builder = BRepBuilderAPI_MakeWire()
         try:
-            occ_edges_list = TopTools_ListOfShape()
             for primitive in self._primitives:
                 edge = self._primitive_to_edge(primitive)
-                occ_edges_list.Append(edge)
+                wire_builder.Add(edge)
         except Exception:
             if self._silent_fail_enabled():
                 return None
             raise
 
-        wire_builder = BRepBuilderAPI_MakeWire()
-        wire_builder.Add(occ_edges_list)
         wire_builder.Build()
 
         if not wire_builder.IsDone():
@@ -148,8 +147,9 @@ class OccSketch2D(Sketch2D):
         return wire_builder.Wire()
 
     def _make_face(self):
-        from OCP.TopExp import TopExp_Explorer
-        from OCP.TopAbs import TopAbs_FACE
+        """Create a face from the sketch primitives."""
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_MakeFace
+        from OCP.gp import gp_Pln, gp_Ax3, gp_Pnt, gp_Dir
 
         # Get diagnostic information about the sketch
         num_edges = len(self._primitives)
@@ -163,8 +163,8 @@ class OccSketch2D(Sketch2D):
             )
 
         try:
-            wires = self._make_wire()
-            if wires is None:
+            wire = self._make_wire()
+            if wire is None:
                 return None
         except Exception as e:
             if self._silent_fail_enabled():
@@ -175,37 +175,23 @@ class OccSketch2D(Sketch2D):
                 f"Original error: {str(e)}"
             ) from e
 
-        rv = TopoDS_Compound()
-        status = BOPAlgo_Tools.WiresToFaces_s(wires, rv)
-
-        if not status:
+        # Use BRepBuilderAPI_MakeFace to create face from wire
+        face_builder = BRepBuilderAPI_MakeFace(wire)
+        
+        if not face_builder.IsDone():
             if self._silent_fail_enabled():
                 return None
             raise ValueError(
-                f"Face construction failed: BOPAlgo_Tools.WiresToFaces_s returned False. "
+                f"Face construction failed: BRepBuilderAPI_MakeFace failed. "
                 f"The wire with {num_edges} edge(s) could not be converted to a face. "
                 f"This usually means:\n"
                 f"  1. The sketch is not closed (check if you need to call .close())\n"
                 f"  2. The edges are self-intersecting\n"
                 f"  3. The edges don't form a planar loop\n"
-                f"Workplane normal: {self.normal_vector if hasattr(self, 'normal_vector') else 'unknown'}"
+                f"Error code: {face_builder.Error()}"
             )
 
-        # Extract the first face from the compound
-        explorer = TopExp_Explorer(rv, TopAbs_FACE)
-        if explorer.More():
-            return explorer.Current()
-        else:
-            if self._silent_fail_enabled():
-                return None
-            raise ValueError(
-                f"Face construction failed: No face found in the resulting compound. "
-                f"Wire was created from {num_edges} edge(s) but did not produce a face. "
-                f"This may indicate:\n"
-                f"  1. The wire is degenerate (has zero area)\n"
-                f"  2. The edges are collinear\n"
-                f"  3. The wire is not properly closed"
-            )
+        return face_builder.Face()
 
     def extrude(
         self,
@@ -228,53 +214,48 @@ class OccSketch2D(Sketch2D):
             return None
 
         if symmetric:
-            # For symmetric extrusion, extrude by full distance in both directions
-            from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
-
-            # Calculate full distance vector in each direction
-            up_dir_vec_positive = self._workplane.normal_vector * distance
-            up_dir_vec_negative = self._workplane.normal_vector * (-distance)
-
-            # Convert to gp_Vec
-            extrude_vector_positive = gp_Vec(
-                float(up_dir_vec_positive[0]),
-                float(up_dir_vec_positive[1]),
-                float(up_dir_vec_positive[2]),
-            )
-            extrude_vector_negative = gp_Vec(
-                float(up_dir_vec_negative[0]),
-                float(up_dir_vec_negative[1]),
-                float(up_dir_vec_negative[2]),
-            )
-
-            # Create extrusion in positive direction
-            prism_builder_positive: Any = BRepPrimAPI_MakePrism(
-                face, extrude_vector_positive, True
-            )
-            extruded_positive = prism_builder_positive.Shape()
-
-            # Create extrusion in negative direction
-            prism_builder_negative: Any = BRepPrimAPI_MakePrism(
-                face, extrude_vector_negative, True
-            )
-            extruded_negative = prism_builder_negative.Shape()
-
-            # Fuse both extrusions
-            fuse_builder = BRepAlgoAPI_Fuse(extruded_positive, extruded_negative)
-            fuse_builder.SetFuzzyValue(1e-5)  # Handle small gaps/overlaps
-            fuse_builder.Build()
-
-            if not fuse_builder.IsDone():
-                raise RuntimeError("Failed to fuse symmetric extrusions")
-
-            extruded_shape = fuse_builder.Shape()
-
-            # Apply ShapeFix to heal any geometry issues from fusion
+            # For symmetric extrusion, translate the face by -distance/2, then extrude by full distance
+            from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+            from OCP.gp import gp_Trsf
             from OCP.ShapeFix import ShapeFix_Shape
 
+            # Calculate half distance for translation
+            half_distance = distance / 2
+            translation_vec = self._workplane.normal_vector * (-half_distance)
+
+            # Create translation transformation
+            translation = gp_Trsf()
+            translation.SetTranslation(gp_Vec(
+                float(translation_vec[0]),
+                float(translation_vec[1]),
+                float(translation_vec[2])
+            ))
+
+            # Transform the face
+            transform_builder = BRepBuilderAPI_Transform(face, translation, True)
+            transformed_face = transform_builder.Shape()
+
+            # Fix the transformed face
+            fixer = ShapeFix_Shape(transformed_face)
+            fixer.SetPrecision(1e-6)
+            fixer.SetMaxTolerance(1.0)
+            fixer.Perform()
+            transformed_face = fixer.Shape()
+
+            # Extrude by full distance
+            up_dir_vec = self._workplane.normal_vector * distance
+            extrude_vector = gp_Vec(
+                float(up_dir_vec[0]), float(up_dir_vec[1]), float(up_dir_vec[2])
+            )
+
+            # Create the prism (extrusion)
+            prism_builder: Any = BRepPrimAPI_MakePrism(transformed_face, extrude_vector, True)
+            extruded_shape = prism_builder.Shape()
+            
+            # Fix the extruded shape
             fixer = ShapeFix_Shape(extruded_shape)
-            fixer.SetPrecision(1e-5)
-            fixer.SetMaxTolerance(0.01)
+            fixer.SetPrecision(1e-6)
+            fixer.SetMaxTolerance(1.0)
             fixer.Perform()
             extruded_shape = fixer.Shape()
         else:

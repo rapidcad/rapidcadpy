@@ -101,12 +101,12 @@ class OccWorkplane(Workplane):
         self, length: float, width: float, height: float, centered: bool = True
     ) -> "OccShape":
         """
-        Create a 3D box shape.
+        Create a 3D box shape on the workplane.
 
         Args:
-            length: Length of the box (X dimension)
-            width: Width of the box (Y dimension)
-            height: Height of the box (Z dimension)
+            length: Length of the box (along workplane X axis)
+            width: Width of the box (along workplane Y axis)
+            height: Height of the box (along workplane normal/Z axis)
             centered: If True (default), box is centered at current position.
                      If False, box extends from current position in positive directions.
 
@@ -114,35 +114,65 @@ class OccWorkplane(Workplane):
             OccShape: The created box shape
 
         Example:
-            # Create a centered box
+            # Create a centered box on XY plane
             box = app.work_plane("XY").box(10, 20, 30)
 
-            # Create a box from origin
-            box = app.work_plane("XY").box(10, 20, 30, centered=False)
+            # Create a box on XZ plane (respects plane orientation)
+            box = app.work_plane("XZ").box(10, 20, 30)
         """
         from OCP.BRepPrimAPI import BRepPrimAPI_MakeBox
-        from OCP.gp import gp_Pnt
+        from OCP.gp import gp_Pnt, gp_Ax3, gp_Dir, gp_Trsf
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
         from rapidcadpy.integrations.ocp.shape import OccShape
 
-        # Determine the starting corner based on centered parameter
+        # Create box in local coordinates (0,0,0 origin, axis-aligned)
+        # First create at origin
         if centered:
-            x = self._current_position.x - length / 2
-            y = self._current_position.y - width / 2
-            z = -height / 2
+            local_x = -length / 2
+            local_y = -width / 2
+            local_z = -height / 2
         else:
-            x = self._current_position.x
-            y = self._current_position.y
-            z = 0
+            local_x = 0
+            local_y = 0
+            local_z = 0
 
-        # Create the box starting point
-        corner = gp_Pnt(x, y, z)
-
-        # Create the box
+        corner = gp_Pnt(local_x, local_y, local_z)
         box_builder = BRepPrimAPI_MakeBox(corner, length, width, height)
         solid = box_builder.Shape()
 
+        # Get workplane coordinate system
+        if not hasattr(self, "_local_x"):
+            self._setup_coordinate_system()
+
+        # Calculate the position where the box should be placed
+        # Start from current 2D position on the workplane
+        center_2d = self._current_position
+        center_3d = self._to_3d(center_2d.x, center_2d.y)
+
+        # Create transformation to align box with workplane
+        # The box needs to be rotated and translated
+        
+        # Build transformation matrix
+        # Origin point (where box center should be)
+        origin = gp_Pnt(center_3d[0], center_3d[1], center_3d[2])
+        
+        # Direction vectors for the coordinate system
+        x_dir = gp_Dir(self._local_x.x, self._local_x.y, self._local_x.z)
+        z_dir = gp_Dir(self._local_z.x, self._local_z.y, self._local_z.z)
+        
+        # Create coordinate system aligned with workplane (gp_Ax3 for 3D coordinate system)
+        coord_sys = gp_Ax3(origin, z_dir, x_dir)
+        
+        # Create transformation from global to workplane coordinates
+        trsf = gp_Trsf()
+        trsf.SetTransformation(coord_sys)
+        
+        # Apply transformation
+        transform = BRepBuilderAPI_Transform(solid, trsf, False)
+        transformed_solid = transform.Shape()
+
         # Return as OccShape
-        return OccShape(obj=solid, app=self.app)
+        return OccShape(obj=transformed_solid, app=self.app)
 
     def revolve(
         self,
