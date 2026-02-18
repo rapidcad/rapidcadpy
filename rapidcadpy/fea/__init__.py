@@ -7,6 +7,7 @@ This module requires additional dependencies:
 
 # Always export base classes (no torch dependency needed)
 from .kernels.base import FEAKernel, FEAAnalyzer
+from .load_case import LoadCase
 
 try:
     import torch
@@ -30,6 +31,7 @@ try:
     __all__ = [
         "FEAKernel",
         "FEAAnalyzer",
+        "LoadCase",
         "TorchFEMKernel",
         "Material",
         "MaterialProperties",
@@ -75,5 +77,5 @@ except ImportError as e:
     OptimizationResult = _FEANotAvailable
     TorchFEMKernel = _FEANotAvailable
 
-    __all__ = ["FEAKernel", "FEAAnalyzer"]
+    __all__ = ["FEAKernel", "FEAAnalyzer", "LoadCase"]
     _FEA_AVAILABLE = False

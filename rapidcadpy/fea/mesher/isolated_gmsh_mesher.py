@@ -13,7 +13,7 @@ from typing import Literal, Tuple
 import torch
 import os
 
-from tools.fea.mesher.base import MesherBase
+from .base import MesherBase
 
 
 # Script template that will run in isolated subprocess

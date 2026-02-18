@@ -7,12 +7,14 @@ This module provides:
 """
 
 from abc import ABC, abstractmethod
+import traceback
 from typing import List, Optional, Tuple, TYPE_CHECKING, Union
 import numpy as np
 import pyvista as pv
 
 if TYPE_CHECKING:
     from ...shape import Shape
+    from ..load_case import LoadCase
     from ..materials import MaterialProperties
     from ..boundary_conditions import Load, BoundaryCondition
     from ..results import FEAResults, OptimizationResult
@@ -186,57 +188,88 @@ class FEAAnalyzer:
     def __init__(
         self,
         shape: Union["Shape", str],
-        material: "MaterialProperties",
-        kernel: str,
+        material: Optional["MaterialProperties"] = None,
+        kernel: str = "torch-fem",
         mesh_size: float = 2.0,
         element_type: str = "tet4",
         loads: Optional[List["Load"]] = None,
         constraints: Optional[List["BoundaryCondition"]] = None,
         device: str = "auto",
         mesher: str = "netgen",
+        load_case: Optional["LoadCase"] = None,
     ):
         """
         Initialize FEA analyzer with dependency injection.
 
         Args:
             shape: Shape to analyze or path to STEP file
-            material: Material properties
+            material: Material properties (ignored if load_case is provided)
             kernel: FEAKernel implementation to use for solving
             mesh_size: Target mesh element size (mm)
             element_type: Element type (solver-dependent)
             device: Device to use ('cpu', 'cuda', or 'auto'). Only for torch-fem kernel.
             mesher: Mesher to use ('netgen' or 'gmsh'). Only for torch-fem kernel.
+            load_case: Optional object containing material, loads, and constraints
         """
         self.shape = shape
-        self.material = material
+        if load_case is None:
+            from ..load_case import LoadCase
+            from ..materials import Material
+
+            self.load_case = LoadCase(
+                material=material if material is not None else Material.STEEL,
+                loads=list(loads) if loads is not None else [],
+                constraints=list(constraints) if constraints is not None else [],
+            )
+        else:
+            self.load_case = load_case
         if kernel == "torch-fem":
             from .torch_fem_kernel import TorchFEMKernel
 
             self.kernel = TorchFEMKernel(device=device, mesher=mesher)
         self.mesh_size = mesh_size
         self.element_type = element_type
-        if loads is not None:
-            self.loads = loads
-        else:
-            self.loads: List["Load"] = []
-        if constraints is not None:
-            self.constraints = constraints
-        else:
-            self.constraints: List["BoundaryCondition"] = []
+
+    @property
+    def material(self) -> "MaterialProperties":
+        """Backward-compatible accessor for `self.load_case.material`."""
+        return self.load_case.material
+
+    @material.setter
+    def material(self, value: "MaterialProperties") -> None:
+        self.load_case.material = value
+
+    @property
+    def loads(self) -> List["Load"]:
+        """Backward-compatible accessor for `self.load_case.loads`."""
+        return self.load_case.loads
+
+    @loads.setter
+    def loads(self, value: List["Load"]) -> None:
+        self.load_case.loads = value
+
+    @property
+    def constraints(self) -> List["BoundaryCondition"]:
+        """Backward-compatible accessor for `self.load_case.constraints`."""
+        return self.load_case.constraints
+
+    @constraints.setter
+    def constraints(self, value: List["BoundaryCondition"]) -> None:
+        self.load_case.constraints = value
 
     def __str__(self) -> str:
         """String representation of the FEA analyzer."""
         solver = self.kernel.get_solver_name()
-        num_loads = len(self.loads)
-        num_constraints = len(self.constraints)
+        num_loads = len(self.load_case.loads)
+        num_constraints = len(self.load_case.constraints)
         return (
             f"FEAAnalyzer(\n"
             f"  solver={solver},\n"
-            f"  material={self.material.name},\n"
+            f"  material={self.load_case.material.name},\n"
             f"  mesh_size={self.mesh_size}mm,\n"
             f"  element_type={self.element_type},\n"
-            f"  loads={[str(load) for load in self.loads]},\n"
-            f"  constraints={[str(constraint) for constraint in self.constraints]}\n"
+            f"  loads={[str(load) for load in self.load_case.loads]},\n"
+            f"  constraints={[str(constraint) for constraint in self.load_case.constraints]}\n"
             f")"
         )
 
@@ -250,7 +283,7 @@ class FEAAnalyzer:
         Returns:
             Self for method chaining
         """
-        self.loads.append(load)
+        self.load_case.loads.append(load)
         return self
 
     def add_constraint(self, constraint: "BoundaryCondition") -> "FEAAnalyzer":
@@ -263,7 +296,7 @@ class FEAAnalyzer:
         Returns:
             Self for method chaining
         """
-        self.constraints.append(constraint)
+        self.load_case.constraints.append(constraint)
         return self
 
     def solve(self) -> "FEAResults":
@@ -281,9 +314,9 @@ class FEAAnalyzer:
         try:
             return self.kernel.solve(
                 shape=self.shape,
-                material=self.material,
-                loads=self.loads,
-                constraints=self.constraints,
+                material=self.load_case.material,
+                loads=self.load_case.loads,
+                constraints=self.load_case.constraints,
                 mesh_size=self.mesh_size,
                 element_type=self.element_type,
             )
@@ -324,9 +357,9 @@ class FEAAnalyzer:
         try:
             return self.kernel.optimize(
                 shape=self.shape,
-                material=self.material,
-                loads=self.loads,
-                constraints=self.constraints,
+                material=self.load_case.material,
+                loads=self.load_case.loads,
+                constraints=self.load_case.constraints,
                 mesh_size=self.mesh_size,
                 element_type=self.element_type,
                 volume_fraction=volume_fraction,
@@ -372,7 +405,7 @@ class FEAAnalyzer:
         from collections import deque
 
         # If no loads or constraints, consider it valid
-        if len(self.loads) == 0 or len(self.constraints) == 0:
+        if len(self.load_case.loads) == 0 or len(self.load_case.constraints) == 0:
             return True
 
         try:
@@ -380,9 +413,9 @@ class FEAAnalyzer:
             pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
                 self.kernel.get_visualization_data(
                     shape=self.shape,
-                    material=self.material,
-                    loads=self.loads,
-                    constraints=self.constraints,
+                    material=self.load_case.material,
+                    loads=self.load_case.loads,
+                    constraints=self.load_case.constraints,
                     mesh_size=self.mesh_size,
                     element_type=self.element_type,
                 )
@@ -484,9 +517,9 @@ class FEAAnalyzer:
             pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
                 self.kernel.get_visualization_data(
                     shape=self.shape,
-                    material=self.material,
-                    loads=self.loads,
-                    constraints=self.constraints,
+                    material=self.load_case.material,
+                    loads=self.load_case.loads,
+                    constraints=self.load_case.constraints,
                     mesh_size=self.mesh_size,
                     element_type=self.element_type,
                     with_conditions=(display == "conditions"),
@@ -495,8 +528,7 @@ class FEAAnalyzer:
         except Exception as e:
             print(f"Could not show debug mesh: {e}")
             raise ValueError(
-                "Error applying boundary conditions: No nodes found for one of the loads. "
-                "Please check that your load locations match the geometry and mesh size."
+                f"Error applying boundary conditions: {e} \n {traceback.format_exc()} "
             ) from None
 
         # Visualize boundary conditions
@@ -513,6 +545,7 @@ class FEAAnalyzer:
         )
 
         if display == "conditions":
+            has_legend_entries = False
             # Visualize FIXED NODES (constraints)
             constrained_nodes = nodes[constraint_mask]
 
@@ -526,6 +559,7 @@ class FEAAnalyzer:
                     render_points_as_spheres=True,
                     label="Fixed Nodes",
                 )
+                has_legend_entries = True
             # Visualize LOADED NODES (forces)
             loaded_nodes = nodes[force_mask]
 
@@ -539,6 +573,7 @@ class FEAAnalyzer:
                     render_points_as_spheres=True,
                     label="Loaded Nodes",
                 )
+                has_legend_entries = True
 
                 # Add force arrows
                 # Scale arrows for visibility
@@ -554,9 +589,10 @@ class FEAAnalyzer:
                     color="darkgreen",
                     label="Force Vectors",
                 )
+                has_legend_entries = True
 
             # Add legend and labels
-            if show_legend:
+            if show_legend and has_legend_entries:
                 plotter.add_legend()
                 plotter.add_text(
                     "Boundary Conditions", position="upper_edge", font_size=12
@@ -624,9 +660,9 @@ class FEAAnalyzer:
         pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
             self.kernel.get_visualization_data(
                 shape=self.shape,
-                material=self.material,
-                loads=self.loads,
-                constraints=self.constraints,
+                material=self.load_case.material,
+                loads=self.load_case.loads,
+                constraints=self.load_case.constraints,
                 mesh_size=self.mesh_size,
                 element_type=self.element_type,
                 with_conditions=(display == "conditions"),

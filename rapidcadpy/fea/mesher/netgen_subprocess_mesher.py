@@ -39,7 +39,10 @@ class NetgenSubprocessMesher(MesherBase):
         """Check if Netgen is available in PATH."""
         try:
             result = subprocess.run(
-                ["netgen", "-h"], capture_output=True, text=True, timeout=5
+                ["netgen", "-batchmode", "-V"],
+                capture_output=True,
+                text=True,
+                timeout=5,
             )
             return result.returncode == 0
         except (subprocess.SubprocessError, FileNotFoundError):
@@ -90,6 +93,38 @@ class NetgenSubprocessMesher(MesherBase):
         """
         # Validate inputs
         self.validate_inputs(filename, element_type, dim)
+
+        # Verify Netgen CLI is actually usable in this environment.
+        # Some Python-packaged netgen entrypoints fail immediately due to missing
+        # tkinter (`_tkinter`) even in headless contexts.
+        try:
+            probe = subprocess.run(
+                [self.netgen_path, "-batchmode", "-V"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            if probe.returncode != 0:
+                stderr = probe.stderr or ""
+                if "_tkinter" in stderr or "tkinter" in stderr:
+                    raise RuntimeError(
+                        "Netgen CLI is installed but unusable in this environment "
+                        "(missing tkinter/_tkinter). Install Tk support for this "
+                        "Python environment or switch to mesher='gmsh-subprocess'."
+                    )
+                raise RuntimeError(
+                    f"Netgen probe failed with exit code {probe.returncode}: {stderr.strip()}"
+                )
+        except FileNotFoundError:
+            raise RuntimeError(
+                f"Netgen executable not found: '{self.netgen_path}'. "
+                "Install Netgen or switch to mesher='gmsh-subprocess'."
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                "Netgen probe timed out. Check Netgen installation or switch to mesher='gmsh-subprocess'."
+            )
 
         if dim != 3:
             raise ValueError(

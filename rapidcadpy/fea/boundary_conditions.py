@@ -492,7 +492,7 @@ class DistributedLoad(Load):
         Create a distributed load.
 
         Args:
-            location: Surface identifier ('top', 'bottom', 'x_min', 'x_max', etc.)
+            location: bounding box dict or surface identifier ('top', 'bottom', 'x_min', 'x_max', 'y_min', 'y_max', 'z_min', 'z_max')
             force: Total force magnitude (N) or force vector (Fx, Fy, Fz)
             direction: Force direction ('x', 'y', 'z', 'normal'). If None and force is scalar,
                       defaults to normal direction of the surface
@@ -648,6 +648,7 @@ class PointLoad(Load):
         force: Union[float, Tuple[float, float, float]],
         direction: Optional[Literal["x", "y", "z"]] = None,
         tolerance: float = 1,
+        search_radius: Optional[Tuple[float, float, float]] = None,
     ):
         """
         Create a point load.
@@ -657,51 +658,116 @@ class PointLoad(Load):
             force: Force magnitude (N) or force vector (Fx, Fy, Fz)
             direction: Force direction if force is scalar ('x', 'y', 'z')
             tolerance: Distance tolerance for node selection (mm)
+            search_radius: Optional anisotropic search radii (rx, ry, rz) in model units.
+                          If provided, nodes are selected using an ellipsoidal neighborhood.
         """
         self.point = point
         self.force = force
         self.direction = direction
         self.tolerance = tolerance
+        self.search_radius = search_radius
 
     def __str__(self):
         return (
             f"PointLoad(point={self.point}, force={self.force}, "
-            f"direction={self.direction}, tolerance={self.tolerance})"
+            f"direction={self.direction}, tolerance={self.tolerance}, "
+            f"search_radius={self.search_radius})"
         )
 
     def apply(self, model, nodes, elements, geometry_info, mesh_size):
         """Apply point load to the model"""
         from .utils import find_nodes_in_box
+        import torch
 
-        x, y, z = self.point
+        point = self.point
 
-        # Find nodes near the point
-        load_nodes = find_nodes_in_box(
-            nodes,
-            xmin=x,
-            xmax=x,
-            ymin=y,
-            ymax=y,
-            zmin=z,
-            zmax=z,
-            tolerance=self.tolerance * mesh_size,
-        )
+        if isinstance(point, dict):
+            x = point.get("x", (point.get("x_min", 0) + point.get("x_max", 0)) / 2)
+            y = point.get("y", (point.get("y_min", 0) + point.get("y_max", 0)) / 2)
+            z = point.get("z", (point.get("z_min", 0) + point.get("z_max", 0)) / 2)
+
+            if self.search_radius is None and all(
+                k in point for k in ["rx", "ry", "rz"]
+            ):
+                self.search_radius = (
+                    float(point["rx"]),
+                    float(point["ry"]),
+                    float(point["rz"]),
+                )
+        elif isinstance(point, (tuple, list)):
+            x, y, z = point[0], point[1], point[2]
+        else:
+            raise ValueError(
+                f"Invalid point format: {self.point}. Expected tuple/list or dict."
+            )
+
+        if self.search_radius is not None:
+            rx, ry, rz = [max(float(v), 1e-9) for v in self.search_radius]
+            candidate_nodes = find_nodes_in_box(
+                nodes,
+                xmin=x - rx,
+                xmax=x + rx,
+                ymin=y - ry,
+                ymax=y + ry,
+                zmin=z - rz,
+                zmax=z + rz,
+                tolerance=0,
+            )
+            if len(candidate_nodes) > 0:
+                candidate_positions = nodes[candidate_nodes]
+                center_tensor = torch.tensor(
+                    [x, y, z], dtype=nodes.dtype, device=nodes.device
+                )
+                rel = candidate_positions - center_tensor
+                ellipsoid = (
+                    (rel[:, 0] / rx) ** 2
+                    + (rel[:, 1] / ry) ** 2
+                    + (rel[:, 2] / rz) ** 2
+                )
+                load_nodes = candidate_nodes[ellipsoid <= 1.0 + 1e-9]
+            else:
+                load_nodes = candidate_nodes
+        else:
+            # Find nodes near the point
+            load_nodes = find_nodes_in_box(
+                nodes,
+                xmin=x,
+                xmax=x,
+                ymin=y,
+                ymax=y,
+                zmin=z,
+                zmax=z,
+                tolerance=self.tolerance * mesh_size,
+            )
 
         if len(load_nodes) == 0:
             print(f"Warning: No nodes found near point: {self.point}")
+            return 0
 
         # Apply force
+        force_array = (
+            model.forces
+            if hasattr(model, "forces")
+            else model.f_ext if hasattr(model, "f_ext") else None
+        )
+        if force_array is None:
+            raise AttributeError("Model must expose either 'forces' or 'f_ext'")
+
         if isinstance(self.force, (int, float)):
             # Scalar force
             if self.direction is None:
                 raise ValueError("direction must be specified for scalar force")
 
-            dir_map = {"x": 0, "y": 1, "z": 2}
-            dir_idx = dir_map[self.direction.lower()]
+            direction = self.direction.lower()
+            dir_map = {"x": 0, "y": 1, "z": 2, "-x": 0, "-y": 1, "-z": 2}
+            if direction not in dir_map:
+                raise ValueError(f"Invalid direction: {direction}")
+            dir_idx = dir_map[direction]
+            sign = -1 if direction.startswith("-") else 1
 
             # Distribute force among found nodes
             force_per_node = self.force / len(load_nodes)
-            model.forces[load_nodes, dir_idx] = force_per_node
+            force_array[load_nodes, dir_idx] = sign * force_per_node
         else:
             # Vector force
             fx, fy, fz = self.force
@@ -709,9 +775,9 @@ class PointLoad(Load):
             force_per_node_y = fy / len(load_nodes)
             force_per_node_z = fz / len(load_nodes)
 
-            model.forces[load_nodes, 0] = force_per_node_x
-            model.forces[load_nodes, 1] = force_per_node_y
-            model.forces[load_nodes, 2] = force_per_node_z
+            force_array[load_nodes, 0] = force_per_node_x
+            force_array[load_nodes, 1] = force_per_node_y
+            force_array[load_nodes, 2] = force_per_node_z
 
         return len(load_nodes)
 
