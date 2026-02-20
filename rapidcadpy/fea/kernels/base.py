@@ -270,6 +270,7 @@ class FEAAnalyzer:
             f"  element_type={self.element_type},\n"
             f"  loads={[str(load) for load in self.load_case.loads]},\n"
             f"  constraints={[str(constraint) for constraint in self.load_case.constraints]}\n"
+            f"  load_case={str(self.load_case)}\n"
             f")"
         )
 

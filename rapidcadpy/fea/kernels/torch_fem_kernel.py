@@ -78,7 +78,7 @@ class TorchFEMKernel(FEAKernel):
                 self.mesher = IsolatedGmshMesher(num_threads=num_threads)
             else:
                 raise ValueError(
-                    f"Unknown mesher: {mesher}. Supported: 'netgen', 'gmsh', 'netgen-subprocess'"
+                    f"Unknown mesher: {mesher}. Supported: 'netgen', 'gmsh', 'netgen-subprocess', 'gmsh-isolated"
                 )
         else:
             self.mesher = mesher
@@ -162,7 +162,6 @@ class TorchFEMKernel(FEAKernel):
         # Step 2: Create FEM model
         from torchfem import Solid
 
-        material_fem = material.to_torchfem()
         model = Solid(
             nodes,
             elements,
@@ -182,6 +181,14 @@ class TorchFEMKernel(FEAKernel):
             model, nodes, elements, loads, constraints, mesh_size=mesh_size
         )
 
+        # ── Diagnostic dump: pre-solve inputs (enabled by RCADPY_DUMP_INPUTS=1)
+        dump_call_id = None
+        if os.getenv("RCADPY_DUMP_INPUTS") == "1":
+            dump_call_id = self._dump_solve_inputs(
+                model, nodes, elements, loads, constraints, mesh_size, step_path
+            )
+        # ───────────────────────────────────────────────────────────────────────
+
         solution = model.solve()
 
         # Get geo props
@@ -199,8 +206,230 @@ class TorchFEMKernel(FEAKernel):
             geo_props,
         )
 
+        # ── Diagnostic dump: post-solve results ────────────────────────────────
+        if os.getenv("RCADPY_DUMP_INPUTS") == "1" and dump_call_id is not None:
+            self._dump_solve_results(dump_call_id, results)
+        # ───────────────────────────────────────────────────────────────────────
+
         return results
 
+    # ------------------------------------------------------------------
+    def _dump_solve_inputs(
+        self,
+        model,
+        nodes: torch.Tensor,
+        elements: torch.Tensor,
+        loads: List,
+        constraints: List,
+        mesh_size: float,
+        step_path,
+    ) -> str:
+        """Dump all inputs to model.solve() to a JSON-Lines file for analysis.
+
+        Enable by setting environment variable::
+
+            RCADPY_DUMP_INPUTS=1
+
+        Files are written to the directory specified by RCADPY_DUMP_DIR
+        (default: /tmp/fea_input_dumps).  Each call appends one record to
+        ``<dump_dir>/fea_inputs.jsonl`` and returns the call_id string so
+        that _dump_solve_results() can write a companion record.
+        """
+        import json, datetime, threading, hashlib, time
+
+        dump_dir = Path(os.getenv("RCADPY_DUMP_DIR", "tmp/fea_input_dumps"))
+        dump_dir.mkdir(parents=True, exist_ok=True)
+
+        call_id = f"{int(time.time()*1000)}_{threading.get_ident()}"
+        dump_file = dump_dir / "fea_inputs.jsonl"
+
+        # ── nodes ──────────────────────────────────────────────────────
+        npa = nodes.numpy() if not nodes.is_cuda else nodes.cpu().numpy()
+        nodes_info = {
+            "shape": list(npa.shape),
+            "n_nodes": int(npa.shape[0]),
+            "min_xyz": npa.min(axis=0).tolist(),
+            "max_xyz": npa.max(axis=0).tolist(),
+            "mean_xyz": npa.mean(axis=0).tolist(),
+            "hash_md5": hashlib.md5(npa.tobytes()).hexdigest(),
+        }
+
+        # ── elements ───────────────────────────────────────────────────
+        epa = elements.numpy() if not elements.is_cuda else elements.cpu().numpy()
+        elements_info = {
+            "shape": list(epa.shape),
+            "n_elements": int(epa.shape[0]),
+            "hash_md5": hashlib.md5(epa.tobytes()).hexdigest(),
+        }
+
+        # ── forces (model.forces) ─────────────────────────────────────
+        try:
+            fpa = (
+                model.forces.numpy()
+                if not model.forces.is_cuda
+                else model.forces.cpu().numpy()
+            )
+            nz_mask = np.abs(fpa) > 1e-30
+            nz_indices = np.argwhere(nz_mask)
+            forces_info = {
+                "shape": list(fpa.shape),
+                "nonzero_count": int(nz_mask.sum()),
+                "total_force_per_dof": fpa.sum(axis=0).tolist(),
+                "nonzero_entries": [
+                    {"node": int(r), "dof": int(c), "value": float(fpa[r, c])}
+                    for r, c in nz_indices[:200]  # cap at 200 entries
+                ],
+                "hash_md5": hashlib.md5(fpa.tobytes()).hexdigest(),
+            }
+        except Exception as exc:
+            forces_info = {"error": str(exc)}
+
+        # ── constraints (model.constraints) ───────────────────────────
+        try:
+            cpa = (
+                model.constraints.numpy()
+                if not model.constraints.is_cuda
+                else model.constraints.cpu().numpy()
+            )
+            constrained_mask = cpa.astype(bool)
+            cz_indices = np.argwhere(constrained_mask)
+            constraints_info = {
+                "shape": list(cpa.shape),
+                "constrained_dof_count": int(constrained_mask.sum()),
+                "constrained_entries": [
+                    {"node": int(r), "dof": int(c)}
+                    for r, c in cz_indices[:500]  # cap at 500 entries
+                ],
+                "hash_md5": hashlib.md5(cpa.tobytes()).hexdigest(),
+            }
+        except Exception as exc:
+            constraints_info = {"error": str(exc)}
+
+        # ── BC objects ────────────────────────────────────────────────
+        def _bc_repr(bc_list):
+            out = []
+            for bc in bc_list:
+                try:
+                    entry = {"type": type(bc).__name__}
+                    entry.update(vars(bc))
+                    out.append(entry)
+                except Exception:
+                    out.append({"type": str(type(bc)), "repr": repr(bc)})
+            return out
+
+        # ── assemble record ───────────────────────────────────────────
+        record = {
+            "call_id": call_id,
+            "record_type": "inputs",
+            "timestamp": datetime.datetime.utcnow().isoformat(),
+            "thread_id": threading.get_ident(),
+            "step_path": str(step_path),
+            "mesh_size": float(mesh_size),
+            "nodes": nodes_info,
+            "elements": elements_info,
+            "forces": forces_info,
+            "constraints": constraints_info,
+            "load_objects": _bc_repr(loads),
+            "constraint_objects": _bc_repr(constraints),
+        }
+
+        line = json.dumps(record, default=str)
+        with open(dump_file, "a") as fh:
+            fh.write(line + "\n")
+
+        print(
+            f"[DUMP-IN  {call_id}] "
+            f"nodes={nodes_info['n_nodes']} "
+            f"elems={elements_info['n_elements']} "
+            f"force_nz={forces_info.get('nonzero_count','?')} "
+            f"constr_dofs={constraints_info.get('constrained_dof_count','?')} "
+            f"mesh={mesh_size:.4f} "
+            f"node_hash={nodes_info['hash_md5'][:8]} "
+            f"force_hash={forces_info.get('hash_md5','?')[:8]} "
+            f"constr_hash={constraints_info.get('hash_md5','?')[:8]}"
+        )
+        return call_id
+
+    # ------------------------------------------------------------------
+    def _dump_solve_results(self, call_id: str, results) -> None:
+        """Append a results record to fea_inputs.jsonl keyed by call_id.
+
+        Works with both FEAResults dataclass objects and plain dicts.
+        Wrapped in a broad try/except so it never crashes the training loop.
+        """
+        import json
+
+        try:
+            dump_dir = Path(os.getenv("RCADPY_DUMP_DIR", "tmp/fea_input_dumps"))
+            dump_file = dump_dir / "fea_inputs.jsonl"
+
+            # ── Extract von Mises stress from FEAResults or dict ──────────────
+            try:
+                # FEAResults dataclass path (preferred)
+                vm_tensor = results.von_mises_stress
+                vm = vm_tensor.detach().cpu().numpy().ravel()
+                stress_info = {
+                    "n_elements": int(vm.size),
+                    "max": float(vm.max()),
+                    "min": float(vm.min()),
+                    "mean": float(vm.mean()),
+                    "p50": float(np.percentile(vm, 50)),
+                    "p95": float(np.percentile(vm, 95)),
+                    "p99": float(np.percentile(vm, 99)),
+                    # derived convenience fields
+                    "max_stress": float(results.max_stress),
+                    "min_stress": float(results.min_stress),
+                    "mean_stress": float(results.mean_stress),
+                    "stress_p95": float(results.stress_p95),
+                    "stress_p99": float(results.stress_p99),
+                    "safety_factor": (
+                        float(results.safety_factor)
+                        if hasattr(results, "safety_factor")
+                        else None
+                    ),
+                    "safety_factor_p95": (
+                        float(results.safety_factor_p95)
+                        if hasattr(results, "safety_factor_p95")
+                        else None
+                    ),
+                }
+            except AttributeError:
+                # Plain-dict fallback
+                vm_raw = results.get("von_mises_stress", np.array([]))
+                if hasattr(vm_raw, "detach"):
+                    vm_raw = vm_raw.detach().cpu().numpy()
+                vm = np.array(vm_raw).ravel()
+                stress_info = {
+                    "n_elements": int(vm.size),
+                    "max": float(vm.max()) if vm.size > 0 else None,
+                    "min": float(vm.min()) if vm.size > 0 else None,
+                    "mean": float(vm.mean()) if vm.size > 0 else None,
+                    "p50": float(np.percentile(vm, 50)) if vm.size > 0 else None,
+                    "p95": float(np.percentile(vm, 95)) if vm.size > 0 else None,
+                    "p99": float(np.percentile(vm, 99)) if vm.size > 0 else None,
+                }
+
+            record = {
+                "call_id": call_id,
+                "record_type": "results",
+                "stress_stats": stress_info,
+            }
+
+            line = json.dumps(record, default=str)
+            with open(dump_file, "a") as fh:
+                fh.write(line + "\n")
+
+            max_v = stress_info.get("max")
+            p95_v = stress_info.get("p95")
+            p99_v = stress_info.get("p99")
+            print(
+                f"[DUMP-OUT {call_id}] "
+                f"max_stress={max_v:.4f}  p95={p95_v:.4f}  p99={p99_v:.4f}"
+            )
+        except Exception as exc:
+            print(f"[DUMP-OUT {call_id}] ERROR (non-fatal): {exc}")
+
+    # ------------------------------------------------------------------
     def _apply_boundary_conditions(
         self,
         model,
@@ -303,6 +532,9 @@ class TorchFEMKernel(FEAKernel):
 
         # Calculate von Mises stress
         von_mises = calculate_von_mises(sigma)
+        von_mises_np = von_mises.detach().cpu().numpy()
+        stress_p95 = float(np.percentile(von_mises_np, 95))
+        stress_p99 = float(np.percentile(von_mises_np, 99))
 
         # Get geometry info
         geometry_info = get_geometry_info(nodes)
@@ -320,6 +552,8 @@ class TorchFEMKernel(FEAKernel):
             bounding_box=geometry_info["bounding_box"],
             volume=geo_props["volume_mm3"],
             mass=geo_props["mass_kg"],
+            max_stress_p95=stress_p95,
+            max_stress_p99=stress_p99,
             model=model,  # Store model for boundary condition visualization
         )
 

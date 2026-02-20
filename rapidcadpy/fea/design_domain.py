@@ -4,6 +4,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class DesignDomain:
     """
@@ -356,4 +357,3 @@ class DesignDomain:
             "z_min": bb.zmin,
             "z_max": bb.zmax,
         }
-

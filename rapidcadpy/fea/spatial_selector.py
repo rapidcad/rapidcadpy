@@ -68,4 +68,3 @@ class SpatialSelector:
         # For thicker selection boxes, return the query dict directly
         # This allows range-based node selection in boundary_conditions.py
         return self.query
-

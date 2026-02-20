@@ -15,7 +15,6 @@ import os
 
 from .base import MesherBase
 
-
 # Script template that will run in isolated subprocess
 GMSH_SCRIPT_TEMPLATE = '''
 import sys
@@ -150,6 +149,7 @@ class IsolatedGmshMesher(MesherBase):
         """Check if GMSH Python API is available."""
         # Test in subprocess to avoid loading gmsh in main process
         try:
+            print(sys.executable)
             result = subprocess.run(
                 [sys.executable, "-c", "import gmsh; print('OK')"],
                 capture_output=True,
@@ -235,7 +235,7 @@ class IsolatedGmshMesher(MesherBase):
                 f.write(script_content)
 
             if verbose:
-                print(f"  Running isolated GMSH process...")
+                print(f"  Running isolated GMSH process with {sys.executable}")
 
             # Run in completely fresh Python subprocess
             # Don't inherit any environment that might have OCP loaded

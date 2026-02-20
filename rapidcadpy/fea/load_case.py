@@ -66,8 +66,113 @@ class LoadCase:
         self.constraints.append(constraint)
         return self
 
-    def get_fea_analyzer(self, mesher: str = "gmsh-subprocess"):
-        from config import Config
+    def calc_mesh_size(self, num_nodes: int) -> float:
+        """
+        Recommend a mesh size based on design-space dimensions and a target node count.
+
+        The estimate assumes roughly uniform 3D discretization:
+
+            h ≈ (V / N)^(1/3)
+
+        where:
+            - V is the design-space bounding-box volume
+            - N is target number of nodes
+
+        For very thin domains, the recommendation is clamped to avoid over-coarsening
+        across the smallest dimension.
+
+        Args:
+            num_nodes: Target number of mesh nodes (> 0)
+
+        Returns:
+            Recommended mesh size in model units (typically mm)
+
+        Raises:
+            ValueError: If `num_nodes` is not positive or dimensions are invalid.
+        """
+        if num_nodes <= 0:
+            raise ValueError(f"num_nodes must be > 0, got {num_nodes}")
+
+        # Resolve bounds from domain first, then legacy bounds.
+        bounds = None
+        if self.domain is not None and hasattr(self.domain, "get_bounding_box"):
+            try:
+                bounds = self.domain.get_bounding_box()
+            except Exception:
+                bounds = None
+        if bounds is None:
+            bounds = self.bounds
+
+        if not bounds:
+            raise ValueError(
+                "Cannot compute mesh size: no design-space bounds available (domain/bounds missing)."
+            )
+
+        dx = float(bounds.get("x_max", 0.0) - bounds.get("x_min", 0.0))
+        dy = float(bounds.get("y_max", 0.0) - bounds.get("y_min", 0.0))
+        dz = float(bounds.get("z_max", 0.0) - bounds.get("z_min", 0.0))
+
+        positive_dims = [d for d in (dx, dy, dz) if d > 0.0]
+        if not positive_dims:
+            raise ValueError(
+                "Cannot compute mesh size: design-space dimensions are non-positive."
+            )
+
+        min_dim = min(positive_dims)
+
+        # Use full 3D volume estimate when all dimensions are positive.
+        if dx > 0.0 and dy > 0.0 and dz > 0.0:
+            volume = dx * dy * dz
+            h_est = (volume / float(num_nodes)) ** (1.0 / 3.0)
+        else:
+            # Degenerate fallback (effectively 2D/1D bounds): use minimum positive dim.
+            h_est = min_dim
+
+        # Clamp to practical range relative to geometry scale.
+        # - Don't exceed ~1/2 of smallest dimension.
+        # - Don't go below a tiny absolute floor.
+        h_max = 0.5 * min_dim
+        h_min = 1e-3
+        h = max(h_min, min(h_est, h_max))
+
+        return float(h)
+
+    def __str__(self) -> str:
+        """Human-readable summary of this load case."""
+        material_name = getattr(self.material, "name", str(self.material))
+        has_domain = self.domain is not None
+        has_bounds = self.bounds is not None
+        return (
+            f"LoadCase(problem_id={self.problem_id or 'N/A'}, "
+            f"material={material_name}, "
+            f"loads={len(self.loads)}, "
+            f"constraints={len(self.constraints)}, "
+            f"domain={'yes' if has_domain else 'no'}, "
+            f"bounds={'yes' if has_bounds else 'no'})"
+        )
+
+    def __repr__(self) -> str:
+        """Developer-friendly representation for debugging."""
+        material_name = getattr(self.material, "name", str(self.material))
+        return (
+            "LoadCase("
+            f"problem_id={self.problem_id!r}, "
+            f"description={self.description!r}, "
+            f"analysis_type={self.analysis_type!r}, "
+            f"material={material_name!r}, "
+            f"loads={len(self.loads)}, "
+            f"constraints={len(self.constraints)}, "
+            f"units={self.units!r}, "
+            f"bounds={self.bounds!r}, "
+            f"domain={'set' if self.domain is not None else None}, "
+            f"mesh_nodes={'set' if self.mesh_nodes is not None else None}, "
+            f"mesh_elements={'set' if self.mesh_elements is not None else None}"
+            ")"
+        )
+
+    def get_fea_analyzer(
+        self, mesher: str = "gmsh-subprocess", mesh_size: float = 1
+    ) -> "FEAAnalyzer":
         from .kernels.base import FEAAnalyzer
 
         # Create design space geometry and export to STEP
@@ -130,25 +235,6 @@ class LoadCase:
             except Exception as e:
                 logger.warning(f"Failed to generate design domain box: {e}")
                 shape_path = None
-
-        # Adaptive mesh size: keep global default as upper bound, but refine for tiny domains.
-        # This prevents GMSH from missing slender members when bounds are sub-mm scale.
-        mesh_size = Config.MESH_SIZE
-        if self.bounds:
-            try:
-                dx = abs(self.bounds.get("x_max", 0) - self.bounds.get("x_min", 0))
-                dy = abs(self.bounds.get("y_max", 0) - self.bounds.get("y_min", 0))
-                dz = abs(self.bounds.get("z_max", 0) - self.bounds.get("z_min", 0))
-                positive_dims = [d for d in [dx, dy, dz] if d > 0]
-                if positive_dims:
-                    min_dim = min(positive_dims)
-                    adaptive = max(min_dim / 50.0, 1e-3)
-                    mesh_size = min(mesh_size, adaptive)
-                    logger.info(
-                        f"Adaptive mesh size: {mesh_size:.6g} (default {Config.MESH_SIZE}, min_dim {min_dim:.6g})"
-                    )
-            except Exception as e:
-                logger.warning(f"Could not compute adaptive mesh size: {e}")
 
         fea = FEAAnalyzer(
             shape=shape_path,
@@ -484,7 +570,9 @@ class LoadCase:
                     current_section = "ELSET"
                     current_nset_name = None
                     current_elset_generate = "GENERATE" in params.upper()
-                    elset_match = re.search(r"ELSET=([\w_\-\.]+)", params, re.IGNORECASE)
+                    elset_match = re.search(
+                        r"ELSET=([\w_\-\.]+)", params, re.IGNORECASE
+                    )
                     if elset_match:
                         current_elset_name = elset_match.group(1)
                         if current_elset_name not in element_sets:
@@ -733,7 +821,9 @@ class LoadCase:
                             pt_id = f"PT_{nid}"
                             nx, ny, nz = nodes[nid]
                             load_case.selectors[pt_id] = SpatialSelector(
-                                id=pt_id, type="point", query={"x": nx, "y": ny, "z": nz}
+                                id=pt_id,
+                                type="point",
+                                query={"x": nx, "y": ny, "z": nz},
                             )
                             bc = FixedConstraint(
                                 location=(nx, ny, nz),
