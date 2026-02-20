@@ -198,6 +198,12 @@ class FixedConstraint(BoundaryCondition):
         self.dofs = dofs
         self.tolerance = tolerance
 
+    def __repr__(self) -> str:
+        return (
+            f"FixedConstraint(location={self.location!r}, "
+            f"dofs={self.dofs!r}, tolerance={self.tolerance!r})"
+        )
+
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply fixed constraint to the model"""
         from .utils import find_nodes_in_box
@@ -207,7 +213,11 @@ class FixedConstraint(BoundaryCondition):
 
         # Determine nodes based on location
         if isinstance(self.location, dict):
-            # Box selector with x_min/max, y_min/max, z_min/max
+            # Box selector with x_min/max, y_min/max, z_min/max.
+            # Use a small surface tolerance (0.1 * mesh_size) instead of
+            # 1.0 * mesh_size to avoid pulling in interior tet nodes
+            # non-deterministically — the same root cause that makes
+            # DistributedLoad force magnitudes mesh-dependent.
             constrained_nodes = find_nodes_in_box(
                 nodes,
                 xmin=self.location.get("x_min"),
@@ -503,6 +513,13 @@ class DistributedLoad(Load):
         self.direction = direction
         self.tolerance = tolerance
 
+    def __repr__(self) -> str:
+        return (
+            f"DistributedLoad(location={self.location!r}, "
+            f"force={self.force!r}, direction={self.direction!r}, "
+            f"tolerance={self.tolerance!r})"
+        )
+
     def apply(self, model, nodes, elements, geometry_info, mesh_size: float):
         """Apply distributed load to the model"""
         from .utils import find_nodes_in_box
@@ -512,6 +529,14 @@ class DistributedLoad(Load):
 
         # Handle dict location (box selector)
         if isinstance(self.location, dict):
+            # Use a small tolerance (fraction of mesh_size) so that we only capture
+            # nodes actually on the boundary surface of the selector box.
+            # Using tolerance = 1 * mesh_size (the old default) expands the box by a
+            # full element width, which causes interior tet nodes to be included
+            # non-deterministically — halving/doubling the effective applied force
+            # depending on the random mesh topology.  A value of 0.1 * mesh_size keeps
+            # the selection within ~half a surface-element offset of the true face.
+            surface_tolerance = 0.1 * mesh_size
             load_nodes = find_nodes_in_box(
                 nodes,
                 xmin=self.location.get("x_min"),
@@ -520,7 +545,7 @@ class DistributedLoad(Load):
                 ymax=self.location.get("y_max"),
                 zmin=self.location.get("z_min"),
                 zmax=self.location.get("z_max"),
-                tolerance=self.tolerance * mesh_size,
+                tolerance=surface_tolerance,
             )
             # Determine default direction from which dimension is thin
             x_range = abs(self.location.get("x_max", 0) - self.location.get("x_min", 0))
