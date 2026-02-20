@@ -32,6 +32,10 @@ class FEAResults:
     volume: float
     mass: float
 
+    # Robust stress summaries (optional precomputed values)
+    max_stress_p95: Optional[float] = None  # 95th percentile von Mises stress (MPa)
+    max_stress_p99: Optional[float] = None  # 99th percentile von Mises stress (MPa)
+
     # Boundary conditions (optional, for visualization)
     model: Optional[Any] = None  # FEA solver model with constraints and forces
 
@@ -57,6 +61,20 @@ class FEAResults:
     def mean_stress(self) -> float:
         """Mean von Mises stress (MPa)"""
         return self.von_mises_stress.mean().item()
+
+    @property
+    def stress_p95(self) -> float:
+        """95th percentile von Mises stress (MPa)."""
+        if self.max_stress_p95 is not None:
+            return float(self.max_stress_p95)
+        return float(np.percentile(self.von_mises_stress.detach().cpu().numpy(), 95))
+
+    @property
+    def stress_p99(self) -> float:
+        """99th percentile von Mises stress (MPa)."""
+        if self.max_stress_p99 is not None:
+            return float(self.max_stress_p99)
+        return float(np.percentile(self.von_mises_stress.detach().cpu().numpy(), 99))
 
     def safety_factor(self, yield_strength: Optional[float] = None) -> float:
         """
@@ -347,6 +365,8 @@ class FEAResults:
             f"\nResults:",
             f"  Max displacement: {self.max_displacement:.6e} mm",
             f"  Max von Mises stress: {self.max_stress:.2f} MPa",
+            f"  P99 von Mises stress: {self.stress_p99:.2f} MPa",
+            f"  P95 von Mises stress: {self.stress_p95:.2f} MPa",
             f"  Mean von Mises stress: {self.mean_stress:.2f} MPa",
         ]
 
