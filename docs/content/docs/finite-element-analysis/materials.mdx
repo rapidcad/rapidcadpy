@@ -25,11 +25,14 @@ shape.material = Material.STEEL
 # Using Materials in FEA
 
 ```python
-from rapidcadpy.fea import Material, FEAAnalyzer, TorchFEMKernel
+from rapidcadpy.fea import Material, FEAAnalyzer
 
 # Direct usage with analyzer
-kernel = TorchFEMKernel()
-analyzer = FEAAnalyzer(beam, Material.STEEL, kernel)
+analyzer = FEAAnalyzer(
+    shape=beam,
+    material=Material.STEEL,
+    kernel="torch-fem"
+)
 
 # Access material properties
 mat = Material.ALUMINUM_6061

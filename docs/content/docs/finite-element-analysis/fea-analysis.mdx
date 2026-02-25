@@ -12,7 +12,7 @@ import { Step, Steps } from 'fumadocs-ui/components/steps';
 RapidCAD-Py includes integrated Finite Element Analysis powered by **torch-fem**, enabling you to validate your designs with structural analysis directly in Python.
 
 <Callout type="info">
-FEA requires additional dependencies. Install with: `pip install -e ".[fea]"`
+FEA requires additional dependencies. Install with: `pip install -e "[fea]"`
 </Callout>
 
 ## Quick Start
@@ -22,24 +22,30 @@ Here's a complete example of creating a model and analyzing it:
 ```python
 from rapidcadpy.integrations.occ import OpenCascadeApp
 from rapidcadpy.fea import (
-    TorchFEMKernel,
+    FixedConstraint,
+    LoadCase,
     FEAAnalyzer,
     Material,
-    FixedConstraint,
     DistributedLoad,
 )
 
-# Create geometry
 app = OpenCascadeApp()
 box = app.work_plane("XY").rect(20, 100).extrude(10)
 
-# Create analyzer with kernel (dependency injection)
-kernel = TorchFEMKernel()
-analyzer = FEAAnalyzer(box, Material.STEEL, kernel, mesh_size=2.0)
+load_case = LoadCase(
+    material=Material.STEEL,
+    loads=[DistributedLoad(location="top", direction="z", force=-1000.0)],
+    constraints=[FixedConstraint(location="x_min")],
+)
 
-# Add boundary conditions using fluent API
-analyzer.add_constraint(FixedConstraint("x_min"))
-analyzer.add_load(DistributedLoad("top", force=-1000.0))
+analyzer = FEAAnalyzer(
+    shape=box,
+    load_case=load_case,
+    mesh_size=2.0,
+    kernel="torch-fem",
+    device="cpu",
+    mesher="netgen",
+)
 
 # Preview boundary conditions
 analyzer.show()
@@ -73,23 +79,29 @@ beam = wp.rect(width=10, height=100).extrude(thickness=10)
 
 ### Set Up the Analyzer
 
-Create an `FEAAnalyzer` with dependency injection for the solver kernel:
+Create an `FEAAnalyzer` with the desired material, loads, and constraints:
 
 ```python
-from rapidcadpy.fea import TorchFEMKernel, FEAAnalyzer, Material
+from rapidcadpy.fea import FEAAnalyzer, Material, FixedConstraint, DistributedLoad
 
-# Create the FEA kernel (torch-fem backend)
-kernel = TorchFEMKernel()
-
-# Create analyzer with shape, material, and kernel
 analyzer = FEAAnalyzer(
     shape=beam,
     material=Material.STEEL,
-    kernel=kernel,
     mesh_size=2.0,        # Mesh element size (mm)
-    element_type="tet4",  # Tetrahedral elements
+    kernel="torch-fem",   # Solver kernel (default)
+    loads=[DistributedLoad(location="top", direction="z", force=-1000.0)],
+    constraints=[FixedConstraint(location="x_min")],
 )
 ```
+
+The `kernel` argument currently accepts the solver alias (`"torch-fem"`) and handles instantiating `TorchFEMKernel` under the hood. Use `device` and `mesher` to control where the solver runs and which mesher to call. If you already prepared a `LoadCase` with material, loads, and constraints, pass it via `load_case` and the explicit `material`, `loads`, and `constraints` parameters will be ignored:
+
+```python
+load_case = LoadCase.from_inp("example.inp")
+analyzer = FEAAnalyzer(shape=beam, kernel="torch-fem", load_case=load_case)
+```
+
+For a deeper dive into programmatically building or importing `LoadCase` objects, see the [Load Case guide](load-case).
 
 ### Define Material Properties
 
@@ -310,32 +322,34 @@ results.show(display='both', jupyter_backend='static')
 ```python
 from rapidcadpy.integrations.occ import OpenCascadeApp
 from rapidcadpy.fea import (
-    TorchFEMKernel,
+    LoadCase,
     FEAAnalyzer,
     Material,
     FixedConstraint,
     DistributedLoad,
 )
 
-# Create beam
 app = OpenCascadeApp()
 beam = app.work_plane("XY").rect(10, 100).extrude(10)
 
-# Set up analyzer
-kernel = TorchFEMKernel()
-analyzer = FEAAnalyzer(beam, Material.STEEL, kernel, mesh_size=2.0)
+load_case = LoadCase(
+    material=Material.STEEL,
+    loads=[DistributedLoad(location="top", direction="z", force=-1000.0)],
+    constraints=[FixedConstraint(location="x_min")],
+)
 
-# Add boundary conditions
-analyzer.add_constraint(FixedConstraint("x_min"))
-analyzer.add_load(DistributedLoad("top", force=-1000.0))
+analyzer = FEAAnalyzer(
+    shape=beam,
+    kernel="torch-fem",
+    load_case=load_case,
+    mesh_size=2.0,
+    element_type="tet4",
+    device="cpu",
+    mesher="netgen",
+)
 
-# Preview setup
-analyzer.show()
-
-# Solve
 results = analyzer.solve()
 
-# Check results
 print(f"Max deflection: {results.max_displacement:.4f} mm")
 print(f"Max stress: {results.max_stress:.2f} MPa")
 print(f"Safety factor: {results.safety_factor():.2f}")
@@ -345,44 +359,44 @@ results.show(display='both')
 
 ### Topology Optimization
 
-Use SIMP (Solid Isotropic Material with Penalization) to optimize material distribution:
-
 ```python
 from rapidcadpy.integrations.occ import OpenCascadeApp
 from rapidcadpy.fea import (
-    TorchFEMKernel,
+    LoadCase,
     FEAAnalyzer,
     Material,
     FixedConstraint,
     DistributedLoad,
 )
 
-# Create design domain
 app = OpenCascadeApp()
 box = app.work_plane("XY").rect(20, 10).extrude(10)
 
-# Set up analyzer
-kernel = TorchFEMKernel()
-analyzer = FEAAnalyzer(box, Material.STEEL, kernel, mesh_size=1.0)
-
-# Add boundary conditions
-analyzer.add_constraint(FixedConstraint("x_min"))
-analyzer.add_load(DistributedLoad("top", force=-1000.0))
-
-# Preview boundary conditions
-analyzer.show()
-
-# Run topology optimization
-result = analyzer.optimize(
-    volume_fraction=0.4,    # Target 40% of original volume
-    num_iterations=50,      # Optimization iterations
-    penalization=3.0,       # SIMP penalization factor
-    filter_radius=1.5,      # Sensitivity filter radius
+load_case = LoadCase(
+    material=Material.STEEL,
+    loads=[DistributedLoad(location="top", direction="z", force=-1000.0)],
+    constraints=[FixedConstraint(location="x_min")],
 )
 
-# View results
+analyzer = FEAAnalyzer(
+    shape=box,
+    kernel="torch-fem",
+    load_case=load_case,
+    mesh_size=1.0,
+    element_type="tet4",
+    device="cpu",
+    mesher="gmsh-subprocess",
+)
+
+result = analyzer.optimize(
+    volume_fraction=0.4,
+    num_iterations=50,
+    penalization=3.0,
+    filter_radius=1.5,
+)
+
 print(result.summary())
-result.show(display="density")  # Show optimized density distribution
+result.show(display="density")
 ```
 
 ### Parametric Study
@@ -391,7 +405,7 @@ result.show(display="density")  # Show optimized density distribution
 import numpy as np
 from rapidcadpy.integrations.occ import OpenCascadeApp
 from rapidcadpy.fea import (
-    TorchFEMKernel,
+    LoadCase,
     FEAAnalyzer,
     Material,
     FixedConstraint,
@@ -399,33 +413,39 @@ from rapidcadpy.fea import (
 )
 
 def analyze_beam(width, height):
-    """Analyze beam with given dimensions"""
     app = OpenCascadeApp()
     beam = app.work_plane("XY").rect(width, height).extrude(10)
-    
-    kernel = TorchFEMKernel()
-    analyzer = FEAAnalyzer(beam, Material.ALUMINUM_6061, kernel, mesh_size=2.0)
-    
-    analyzer.add_constraint(FixedConstraint("x_min"))
-    analyzer.add_load(DistributedLoad("top", force=-1000.0))
-    
+
+    load_case = LoadCase(
+        material=Material.ALUMINUM_6061,
+        loads=[DistributedLoad(location="top", direction="z", force=-1000.0)],
+        constraints=[FixedConstraint(location="x_min")],
+    )
+
+    analyzer = FEAAnalyzer(
+        shape=beam,
+        kernel="torch-fem",
+        load_case=load_case,
+        mesh_size=2.0,
+        device="cpu",
+        mesher="netgen",
+    )
+
     results = analyzer.solve()
-    
+
     return {
-        'width': width,
-        'height': height,
-        'mass': results.mass,
-        'max_stress': results.max_stress,
-        'safety_factor': results.safety_factor()
+        "width": width,
+        "height": height,
+        "mass": results.mass,
+        "max_stress": results.max_stress,
+        "safety_factor": results.safety_factor(),
     }
 
-# Test different dimensions
 dimensions = [(5, 50), (10, 100), (15, 150)]
 results = [analyze_beam(w, h) for w, h in dimensions]
 
-# Find optimal design
-valid_designs = [r for r in results if r['safety_factor'] > 2.0]
-optimal = min(valid_designs, key=lambda x: x['mass'])
+valid_designs = [r for r in results if r["safety_factor"] > 2.0]
+optimal = min(valid_designs, key=lambda x: x["mass"])
 
 print(f"Optimal design: {optimal['width']}x{optimal['height']} mm")
 print(f"Mass: {optimal['mass']*1000:.2f} g")
@@ -437,7 +457,7 @@ print(f"Safety factor: {optimal['safety_factor']:.2f}")
 ```python
 from rapidcadpy.integrations.occ import OpenCascadeApp
 from rapidcadpy.fea import (
-    TorchFEMKernel,
+    LoadCase,
     FEAAnalyzer,
     Material,
     FixedConstraint,
@@ -447,32 +467,32 @@ from rapidcadpy.fea import (
 app = OpenCascadeApp()
 wp = app.work_plane("XY")
 
-# Create bridge deck
 deck = wp.rect(20, 100).extrude(2)
-
-# Add support beams
 support1 = wp.move_to(0, 0).rect(20, 5).extrude(10)
 support2 = wp.move_to(0, 95).rect(20, 5).extrude(10)
-
-# Combine
 bridge = deck.join(support1).join(support2)
 
-# Set up analyzer
-kernel = TorchFEMKernel()
-analyzer = FEAAnalyzer(bridge, Material.STEEL, kernel, mesh_size=3.0)
+load_case = LoadCase(
+    material=Material.STEEL,
+    loads=[DistributedLoad(location="top", direction="z", force=-5000.0)],
+    constraints=[
+        FixedConstraint(location="y_min"),
+        FixedConstraint(location="y_max"),
+    ],
+)
 
-# Add boundary conditions
-analyzer.add_constraint(FixedConstraint("y_min"))  # Fix one end
-analyzer.add_constraint(FixedConstraint("y_max"))  # Fix other end
-analyzer.add_load(DistributedLoad("top", force=-5000.0))  # Traffic load
+analyzer = FEAAnalyzer(
+    shape=bridge,
+    kernel="torch-fem",
+    load_case=load_case,
+    mesh_size=3.0,
+    element_type="tet4",
+    device="cpu",
+    mesher="netgen",
+)
 
-# Preview setup
-analyzer.show()
-
-# Solve
 results = analyzer.solve()
 
-# Validate design
 if results.safety_factor() > 3.0:  # Higher safety for public structures
     print("✓ Bridge design approved")
     bridge.export("bridge_approved.step")
@@ -486,17 +506,14 @@ else:
 ### Mesh Control
 
 ```python
-from rapidcadpy.fea import TorchFEMKernel, FEAAnalyzer, Material
-
-kernel = TorchFEMKernel()
+from rapidcadpy.fea import FEAAnalyzer, Material
 
 # Finer mesh for more accurate results
 analyzer = FEAAnalyzer(
     shape=beam,
     material=Material.STEEL,
-    kernel=kernel,
     mesh_size=1.0,  # Smaller = more elements, slower but more accurate
-    element_type="tet4",
+    kernel="torch-fem",
 )
 
 # Element types
@@ -540,20 +557,13 @@ FixedConstraint(
 
 ### Dependency Injection Architecture
 
-The FEA system uses dependency injection, allowing different solver backends:
+The FEA system uses an internal dependency injection model, primarily choosing the `"torch-fem"` backend by default.
 
 ```python
-from rapidcadpy.fea import FEAAnalyzer, TorchFEMKernel
+from rapidcadpy.fea import FEAAnalyzer
 
-# TorchFEMKernel is the default (and currently only) backend
-kernel = TorchFEMKernel()
-
-# Check solver availability
-if TorchFEMKernel.is_available():
-    print(f"Using solver: {kernel.get_solver_name()}")
-    
-# Create analyzer with injected kernel
-analyzer = FEAAnalyzer(shape, material, kernel)
+# Create analyzer with torch-fem kernel (default)
+analyzer = FEAAnalyzer(shape, material, kernel="torch-fem")
 ```
 
 ### Reusing Analyzers
@@ -562,7 +572,7 @@ You can modify and re-run analysis without recreating the analyzer:
 
 ```python
 # Initial analysis
-analyzer = FEAAnalyzer(beam, Material.STEEL, kernel, mesh_size=2.0)
+analyzer = FEAAnalyzer(shape=beam, material=Material.STEEL, mesh_size=2.0)
 analyzer.add_constraint(FixedConstraint("x_min"))
 analyzer.add_load(DistributedLoad("top", force=-500.0))
 results1 = analyzer.solve()

@@ -35,7 +35,8 @@ FixedConstraint(
   description="Apply a fixed constraint to a surface or point."
   params={{
     location: { type: 'Union[str, Tuple[float, float, float]]', description: 'Surface identifier (`top`, `bottom`, `x_min`, `x_max`, etc.) or point coordinates' },
-    dofs: { type: 'Optional[Tuple[bool, bool, bool]]', description: 'Degrees of freedom to constrain (Tx, Ty, Tz). Default is all True', default: '(True, True, True)' }
+    dofs: { type: 'Optional[Tuple[bool, bool, bool]]', description: 'Degrees of freedom to constrain (Tx, Ty, Tz). Default is all True', default: '(True, True, True)' },
+    tolerance: { type: 'float', description: 'Distance tolerance for node selection (mm)', default: 1.0 }
   }}
   returns="None"
   returnType="None"

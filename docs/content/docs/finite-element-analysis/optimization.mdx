@@ -21,9 +21,12 @@ from rapidcadpy.fea import (
     # create the design space
     box = app.work_plane("XY").rect(20, 10).extrude(10)
 
-    # Create shape and analyzer
-    kernel = TorchFEMKernel()
-    analyzer = FEAAnalyzer(box, Material.STEEL, kernel="torch-fem", mesh_size=0.5)
+    # Create analyzer (uses torch-fem by default)
+    analyzer = FEAAnalyzer(
+        shape=box,
+        material=Material.STEEL,
+        mesh_size=0.5
+    )
 
     # Add boundary conditions
     analyzer.add_constraint(FixedConstraint("x_min"))
