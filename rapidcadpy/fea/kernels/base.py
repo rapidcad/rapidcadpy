@@ -8,9 +8,11 @@ This module provides:
 
 from abc import ABC, abstractmethod
 import traceback
-from typing import List, Optional, Tuple, TYPE_CHECKING, Union
+from typing import Any, List, Optional, Tuple, TYPE_CHECKING, Union
 import numpy as np
 import pyvista as pv
+
+from ..boundary_conditions import FixedConstraint, PointLoad
 
 if TYPE_CHECKING:
     from ...shape import Shape
@@ -192,8 +194,6 @@ class FEAAnalyzer:
         kernel: str = "torch-fem",
         mesh_size: float = 2.0,
         element_type: str = "tet4",
-        loads: Optional[List["Load"]] = None,
-        constraints: Optional[List["BoundaryCondition"]] = None,
         device: str = "auto",
         mesher: str = "netgen",
         load_case: Optional["LoadCase"] = None,
@@ -497,53 +497,239 @@ class FEAAnalyzer:
             filename: Optional path to save the plot. If set, saves to file
                      instead of showing interactively.
             show_legend: Whether to show the legend. Default: True
-            display: What to display. 'conditions' (default) shows mesh, loads,
-                    and constraints. 'mesh' shows only the mesh.
+                display: What to display. 'conditions' (default) shows mesh, loads,
+                    and constraints. 'mesh' shows only the mesh. 'design space'
+                    shows design bounds and overlays mesh when available.
+                    'debug' shows a simplified view for debugging.
             camera_position: Camera view angle ('iso', 'x', 'y', 'z', 'xy', 'xz', 'yz').
                            Default: 'iso' (isometric view)
 
         Note: This method requires the kernel to support visualization data extraction.
         """
-        if display not in ["conditions", "mesh"]:
-            raise ValueError("display must be either 'conditions' or 'mesh'")
+        display = display.lower().strip()
+        if display == "design_space":
+            display = "design space"
 
+        if display not in ["conditions", "mesh", "design space", "debug"]:
+            raise ValueError(
+                "display must be 'conditions', 'mesh', 'design space', or 'debug'"
+            )
+
+        def _extract_bounds(bounds: Optional[dict]) -> Optional[Tuple[float, float, float, float, float, float]]:
+            if not isinstance(bounds, dict):
+                return None
+            keys = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+            if not all(k in bounds for k in keys):
+                return None
+            try:
+                x_min = float(bounds["x_min"])
+                x_max = float(bounds["x_max"])
+                y_min = float(bounds["y_min"])
+                y_max = float(bounds["y_max"])
+                z_min = float(bounds["z_min"])
+                z_max = float(bounds["z_max"])
+            except (TypeError, ValueError):
+                return None
+
+            if x_max < x_min or y_max < y_min or z_max < z_min:
+                return None
+            return (x_min, x_max, y_min, y_max, z_min, z_max)
+
+        def _add_design_space_box(plotter: pv.Plotter, bounds: Optional[dict]) -> bool:
+            extracted = _extract_bounds(bounds)
+            if extracted is None:
+                return False
+
+            design_box = pv.Box(bounds=list(extracted))
+            plotter.add_mesh(
+                design_box,
+                style="wireframe",
+                color="green",
+                line_width=3,
+                opacity=1.0,
+            )
+            return True
+
+        # ── Debug mode: pure matplotlib, no meshing needed ───────────────────────
+        if display == "debug":
+            import matplotlib.pyplot as plt
+            from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+            from ..boundary_conditions import FixedConstraint, PointLoad, DistributedLoad
+
+            load_case = self.load_case
+
+            # Bounds come from load_case.bounds (set by the parser / get_fea_analyzer).
+            # Fall back to _get_geometry_bounds(self.shape) if not set.
+            geometry_bounds = load_case.bounds
+            if not geometry_bounds:
+                geometry_bounds = FEAAnalyzer._get_geometry_bounds(self.shape)
+            if not geometry_bounds:
+                geometry_bounds = {
+                    "x_min": 0, "x_max": 1,
+                    "y_min": 0, "y_max": 1,
+                    "z_min": 0, "z_max": 1,
+                }
+
+            fig = plt.figure(figsize=(10, 8))
+            ax = fig.add_subplot(111, projection="3d")
+
+            def _draw_bbox(bounds: dict, color: str, label=None, alpha: float = 0.08):
+                if not bounds:
+                    return
+                x0 = bounds.get("x_min", 0)
+                x1 = bounds.get("x_max", 0)
+                y0 = bounds.get("y_min", 0)
+                y1 = bounds.get("y_max", 0)
+                z0 = bounds.get("z_min", 0)
+                z1 = bounds.get("z_max", 0)
+                ax.bar3d(
+                    x0, y0, z0,
+                    max(x1 - x0, 1e-9),
+                    max(y1 - y0, 1e-9),
+                    max(z1 - z0, 1e-9),
+                    alpha=alpha, color=color, shade=False,
+                )
+                if label:
+                    ax.text(x0, y0, z1, label, color=color, fontsize=8)
+
+            # Draw design-domain bounding box in blue
+            _draw_bbox(geometry_bounds, "tab:blue", "Design domain", alpha=0.06)
+
+            span = max(
+                geometry_bounds["x_max"] - geometry_bounds["x_min"],
+                geometry_bounds["y_max"] - geometry_bounds["y_min"],
+                geometry_bounds["z_max"] - geometry_bounds["z_min"],
+                1e-6,
+            )
+
+            # ── Constraints in red ────────────────────────────────────────────
+            for i, bc in enumerate(load_case.constraints):
+                label = f"BC {i+1}"
+                if isinstance(bc, FixedConstraint):
+                    loc = bc.location
+                    if isinstance(loc, dict):
+                        _draw_bbox(loc, "tab:red", label, alpha=0.15)
+                    elif isinstance(loc, (tuple, list)) and len(loc) == 3:
+                        ax.scatter(
+                            loc[0], loc[1], loc[2],
+                            color="tab:red", s=100,
+                            label=label if i == 0 else None,
+                        )
+                    # String locations ('x_min', 'top', …) — skip,
+                    # exact face coords only known after meshing.
+                elif hasattr(bc, "center") and hasattr(bc, "radius"):
+                    # CylindricalConstraint
+                    cx_b, cy_b, cz_b = bc.center
+                    ax.scatter(cx_b, cy_b, cz_b, color="tab:red", s=100,
+                               label=label if i == 0 else None)
+
+            # ── Loads in green + force arrows ─────────────────────────────────
+            for i, ld in enumerate(load_case.loads):
+                label = f"Load {i+1}"
+                lx = ly = lz = None
+
+                if isinstance(ld, PointLoad):
+                    pt = ld.point
+                    if isinstance(pt, dict):
+                        lx = pt.get("x", (pt.get("x_min", 0) + pt.get("x_max", 0)) / 2)
+                        ly = pt.get("y", (pt.get("y_min", 0) + pt.get("y_max", 0)) / 2)
+                        lz = pt.get("z", (pt.get("z_min", 0) + pt.get("z_max", 0)) / 2)
+                    elif isinstance(pt, (tuple, list)) and len(pt) == 3:
+                        lx, ly, lz = float(pt[0]), float(pt[1]), float(pt[2])
+                    if lx is not None:
+                        ax.scatter(lx, ly, lz, color="tab:green", s=100,
+                                   label=label if i == 0 else None)
+
+                elif isinstance(ld, DistributedLoad) and isinstance(ld.location, dict):
+                    loc = ld.location
+                    _draw_bbox(loc, "tab:green", label, alpha=0.15)
+                    lx = (loc.get("x_min", 0) + loc.get("x_max", 0)) / 2
+                    ly = (loc.get("y_min", 0) + loc.get("y_max", 0)) / 2
+                    lz = (loc.get("z_min", 0) + loc.get("z_max", 0)) / 2
+
+                # Force arrow from centroid
+                if lx is not None:
+                    force = ld.force
+                    if isinstance(force, (int, float)):
+                        direction = str(getattr(ld, "direction", "z") or "z").lower()
+                        _axis_map = {
+                            "x": (1, 0, 0), "-x": (-1, 0, 0),
+                            "y": (0, 1, 0), "-y": (0, -1, 0),
+                            "z": (0, 0, 1), "-z": (0, 0, -1),
+                        }
+                        vx, vy, vz = _axis_map.get(direction, (0, 0, 1))
+                    else:
+                        vx, vy, vz = float(force[0]), float(force[1]), float(force[2])
+                        fmag = (vx**2 + vy**2 + vz**2) ** 0.5 + 1e-10
+                        vx, vy, vz = vx / fmag, vy / fmag, vz / fmag
+                    ax.quiver(lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen")
+
+            ax.set_title("FEA Debug: Design domain + BC/Load Regions")
+            ax.set_xlabel("X")
+            ax.set_ylabel("Y")
+            ax.set_zlabel("Z")
+            ax.legend(fontsize=8, loc="upper right")
+            plt.tight_layout()
+
+            if filename:
+                fig.savefig(filename, dpi=150)
+                print(f"✓ Saved debug visualization to: {filename}")
+            else:
+                plt.show()
+            plt.close(fig)
+            return
+
+        # ── conditions / mesh modes: requires meshing ─────────────────────────
         # Configure for headless/non-interactive mode if needed
         if filename:
             interactive = False
             pv.start_xvfb()  # Start virtual framebuffer for headless environments
             pv.OFF_SCREEN = True
 
-        # Get visualization data from kernel
-        try:
-            pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
-                self.kernel.get_visualization_data(
-                    shape=self.shape,
-                    material=self.load_case.material,
-                    loads=self.load_case.loads,
-                    constraints=self.load_case.constraints,
-                    mesh_size=self.mesh_size,
-                    element_type=self.element_type,
-                    with_conditions=(display == "conditions"),
-                )
-            )
-        except Exception as e:
-            print(f"Could not show debug mesh: {e}")
-            raise ValueError(
-                f"Error applying boundary conditions: {e} \n {traceback.format_exc()} "
-            ) from None
-
         # Visualize boundary conditions
         plotter = pv.Plotter(window_size=list(window_size), off_screen=not interactive)
 
-        # Add the main mesh (semi-transparent)
-        plotter.add_mesh(
-            pv_mesh,
-            color="lightblue",
-            opacity=0.3,
-            show_edges=True,
-            edge_color="gray",
-            line_width=0.5,
-        )
+        # Add design-space box (wireframe) if bounds are available
+        has_design_space = _add_design_space_box(plotter, self.load_case.bounds)
+
+        pv_mesh = None
+        nodes = None
+        constraint_mask = None
+        force_mask = None
+        force_vectors = None
+
+
+        if display in ["conditions", "mesh", "design space"]:
+            try:
+                pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
+                    self.kernel.get_visualization_data(
+                        shape=self.shape,
+                        material=self.load_case.material,
+                        loads=self.load_case.loads,
+                        constraints=self.load_case.constraints,
+                        mesh_size=self.mesh_size,
+                        element_type=self.element_type,
+                        with_conditions=(display == "conditions"),
+                    )
+                )
+            except Exception as e:
+                if display in ["conditions", "mesh"]:
+                    print(f"Could not show debug mesh: {e}")
+                    raise ValueError(
+                        f"Error applying boundary conditions: {e} \n {traceback.format_exc()} "
+                    ) from None
+                print(f"Could not visualize mesh for design space mode: {e}")
+
+        # Add the main mesh (semi-transparent) when available
+        if pv_mesh is not None:
+            plotter.add_mesh(
+                pv_mesh,
+                color="lightblue",
+                opacity=0.3,
+                show_edges=True,
+                edge_color="gray",
+                line_width=0.5,
+            )
 
         if display == "conditions":
             has_legend_entries = False
@@ -603,9 +789,23 @@ class FEAAnalyzer:
                     position="lower_left",
                     font_size=10,
                 )
-        else:
+        elif display == "mesh":
             # Display mode is 'mesh'
-            plotter.add_text("Mesh Visualization", position="upper_edge", font_size=12)
+            if has_design_space:
+                plotter.add_text(
+                    "Mesh + Design Space", position="upper_edge", font_size=12
+                )
+            else:
+                plotter.add_text("Mesh Visualization", position="upper_edge", font_size=12)
+        elif display == "design space":
+            if pv_mesh is not None:
+                plotter.add_text(
+                    "Design Space + Mesh", position="upper_edge", font_size=12
+                )
+            else:
+                plotter.add_text(
+                    "Design Space (bounds only)", position="upper_edge", font_size=12
+                )
 
         plotter.add_axes()
 
@@ -635,6 +835,7 @@ class FEAAnalyzer:
                 plotter.show()
             else:
                 plotter.show(jupyter_backend="static")
+
 
     def export_gltf(
         self,
@@ -705,3 +906,20 @@ class FEAAnalyzer:
             )
 
         return result
+
+    def _get_geometry_bounds(cad: Any) -> dict:
+        """Get bounding box of a CadQuery Workplane."""
+        try:
+            cq_obj = cad.val() if hasattr(cad, "val") else cad
+            bb = cq_obj.BoundingBox()
+            return {
+                "x_min": bb.xmin,
+                "x_max": bb.xmax,
+                "y_min": bb.ymin,
+                "y_max": bb.ymax,
+                "z_min": bb.zmin,
+                "z_max": bb.zmax,
+            }
+        except Exception as e:
+            logger.warning(f"Bounding box calculation failed: {e}")
+            return None

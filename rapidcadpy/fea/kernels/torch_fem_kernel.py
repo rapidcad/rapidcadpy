@@ -48,7 +48,9 @@ class TorchFEMKernel(FEAKernel):
                     'auto' will use CUDA if available, otherwise CPU.
             mesher: Mesher to use. Can be:
                    - MesherBase instance (custom mesher)
-                   - String: 'netgen', 'gmsh', or 'netgen-subprocess' (will instantiate the appropriate mesher)
+               - String: 'netgen', 'gmsh', 'gmsh-subprocess',
+                 'netgen-subprocess', or 'gmsh-isolated'
+                 (will instantiate the appropriate mesher)
                    - None: uses NetgenMesher by default
             num_threads: Number of threads for meshing (0 = auto-detect).
                         Only used if mesher is None or a string.
@@ -64,7 +66,11 @@ class TorchFEMKernel(FEAKernel):
         if mesher is None or mesher == "netgen":
             self.mesher = NetgenMesher(num_threads=num_threads)
         elif isinstance(mesher, str):
-            if mesher == "gmsh-subprocess":
+            if mesher == "gmsh":
+                from ..mesher import GmshMesher
+
+                self.mesher = GmshMesher(num_threads=num_threads)
+            elif mesher == "gmsh-subprocess":
                 from ..mesher import GmshSubprocessMesher
 
                 self.mesher = GmshSubprocessMesher(num_threads=num_threads)
@@ -78,7 +84,7 @@ class TorchFEMKernel(FEAKernel):
                 self.mesher = IsolatedGmshMesher(num_threads=num_threads)
             else:
                 raise ValueError(
-                    f"Unknown mesher: {mesher}. Supported: 'netgen', 'gmsh', 'netgen-subprocess', 'gmsh-isolated"
+                    f"Unknown mesher: {mesher}. Supported: 'netgen', 'gmsh', 'gmsh-subprocess', 'netgen-subprocess', 'gmsh-isolated'"
                 )
         else:
             self.mesher = mesher
@@ -181,14 +187,6 @@ class TorchFEMKernel(FEAKernel):
             model, nodes, elements, loads, constraints, mesh_size=mesh_size
         )
 
-        # ── Diagnostic dump: pre-solve inputs (enabled by RCADPY_DUMP_INPUTS=1)
-        dump_call_id = None
-        if os.getenv("RCADPY_DUMP_INPUTS") == "1":
-            dump_call_id = self._dump_solve_inputs(
-                model, nodes, elements, loads, constraints, mesh_size, step_path
-            )
-        # ───────────────────────────────────────────────────────────────────────
-
         solution = model.solve()
 
         # Get geo props
@@ -206,10 +204,6 @@ class TorchFEMKernel(FEAKernel):
             geo_props,
         )
 
-        # ── Diagnostic dump: post-solve results ────────────────────────────────
-        if os.getenv("RCADPY_DUMP_INPUTS") == "1" and dump_call_id is not None:
-            self._dump_solve_results(dump_call_id, results)
-        # ───────────────────────────────────────────────────────────────────────
 
         return results
 
@@ -487,13 +481,18 @@ class TorchFEMKernel(FEAKernel):
             if os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  ✓ Applied {load.__class__.__name__} ({num_nodes} nodes)")
 
-        # Warn if no constraints or loads
+        # Fail fast if no constraints or loads — avoid hanging MINRES on singular K
         if total_constrained == 0:
-            print(
-                "  ⚠ WARNING: No nodes were constrained! Model may be under-constrained."
+            raise ValueError(
+                "No nodes were constrained — the geometry likely sits outside the "
+                "design domain or boundary-condition regions. FEA cannot proceed "
+                "with a singular (unconstrained) stiffness matrix."
             )
         if total_loaded == 0:
-            print("  ⚠ WARNING: No loads were applied!")
+            raise ValueError(
+                "No load nodes found — the applied loads do not intersect the "
+                "meshed geometry. Check that the load regions overlap the part."
+            )
 
         # Check connectivity between loaded and constrained nodes
         if total_constrained > 0 and total_loaded > 0:
@@ -1073,7 +1072,7 @@ class TorchFEMKernel(FEAKernel):
             dim=3,
         )
 
-        elements = elements[:, [1, 0, 2, 3]]
+        # elements = elements[:, [1, 0, 2, 3]]
         nodes = nodes.to(torch.float64)
 
         # Optimization: If no loads/constraints, skip FEM model creation
