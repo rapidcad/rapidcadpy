@@ -144,14 +144,20 @@ class IsolatedGmshMesher(MesherBase):
         """
         super().__init__(num_threads)
 
+    @staticmethod
+    def _get_python_executable() -> str:
+        """Return Python executable used for the isolated GMSH subprocess."""
+        configured = os.getenv("GMSH_SUBPROCESS_PYTHON", "").strip()
+        return configured or sys.executable
+
     @classmethod
     def is_available(cls) -> bool:
         """Check if GMSH Python API is available."""
         # Test in subprocess to avoid loading gmsh in main process
         try:
-            print(sys.executable)
+            python_executable = cls._get_python_executable()
             result = subprocess.run(
-                [sys.executable, "-c", "import gmsh; print('OK')"],
+                [python_executable, "-c", "import gmsh; print('OK')"],
                 capture_output=True,
                 text=True,
                 timeout=5,
@@ -221,6 +227,7 @@ class IsolatedGmshMesher(MesherBase):
             output_path = tmp_out.name
 
         try:
+            python_executable = self._get_python_executable()
             # Create the isolated script
             script_content = GMSH_SCRIPT_TEMPLATE.format(
                 input_file=Path(filename).resolve(),
@@ -235,12 +242,12 @@ class IsolatedGmshMesher(MesherBase):
                 f.write(script_content)
 
             if verbose:
-                print(f"  Running isolated GMSH process with {sys.executable}")
+                print(f"  Running isolated GMSH process with {python_executable}")
 
             # Run in completely fresh Python subprocess
             # Don't inherit any environment that might have OCP loaded
             result = subprocess.run(
-                [sys.executable, script_path],
+                [python_executable, script_path],
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout

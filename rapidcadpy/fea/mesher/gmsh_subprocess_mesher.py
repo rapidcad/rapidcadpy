@@ -5,12 +5,15 @@ This mesher runs GMSH as a subprocess, avoiding library conflicts with OCP/OCC.
 It requires GMSH to be installed and available in PATH.
 """
 
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Literal, Tuple
 import torch
 import os
+import meshio
 
 from .base import MesherBase
 
@@ -32,14 +35,23 @@ class GmshSubprocessMesher(MesherBase):
             gmsh_path: Path to gmsh executable (default: 'gmsh' from PATH)
         """
         super().__init__(num_threads)
-        self.gmsh_path = gmsh_path
+        # shutil.which searches the current process PATH - works when launched via
+        # conda activate, but not when the debugger/server spawns Python directly.
+        # Fallback: gmsh lives in the same bin/ dir as the Python executable when
+        # running inside a conda env (e.g. /opt/.../envs/ocp/bin/gmsh).
+        resolved = shutil.which(gmsh_path)
+        if resolved is None:
+            candidate = Path(sys.executable).parent / gmsh_path
+            resolved = str(candidate) if candidate.exists() else gmsh_path
+        self.gmsh_path = resolved
 
     @classmethod
     def is_available(cls) -> bool:
         """Check if GMSH is available in PATH."""
         try:
+            gmsh = shutil.which("gmsh") or str(Path(sys.executable).parent / "gmsh")
             result = subprocess.run(
-                ["gmsh", "--version"], capture_output=True, text=True, timeout=5
+                [gmsh, "--version"], capture_output=True, text=True, timeout=10
             )
             return result.returncode == 0
         except (subprocess.SubprocessError, FileNotFoundError):
@@ -131,7 +143,9 @@ class GmshSubprocessMesher(MesherBase):
             # Run GMSH
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  Running GMSH mesher: {' '.join(cmd)}")
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                result = subprocess.run(
+                    cmd, check=True, capture_output=True, text=True
+                )
                 if result.stdout:
                     print(result.stdout)
             else:
@@ -139,12 +153,31 @@ class GmshSubprocessMesher(MesherBase):
                     cmd,
                     check=True,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
                     text=True,
                 )
 
-            # Parse the MSH file
-            nodes, elements = self._parse_msh4(msh_path, element_type)
+            # Parse the MSH file using meshio
+            # meshio cell type names: "tetra" = tet4, "tetra10" = tet10
+            meshio_type_map = {"tet4": "tetra", "tet10": "tetra10"}
+            meshio_type = meshio_type_map[element_type]
+
+            mesh = meshio.read(msh_path)
+            nodes = torch.tensor(mesh.points, dtype=torch.float32)
+
+            cells = None
+            for cell_block in mesh.cells:
+                if cell_block.type == meshio_type:
+                    cells = cell_block.data
+                    break
+
+            if cells is None:
+                raise RuntimeError(
+                    f"No {element_type} ({meshio_type}) elements found in mesh. "
+                    f"Available cell types: {[cb.type for cb in mesh.cells]}"
+                )
+
+            elements = torch.tensor(cells, dtype=torch.int64)
 
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
                 print(
@@ -166,128 +199,4 @@ class GmshSubprocessMesher(MesherBase):
             except Exception:
                 pass
 
-    def _parse_msh4(
-        self, msh_path: str, element_type: str
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Parse GMSH MSH 4.1 format file.
 
-        Args:
-            msh_path: Path to .msh file
-            element_type: Expected element type
-
-        Returns:
-            Tuple of (nodes, elements) tensors
-        """
-        nodes_list = []
-        elements_list = []
-        node_tag_map = {}  # Map GMSH node tag -> local index (0-based)
-
-        # MSH 4.1 element type codes
-        # 4 = 4-node tetrahedron (tet4)
-        # 11 = 10-node tetrahedron (tet10)
-        element_type_map = {
-            "tet4": 4,
-            "tet10": 11,
-        }
-
-        target_elem_code = element_type_map.get(element_type)
-        if target_elem_code is None:
-            raise ValueError(f"Unsupported element type for parsing: {element_type}")
-
-        with open(msh_path, "r") as f:
-            lines = f.readlines()
-
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-
-            # Parse nodes section
-            if line == "$Nodes":
-                i += 1
-                # MSH 4.1 format: numEntityBlocks numNodes minNodeTag maxNodeTag
-                header = lines[i].strip().split()
-                if len(header) < 2:
-                    i += 1
-                    continue
-                num_entity_blocks = int(header[0])
-                num_nodes = int(header[1])
-                i += 1
-
-                # Read each entity block
-                for _ in range(num_entity_blocks):
-                    # Entity block header: entityDim entityTag parametric numNodesInBlock
-                    block_header = lines[i].strip().split()
-                    num_nodes_in_block = int(block_header[3])
-                    i += 1
-
-                    # Read node tags
-                    node_tags = []
-                    for _ in range(num_nodes_in_block):
-                        node_tags.append(int(lines[i].strip()))
-                        i += 1
-
-                    # Read node coordinates and populate map
-                    for j in range(num_nodes_in_block):
-                        coords = [float(x) for x in lines[i].strip().split()]
-
-                        # Store standard 3D coords (ignore parametric if any)
-                        nodes_list.append(coords[:3])
-
-                        # Map tag to current index
-                        current_idx = len(nodes_list) - 1
-                        node_tag_map[node_tags[j]] = current_idx
-
-                        i += 1
-
-                # Skip $EndNodes
-                i += 1
-
-            # Parse elements section
-            elif line == "$Elements":
-                i += 1
-                # MSH 4.1 format: numEntityBlocks numElements minElementTag maxElementTag
-                header = lines[i].strip().split()
-                if len(header) < 2:
-                    i += 1
-                    continue
-                num_entity_blocks = int(header[0])
-                i += 1
-
-                # Read each entity block
-                for _ in range(num_entity_blocks):
-                    # Entity block header: entityDim entityTag elementType numElementsInBlock
-                    block_header = lines[i].strip().split()
-                    elem_type_code = int(block_header[2])
-                    num_elems_in_block = int(block_header[3])
-                    i += 1
-
-                    # Only process elements of the target type
-                    if elem_type_code == target_elem_code:
-                        for _ in range(num_elems_in_block):
-                            parts = lines[i].strip().split()
-                            # First value is element tag, rest are node tags
-                            # Use map to get correct local index
-                            try:
-                                elem_nodes = [node_tag_map[int(x)] for x in parts[1:]]
-                                elements_list.append(elem_nodes)
-                            except KeyError:
-                                # This can happen if GMSH drops nodes or we missed some.
-                                # Should generally not happen in a valid mesh.
-                                pass
-                            i += 1
-                    else:
-                        # Skip elements of other types
-                        i += num_elems_in_block
-
-                # Skip $EndElements
-                i += 1
-
-            else:
-                i += 1
-
-        # Convert to tensors
-        nodes = torch.tensor(nodes_list, dtype=torch.float32)
-        elements = torch.tensor(elements_list, dtype=torch.int64)
-
-        return nodes, elements
