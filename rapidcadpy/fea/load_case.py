@@ -171,7 +171,10 @@ class LoadCase:
         )
 
     def get_fea_analyzer(
-        self, mesher: str = "gmsh-subprocess", mesh_size: float = 1
+        self,
+        mesher: str = "gmsh-subprocess",
+        mesh_size: float = 1,
+        device: str = "auto",
     ) -> "FEAAnalyzer":
         from .kernels.base import FEAAnalyzer
 
@@ -242,6 +245,7 @@ class LoadCase:
             mesher=mesher,
             load_case=self,
             mesh_size=mesh_size,
+            device=device,
         )
         return fea
 
@@ -252,6 +256,43 @@ class LoadCase:
         This bridges the structured JSON specification with the LLM-based design agent.
         """
         import math
+
+        def _fmt_num(value: Any, max_decimals: int = 4) -> str:
+            """Format numeric values compactly for prompt readability.
+
+            - Removes floating-point noise (e.g. 100.0000002 -> 100)
+            - Trims trailing zeros
+            - Keeps non-numeric sentinels (e.g. "?") as-is
+            """
+            if value is None:
+                return "?"
+
+            if isinstance(value, (int, np.integer)):
+                return str(int(value))
+
+            if isinstance(value, (float, np.floating)):
+                v = float(value)
+                if math.isfinite(v):
+                    v = round(v, max_decimals)
+                    # Avoid negative zero in string output
+                    if abs(v) < 10 ** (-max_decimals):
+                        v = 0.0
+                    s = f"{v:.{max_decimals}f}".rstrip("0").rstrip(".")
+                    return s if s else "0"
+                return str(v)
+
+            # Numeric strings and other values
+            try:
+                v = float(value)
+                if math.isfinite(v):
+                    v = round(v, max_decimals)
+                    if abs(v) < 10 ** (-max_decimals):
+                        v = 0.0
+                    s = f"{v:.{max_decimals}f}".rstrip("0").rstrip(".")
+                    return s if s else "0"
+                return str(value)
+            except (TypeError, ValueError):
+                return str(value)
 
         def _format_location(location) -> str:
             if location is None:
@@ -265,18 +306,19 @@ class LoadCase:
                 if any(k in location for k in keys):
                     return (
                         "box "
-                        f"X[{location.get('x_min', '?')}, {location.get('x_max', '?')}], "
-                        f"Y[{location.get('y_min', '?')}, {location.get('y_max', '?')}], "
-                        f"Z[{location.get('z_min', '?')}, {location.get('z_max', '?')}]"
+                        f"X[{_fmt_num(location.get('x_min', '?'))}, {_fmt_num(location.get('x_max', '?'))}], "
+                        f"Y[{_fmt_num(location.get('y_min', '?'))}, {_fmt_num(location.get('y_max', '?'))}], "
+                        f"Z[{_fmt_num(location.get('z_min', '?'))}, {_fmt_num(location.get('z_max', '?'))}]"
                     )
                 if all(k in location for k in ("x", "y", "z")):
-                    return f"point ({location['x']:.3g}, {location['y']:.3g}, {location['z']:.3g})"
+                    return (
+                        f"point ({_fmt_num(location['x'])}, "
+                        f"{_fmt_num(location['y'])}, {_fmt_num(location['z'])})"
+                    )
                 return str(location)
 
             if isinstance(location, (tuple, list)) and len(location) >= 3:
-                return (
-                    f"point ({location[0]:.3g}, {location[1]:.3g}, {location[2]:.3g})"
-                )
+                return f"point ({_fmt_num(location[0])}, {_fmt_num(location[1])}, {_fmt_num(location[2])})"
 
             return str(location)
 
@@ -451,10 +493,10 @@ class LoadCase:
         Design a structural component based on the following load case specification:
         
         GEOMETRY:
-        - Length (X): {length} {self.units}
-        - Beam (Y): {height} {self.units}
-        - Height (Z): {thickness} {self.units}
-        - Design domain: X=[{x_min}, {x_max}], Y=[{y_min}, {y_max}], Z=[{z_min}, {z_max}]
+        - Length (X): {_fmt_num(length)} {self.units}
+        - Beam (Y): {_fmt_num(height)} {self.units}
+        - Height (Z): {_fmt_num(thickness)} {self.units}
+        - Design domain: X=[{_fmt_num(x_min)}, {_fmt_num(x_max)}], Y=[{_fmt_num(y_min)}, {_fmt_num(y_max)}], Z=[{_fmt_num(z_min)}, {_fmt_num(z_max)}]
 
         MATERIAL:
         - Nominal material: {material_name}

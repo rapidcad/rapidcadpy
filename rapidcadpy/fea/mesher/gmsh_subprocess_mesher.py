@@ -143,9 +143,7 @@ class GmshSubprocessMesher(MesherBase):
             # Run GMSH
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  Running GMSH mesher: {' '.join(cmd)}")
-                result = subprocess.run(
-                    cmd, check=True, capture_output=True, text=True
-                )
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                 if result.stdout:
                     print(result.stdout)
             else:
@@ -198,5 +196,3 @@ class GmshSubprocessMesher(MesherBase):
                 Path(msh_path).unlink()
             except Exception:
                 pass
-
-
