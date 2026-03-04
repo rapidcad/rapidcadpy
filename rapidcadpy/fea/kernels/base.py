@@ -479,6 +479,7 @@ class FEAAnalyzer:
         window_size: Tuple[int, int] = (1400, 700),
         filename: Optional[str] = None,
         show_legend: bool = True,
+        show_grid: bool = True,
         display: str = "conditions",
         camera_position: str = "iso",
     ) -> None:
@@ -515,7 +516,9 @@ class FEAAnalyzer:
                 "display must be 'conditions', 'mesh', 'design space', or 'debug'"
             )
 
-        def _extract_bounds(bounds: Optional[dict]) -> Optional[Tuple[float, float, float, float, float, float]]:
+        def _extract_bounds(
+            bounds: Optional[dict],
+        ) -> Optional[Tuple[float, float, float, float, float, float]]:
             if not isinstance(bounds, dict):
                 return None
             keys = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
@@ -554,7 +557,11 @@ class FEAAnalyzer:
         if display == "debug":
             import matplotlib.pyplot as plt
             from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-            from ..boundary_conditions import FixedConstraint, PointLoad, DistributedLoad
+            from ..boundary_conditions import (
+                FixedConstraint,
+                PointLoad,
+                DistributedLoad,
+            )
 
             load_case = self.load_case
 
@@ -565,9 +572,12 @@ class FEAAnalyzer:
                 geometry_bounds = FEAAnalyzer._get_geometry_bounds(self.shape)
             if not geometry_bounds:
                 geometry_bounds = {
-                    "x_min": 0, "x_max": 1,
-                    "y_min": 0, "y_max": 1,
-                    "z_min": 0, "z_max": 1,
+                    "x_min": 0,
+                    "x_max": 1,
+                    "y_min": 0,
+                    "y_max": 1,
+                    "z_min": 0,
+                    "z_max": 1,
                 }
 
             fig = plt.figure(figsize=(10, 8))
@@ -583,11 +593,15 @@ class FEAAnalyzer:
                 z0 = bounds.get("z_min", 0)
                 z1 = bounds.get("z_max", 0)
                 ax.bar3d(
-                    x0, y0, z0,
+                    x0,
+                    y0,
+                    z0,
                     max(x1 - x0, 1e-9),
                     max(y1 - y0, 1e-9),
                     max(z1 - z0, 1e-9),
-                    alpha=alpha, color=color, shade=False,
+                    alpha=alpha,
+                    color=color,
+                    shade=False,
                 )
                 if label:
                     ax.text(x0, y0, z1, label, color=color, fontsize=8)
@@ -611,8 +625,11 @@ class FEAAnalyzer:
                         _draw_bbox(loc, "tab:red", label, alpha=0.15)
                     elif isinstance(loc, (tuple, list)) and len(loc) == 3:
                         ax.scatter(
-                            loc[0], loc[1], loc[2],
-                            color="tab:red", s=100,
+                            loc[0],
+                            loc[1],
+                            loc[2],
+                            color="tab:red",
+                            s=100,
                             label=label if i == 0 else None,
                         )
                     # String locations ('x_min', 'top', …) — skip,
@@ -620,8 +637,14 @@ class FEAAnalyzer:
                 elif hasattr(bc, "center") and hasattr(bc, "radius"):
                     # CylindricalConstraint
                     cx_b, cy_b, cz_b = bc.center
-                    ax.scatter(cx_b, cy_b, cz_b, color="tab:red", s=100,
-                               label=label if i == 0 else None)
+                    ax.scatter(
+                        cx_b,
+                        cy_b,
+                        cz_b,
+                        color="tab:red",
+                        s=100,
+                        label=label if i == 0 else None,
+                    )
 
             # ── Loads in green + force arrows ─────────────────────────────────
             for i, ld in enumerate(load_case.loads):
@@ -637,8 +660,14 @@ class FEAAnalyzer:
                     elif isinstance(pt, (tuple, list)) and len(pt) == 3:
                         lx, ly, lz = float(pt[0]), float(pt[1]), float(pt[2])
                     if lx is not None:
-                        ax.scatter(lx, ly, lz, color="tab:green", s=100,
-                                   label=label if i == 0 else None)
+                        ax.scatter(
+                            lx,
+                            ly,
+                            lz,
+                            color="tab:green",
+                            s=100,
+                            label=label if i == 0 else None,
+                        )
 
                 elif isinstance(ld, DistributedLoad) and isinstance(ld.location, dict):
                     loc = ld.location
@@ -653,22 +682,31 @@ class FEAAnalyzer:
                     if isinstance(force, (int, float)):
                         direction = str(getattr(ld, "direction", "z") or "z").lower()
                         _axis_map = {
-                            "x": (1, 0, 0), "-x": (-1, 0, 0),
-                            "y": (0, 1, 0), "-y": (0, -1, 0),
-                            "z": (0, 0, 1), "-z": (0, 0, -1),
+                            "x": (1, 0, 0),
+                            "-x": (-1, 0, 0),
+                            "y": (0, 1, 0),
+                            "-y": (0, -1, 0),
+                            "z": (0, 0, 1),
+                            "-z": (0, 0, -1),
                         }
                         vx, vy, vz = _axis_map.get(direction, (0, 0, 1))
                     else:
                         vx, vy, vz = float(force[0]), float(force[1]), float(force[2])
                         fmag = (vx**2 + vy**2 + vz**2) ** 0.5 + 1e-10
                         vx, vy, vz = vx / fmag, vy / fmag, vz / fmag
-                    ax.quiver(lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen")
+                    ax.quiver(
+                        lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen"
+                    )
 
             ax.set_title("FEA Debug: Design domain + BC/Load Regions")
             ax.set_xlabel("X")
             ax.set_ylabel("Y")
             ax.set_zlabel("Z")
-            ax.legend(fontsize=8, loc="upper right")
+            if not show_grid:
+                ax.grid(False)
+                ax.set_axis_off()
+            if show_legend:
+                ax.legend(fontsize=8, loc="upper right")
             plt.tight_layout()
 
             if filename:
@@ -697,7 +735,6 @@ class FEAAnalyzer:
         constraint_mask = None
         force_mask = None
         force_vectors = None
-
 
         if display in ["conditions", "mesh", "design space"]:
             try:
@@ -789,23 +826,6 @@ class FEAAnalyzer:
                     position="lower_left",
                     font_size=10,
                 )
-        elif display == "mesh":
-            # Display mode is 'mesh'
-            if has_design_space:
-                plotter.add_text(
-                    "Mesh + Design Space", position="upper_edge", font_size=12
-                )
-            else:
-                plotter.add_text("Mesh Visualization", position="upper_edge", font_size=12)
-        elif display == "design space":
-            if pv_mesh is not None:
-                plotter.add_text(
-                    "Design Space + Mesh", position="upper_edge", font_size=12
-                )
-            else:
-                plotter.add_text(
-                    "Design Space (bounds only)", position="upper_edge", font_size=12
-                )
 
         plotter.add_axes()
 
@@ -835,7 +855,6 @@ class FEAAnalyzer:
                 plotter.show()
             else:
                 plotter.show(jupyter_backend="static")
-
 
     def export_gltf(
         self,

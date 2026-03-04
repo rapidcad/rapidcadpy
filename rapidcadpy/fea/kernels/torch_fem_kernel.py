@@ -98,8 +98,10 @@ class TorchFEMKernel(FEAKernel):
         if self.device.type == "cuda" and not torch.cuda.is_available():
             raise RuntimeError("CUDA requested but not available")
 
-        # Set default device for all tensor operations
-        torch.set_default_device(self.device)
+        # Avoid mutating global torch default device because it can break
+        # distributed dataloader sampling in multi-GPU training.
+        if os.environ.get("RAPIDCADPY_SET_TORCH_DEFAULT_DEVICE", "0") == "1":
+            torch.set_default_device(self.device)
 
         print(f"TorchFEMKernel initialized with device: {self.device}")
 
@@ -203,7 +205,6 @@ class TorchFEMKernel(FEAKernel):
             element_type,
             geo_props,
         )
-
 
         return results
 
@@ -481,17 +482,25 @@ class TorchFEMKernel(FEAKernel):
             if os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  ✓ Applied {load.__class__.__name__} ({num_nodes} nodes)")
 
-        # Fail fast if no constraints or loads — avoid hanging MINRES on singular K
+        # Warn if no constraints or loads (geometry may be out of bounds)
         if total_constrained == 0:
-            raise ValueError(
+            import warnings
+
+            warnings.warn(
                 "No nodes were constrained — the geometry likely sits outside the "
-                "design domain or boundary-condition regions. FEA cannot proceed "
-                "with a singular (unconstrained) stiffness matrix."
+                "design domain or boundary-condition regions. FEA may produce "
+                "incorrect results with a singular (unconstrained) stiffness matrix.",
+                UserWarning,
+                stacklevel=2,
             )
         if total_loaded == 0:
-            raise ValueError(
+            import warnings
+
+            warnings.warn(
                 "No load nodes found — the applied loads do not intersect the "
-                "meshed geometry. Check that the load regions overlap the part."
+                "meshed geometry. Check that the load regions overlap the part.",
+                UserWarning,
+                stacklevel=2,
             )
 
         # Check connectivity between loaded and constrained nodes
