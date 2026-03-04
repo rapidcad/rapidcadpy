@@ -7,12 +7,18 @@ This module provides:
 """
 
 from abc import ABC, abstractmethod
+import os
+import sys
+import threading
 import traceback
 from typing import Any, List, Optional, Tuple, TYPE_CHECKING, Union
 import numpy as np
 import pyvista as pv
 
-from ..boundary_conditions import FixedConstraint, PointLoad
+from ..boundary_conditions import FixedConstraint, PointLoad  #
+import logging
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ...shape import Shape
@@ -519,6 +525,9 @@ class FEAAnalyzer:
         def _extract_bounds(
             bounds: Optional[dict],
         ) -> Optional[Tuple[float, float, float, float, float, float]]:
+        def _extract_bounds(
+            bounds: Optional[dict],
+        ) -> Optional[Tuple[float, float, float, float, float, float]]:
             if not isinstance(bounds, dict):
                 return None
             keys = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
@@ -555,8 +564,36 @@ class FEAAnalyzer:
 
         # ── Debug mode: pure matplotlib, no meshing needed ───────────────────────
         if display == "debug":
+            import matplotlib
+
+            running_on_main_thread = (
+                threading.current_thread() is threading.main_thread()
+            )
+            headless_env = (
+                sys.platform.startswith("linux")
+                and not os.environ.get("DISPLAY")
+                and not os.environ.get("WAYLAND_DISPLAY")
+            )
+            use_non_gui_backend = (
+                bool(filename)
+                or (not interactive)
+                or (not running_on_main_thread)
+                or headless_env
+            )
+
+            if use_non_gui_backend:
+                try:
+                    matplotlib.use("Agg", force=True)
+                except Exception:
+                    pass
+
             import matplotlib.pyplot as plt
             from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
+            from ..boundary_conditions import (
+                FixedConstraint,
+                PointLoad,
+                DistributedLoad,
+            )
             from ..boundary_conditions import (
                 FixedConstraint,
                 PointLoad,
@@ -572,6 +609,12 @@ class FEAAnalyzer:
                 geometry_bounds = FEAAnalyzer._get_geometry_bounds(self.shape)
             if not geometry_bounds:
                 geometry_bounds = {
+                    "x_min": 0,
+                    "x_max": 1,
+                    "y_min": 0,
+                    "y_max": 1,
+                    "z_min": 0,
+                    "z_max": 1,
                     "x_min": 0,
                     "x_max": 1,
                     "y_min": 0,
@@ -596,9 +639,15 @@ class FEAAnalyzer:
                     x0,
                     y0,
                     z0,
+                    x0,
+                    y0,
+                    z0,
                     max(x1 - x0, 1e-9),
                     max(y1 - y0, 1e-9),
                     max(z1 - z0, 1e-9),
+                    alpha=alpha,
+                    color=color,
+                    shade=False,
                     alpha=alpha,
                     color=color,
                     shade=False,
@@ -630,6 +679,11 @@ class FEAAnalyzer:
                             loc[2],
                             color="tab:red",
                             s=100,
+                            loc[0],
+                            loc[1],
+                            loc[2],
+                            color="tab:red",
+                            s=100,
                             label=label if i == 0 else None,
                         )
                     # String locations ('x_min', 'top', …) — skip,
@@ -637,6 +691,14 @@ class FEAAnalyzer:
                 elif hasattr(bc, "center") and hasattr(bc, "radius"):
                     # CylindricalConstraint
                     cx_b, cy_b, cz_b = bc.center
+                    ax.scatter(
+                        cx_b,
+                        cy_b,
+                        cz_b,
+                        color="tab:red",
+                        s=100,
+                        label=label if i == 0 else None,
+                    )
                     ax.scatter(
                         cx_b,
                         cy_b,
@@ -668,6 +730,14 @@ class FEAAnalyzer:
                             s=100,
                             label=label if i == 0 else None,
                         )
+                        ax.scatter(
+                            lx,
+                            ly,
+                            lz,
+                            color="tab:green",
+                            s=100,
+                            label=label if i == 0 else None,
+                        )
 
                 elif isinstance(ld, DistributedLoad) and isinstance(ld.location, dict):
                     loc = ld.location
@@ -688,12 +758,21 @@ class FEAAnalyzer:
                             "-y": (0, -1, 0),
                             "z": (0, 0, 1),
                             "-z": (0, 0, -1),
+                            "x": (1, 0, 0),
+                            "-x": (-1, 0, 0),
+                            "y": (0, 1, 0),
+                            "-y": (0, -1, 0),
+                            "z": (0, 0, 1),
+                            "-z": (0, 0, -1),
                         }
                         vx, vy, vz = _axis_map.get(direction, (0, 0, 1))
                     else:
                         vx, vy, vz = float(force[0]), float(force[1]), float(force[2])
                         fmag = (vx**2 + vy**2 + vz**2) ** 0.5 + 1e-10
                         vx, vy, vz = vx / fmag, vy / fmag, vz / fmag
+                    ax.quiver(
+                        lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen"
+                    )
                     ax.quiver(
                         lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen"
                     )
@@ -712,6 +791,11 @@ class FEAAnalyzer:
             if filename:
                 fig.savefig(filename, dpi=150)
                 print(f"✓ Saved debug visualization to: {filename}")
+            elif use_non_gui_backend:
+                print(
+                    "⚠ Debug visualization running in non-GUI mode "
+                    "(headless/non-main thread); skipping plt.show()."
+                )
             else:
                 plt.show()
             plt.close(fig)
@@ -721,11 +805,17 @@ class FEAAnalyzer:
         # Configure for headless/non-interactive mode if needed
         if filename:
             interactive = False
-            pv.start_xvfb()  # Start virtual framebuffer for headless environments
             pv.OFF_SCREEN = True
 
-        # Visualize boundary conditions
-        plotter = pv.Plotter(window_size=list(window_size), off_screen=not interactive)
+        # On macOS, vtkCocoaRenderWindow requires the main thread to create
+        # NSWindow even when off_screen=True.  Ensure VTK uses its true
+        # framebuffer-only code path (set before Plotter construction).
+        os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
+
+        plotter = pv.Plotter(window_size=list(window_size), off_screen=True)
+        logger.debug(
+            f"Renderer {plotter.renderer.GetClassName()} initialized for visualization."
+        )
 
         # Add design-space box (wireframe) if bounds are available
         has_design_space = _add_design_space_box(plotter, self.load_case.bounds)
@@ -750,12 +840,9 @@ class FEAAnalyzer:
                     )
                 )
             except Exception as e:
-                if display in ["conditions", "mesh"]:
-                    print(f"Could not show debug mesh: {e}")
-                    raise ValueError(
-                        f"Error applying boundary conditions: {e} \n {traceback.format_exc()} "
-                    ) from None
-                print(f"Could not visualize mesh for design space mode: {e}")
+                raise ValueError(
+                    f"Error applying boundary conditions: {e} \n {traceback.format_exc()} "
+                )
 
         # Add the main mesh (semi-transparent) when available
         if pv_mesh is not None:
@@ -846,6 +933,9 @@ class FEAAnalyzer:
         # Show or save
         if filename:
             # Save to file
+            logger.info(
+                f"Saving visualization to: {filename} using renderer {plotter.renderer.GetClassName()}"
+            )
             plotter.screenshot(filename)
             print(f"✓ Saved boundary condition visualization to: {filename}")
             plotter.close()
@@ -942,3 +1032,4 @@ class FEAAnalyzer:
         except Exception as e:
             logger.warning(f"Bounding box calculation failed: {e}")
             return None
+

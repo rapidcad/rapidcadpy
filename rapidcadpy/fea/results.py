@@ -265,6 +265,7 @@ class FEAResults:
         displacement_scale: float = 10.0,
         window_size: Tuple[int, int] = (1600, 600),
         transparent_background: bool = False,
+        interactive: bool = False,
     ) -> str:
         """
         Save FEA visualization to an image file.
@@ -480,7 +481,6 @@ class OptimizationResult:
         """
         if filename:
             interactive = False
-            pv.start_xvfb()  # starts a virtual framebuffer
             pv.OFF_SCREEN = True
 
         if display == "convergence":
