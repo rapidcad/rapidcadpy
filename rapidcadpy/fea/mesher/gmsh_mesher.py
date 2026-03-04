@@ -46,7 +46,9 @@ class GmshMesher(MesherBase):
         initialized_here = False
         try:
             if not gmsh.isInitialized():
-                gmsh.initialize()
+                # "-nopopup" suppresses the macOS NSWindow/VTK GUI that gmsh
+                # tries to open (and crashes on) when called from a background thread.
+                gmsh.initialize(["", "-nopopup"])
                 initialized_here = True
 
             if not verbose:

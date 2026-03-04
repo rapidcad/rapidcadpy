@@ -5,9 +5,7 @@ This mesher runs GMSH as a subprocess, avoiding library conflicts with OCP/OCC.
 It requires GMSH to be installed and available in PATH.
 """
 
-import shutil
 import subprocess
-import sys
 import tempfile
 from pathlib import Path
 from typing import Literal, Tuple
@@ -26,30 +24,24 @@ class GmshSubprocessMesher(MesherBase):
     process rather than using Python bindings.
     """
 
-    def __init__(self, num_threads: int = 0, gmsh_path: str = "gmsh"):
+    def __init__(self, num_threads: int = 0):
         """
         Initialize GMSH subprocess mesher.
 
         Args:
             num_threads: Number of threads for parallel meshing (0 = auto-detect)
-            gmsh_path: Path to gmsh executable (default: 'gmsh' from PATH)
+
+        The GMSH executable is resolved from the ``GMSH_EXECUTABLE_PATH``
+        environment variable, falling back to ``gmsh`` (expected in PATH).
         """
         super().__init__(num_threads)
-        # shutil.which searches the current process PATH - works when launched via
-        # conda activate, but not when the debugger/server spawns Python directly.
-        # Fallback: gmsh lives in the same bin/ dir as the Python executable when
-        # running inside a conda env (e.g. /opt/.../envs/ocp/bin/gmsh).
-        resolved = shutil.which(gmsh_path)
-        if resolved is None:
-            candidate = Path(sys.executable).parent / gmsh_path
-            resolved = str(candidate) if candidate.exists() else gmsh_path
-        self.gmsh_path = resolved
+        self.gmsh_path = os.environ.get("GMSH_EXECUTABLE_PATH", "gmsh")
 
     @classmethod
     def is_available(cls) -> bool:
-        """Check if GMSH is available in PATH."""
+        """Check if GMSH is available."""
         try:
-            gmsh = shutil.which("gmsh") or str(Path(sys.executable).parent / "gmsh")
+            gmsh = os.environ.get("GMSH_EXECUTABLE_PATH", "gmsh")
             result = subprocess.run(
                 [gmsh, "--version"], capture_output=True, text=True, timeout=10
             )
@@ -111,6 +103,10 @@ class GmshSubprocessMesher(MesherBase):
         # Create temporary output file
         with tempfile.NamedTemporaryFile(suffix=".msh", delete=False) as tmp:
             msh_path = tmp.name
+            print(f"  Using temporary file for GMSH output: {msh_path}")
+            print(
+                f"  Running GMSH meshing on {filename} with element type {element_type}..."
+            )
 
         try:
             # Build GMSH command with robustness options
@@ -119,17 +115,15 @@ class GmshSubprocessMesher(MesherBase):
                 str(filename),
                 "-3",  # 3D meshing
                 "-format",
-                "msh4",  # MSH 4.1 format
+                "msh2",
                 "-o",
                 str(msh_path),
                 "-clmax",
                 str(mesh_size),  # Maximum element size
                 # Robustness options
-                "-algo",
-                "del3d",  # Delaunay 3D (generally more robust for complex 3D shapes)
-                # "-algo", "front3d", # Alternative: Frontal 3D (try if Delaunay fails)
-                "-optimize_netgen",  # Optimize mesh quality using Netgen algorithm
-                "-check",  # Check for mesh errors
+                # "-algo",
+                # "del3d",  # Delaunay 3D (generally more robust for complex 3D shapes)
+                # "-check",  # Check for mesh errors
             ]
 
             # Add element order (1 for linear, 2 for quadratic)
@@ -143,9 +137,7 @@ class GmshSubprocessMesher(MesherBase):
             # Run GMSH
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  Running GMSH mesher: {' '.join(cmd)}")
-                result = subprocess.run(
-                    cmd, check=True, capture_output=True, text=True
-                )
+                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
                 if result.stdout:
                     print(result.stdout)
             else:
@@ -161,8 +153,7 @@ class GmshSubprocessMesher(MesherBase):
             # meshio cell type names: "tetra" = tet4, "tetra10" = tet10
             meshio_type_map = {"tet4": "tetra", "tet10": "tetra10"}
             meshio_type = meshio_type_map[element_type]
-
-            mesh = meshio.read(msh_path)
+            mesh = meshio.read(msh_path, file_format="gmsh")
             nodes = torch.tensor(mesh.points, dtype=torch.float32)
 
             cells = None
@@ -192,11 +183,14 @@ class GmshSubprocessMesher(MesherBase):
                 f"Command: {' '.join(cmd)}\n"
                 f"Error: {e.stderr if e.stderr else 'No error output'}"
             )
+        except SystemExit as exc:
+            raise RuntimeError(
+                f"meshio exited unexpectedly while reading mesh file (SystemExit {exc}). "
+                "The mesh file may be corrupted or empty."
+            ) from exc
         finally:
             # Clean up temporary file
             try:
                 Path(msh_path).unlink()
             except Exception:
                 pass
-
-

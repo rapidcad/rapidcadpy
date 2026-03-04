@@ -749,7 +749,7 @@ class PointLoad(Load):
                     + (rel[:, 1] / ry) ** 2
                     + (rel[:, 2] / rz) ** 2
                 )
-                load_nodes = candidate_nodes#[ellipsoid <= 1.0 + 1e-9]
+                load_nodes = candidate_nodes  # [ellipsoid <= 1.0 + 1e-9]
             else:
                 load_nodes = candidate_nodes
         else:

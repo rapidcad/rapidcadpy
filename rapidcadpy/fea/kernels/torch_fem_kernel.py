@@ -204,7 +204,6 @@ class TorchFEMKernel(FEAKernel):
             geo_props,
         )
 
-
         return results
 
     # ------------------------------------------------------------------
