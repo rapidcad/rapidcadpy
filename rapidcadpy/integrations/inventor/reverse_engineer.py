@@ -82,7 +82,7 @@ class InventorReverseEngineer:
         num_features = part_features.Count
         for i in range(1, num_features + 1):
             feature = part_features.Item(i)
-            
+
             if feature.Suppressed:
                 continue
 
@@ -175,13 +175,13 @@ class InventorReverseEngineer:
                 if faces.Count > 0:
                     # Look at one face of the chamfer
                     c_face = faces.Item(1)
-                    
+
                     # Look at adjacent faces via edges
                     for j in range(1, c_face.Edges.Count + 1):
                         edge = c_face.Edges.Item(j)
                         for k in range(1, edge.Faces.Count + 1):
                             adj_face = edge.Faces.Item(k)
-                            
+
                             # Check if this face belongs to another feature
                             try:
                                 if hasattr(adj_face, "CreatedByFeature"):
@@ -243,83 +243,95 @@ class InventorReverseEngineer:
         """Analyze and generate code for a single chamfer feature."""
         # Detect chamfer by comparing edges before and after suppression
         try:
-             # Get original edges (unchamfered if we roll back)
-             # But here we are at the point where chamfer exists.
-             # So the current state has NEW edges from chamfer, and MISSING edges that were chamfered.
-             
-             # This logic used to be global in _analyze_chamfer_feature but user wants it per feature
-             # Since we are iterating features in order, we can try to suppress THIS feature
-             # to find out which edge it modifies.
-             
-             # 1. Get current edges (with chamfer)
-             current_edges = {
-                (e.Geometry.Center.X, e.Geometry.Radius, e.Geometry.Center.Y, e.Geometry.Center.Z)
+            # Get original edges (unchamfered if we roll back)
+            # But here we are at the point where chamfer exists.
+            # So the current state has NEW edges from chamfer, and MISSING edges that were chamfered.
+
+            # This logic used to be global in _analyze_chamfer_feature but user wants it per feature
+            # Since we are iterating features in order, we can try to suppress THIS feature
+            # to find out which edge it modifies.
+
+            # 1. Get current edges (with chamfer)
+            current_edges = {
+                (
+                    e.Geometry.Center.X,
+                    e.Geometry.Radius,
+                    e.Geometry.Center.Y,
+                    e.Geometry.Center.Z,
+                )
                 for e in self.comp_def.SurfaceBodies.Item(1).Edges
-                if e.CurveType == 5124 # kCircleCurve
-             }
-             
-             # 2. Suppress this chamfer
-             chamfer_feature.Suppressed = True
-             
-             # 3. Get edges without chamfer (original state)
-             original_edges_objs = []
-             surface_bodies = self.comp_def.SurfaceBodies
-             if surface_bodies.Count > 0:
-                 for e in surface_bodies.Item(1).Edges:
-                     if e.CurveType == 5124:
-                         original_edges_objs.append(e)
-             
-             original_edges = {
-                (e.Geometry.Center.X, e.Geometry.Radius, e.Geometry.Center.Y, e.Geometry.Center.Z)
+                if e.CurveType == 5124  # kCircleCurve
+            }
+
+            # 2. Suppress this chamfer
+            chamfer_feature.Suppressed = True
+
+            # 3. Get edges without chamfer (original state)
+            original_edges_objs = []
+            surface_bodies = self.comp_def.SurfaceBodies
+            if surface_bodies.Count > 0:
+                for e in surface_bodies.Item(1).Edges:
+                    if e.CurveType == 5124:
+                        original_edges_objs.append(e)
+
+            original_edges = {
+                (
+                    e.Geometry.Center.X,
+                    e.Geometry.Radius,
+                    e.Geometry.Center.Y,
+                    e.Geometry.Center.Z,
+                )
                 for e in original_edges_objs
-             }
-             
-             # 4. Unsuppress chamfer to restore state
-             chamfer_feature.Suppressed = False
-             
-             # 5. Find the edge that exists in original but NOT in current
-             # That is the edge that got chamfered away
-             chamfered_edges = original_edges - current_edges
-             
-             if chamfered_edges:
-                 # Extract parameters
-                 chamfer_def = chamfer_feature.Definition
-                 
-                 angle = 0.785 # 45 deg
-                 distance = 0.1
-                 
-                 # Check chamfer type
-                 # kTwoDistancesChamfer = 51201
-                 # kDistanceAndAngleChamfer = 51202
-                 
-                 try:
-                     if hasattr(chamfer_def, "Distance"):
-                         distance = chamfer_def.Distance.Value
-                     elif hasattr(chamfer_def, "DistanceOne"):
-                         distance = chamfer_def.DistanceOne.Value
-                     
-                     if hasattr(chamfer_def, "Angle"):
-                         angle = chamfer_def.Angle.Value
-                 except Exception:
-                     pass
-                 
-                 for (cx, cr, cy, cz) in chamfered_edges:
-                      # Generate code
-                      self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
-                      self.generated_code.append(
+            }
+
+            # 4. Unsuppress chamfer to restore state
+            chamfer_feature.Suppressed = False
+
+            # 5. Find the edge that exists in original but NOT in current
+            # That is the edge that got chamfered away
+            chamfered_edges = original_edges - current_edges
+
+            if chamfered_edges:
+                # Extract parameters
+                chamfer_def = chamfer_feature.Definition
+
+                angle = 0.785  # 45 deg
+                distance = 0.1
+
+                # Check chamfer type
+                # kTwoDistancesChamfer = 51201
+                # kDistanceAndAngleChamfer = 51202
+
+                try:
+                    if hasattr(chamfer_def, "Distance"):
+                        distance = chamfer_def.Distance.Value
+                    elif hasattr(chamfer_def, "DistanceOne"):
+                        distance = chamfer_def.DistanceOne.Value
+
+                    if hasattr(chamfer_def, "Angle"):
+                        angle = chamfer_def.Angle.Value
+                except Exception:
+                    pass
+
+                for cx, cr, cy, cz in chamfered_edges:
+                    # Generate code
+                    self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
+                    self.generated_code.append(
                         f"app.chamfer_edge(x={self._fmt(cx)}, radius={self._fmt(cr)}, angle={self._fmt(angle)}, distance={self._fmt(distance)})"
-                      )
-                      self.generated_code.append("")
-             else:
-                 # Fallback to old extraction method if diff method fails
-                 chamfer_info = self._extract_chamfer_info(chamfer_feature)
-                 if chamfer_info and "x" in chamfer_info:
+                    )
+                    self.generated_code.append("")
+            else:
+                # Fallback to old extraction method if diff method fails
+                chamfer_info = self._extract_chamfer_info(chamfer_feature)
+                if chamfer_info and "x" in chamfer_info:
                     self.generated_code.append("")
                     self.generated_code.append(f"# Chamfer: {chamfer_feature.Name}")
                     chamfer_code = self._generate_chamfer_code(chamfer_info)
                     self.generated_code.extend(chamfer_code)
-                 else:
-                    self.generated_code.append(f"# Chamfer: Could not extract edge position for {chamfer_feature.Name} using edge diff or direct property access")
+                else:
+                    self.generated_code.append(
+                        f"# Chamfer: Could not extract edge position for {chamfer_feature.Name} using edge diff or direct property access"
+                    )
 
         except Exception as e:
             self.generated_code.append(
@@ -574,9 +586,9 @@ class InventorReverseEngineer:
 
             # Follow the chain
             # Limit iterations to avoid infinite loops in complex geometries
-            max_chain_length = len(elements) * 2 
+            max_chain_length = len(elements) * 2
             chain_counter = 0
-            
+
             while chain_counter < max_chain_length:
                 chain_counter += 1
                 found_next = False
@@ -595,24 +607,24 @@ class InventorReverseEngineer:
                     # Check if connects reversely (start of next == current end handled above)
                     # Check if end of next == current end (need to reverse next)
                     elif self._points_equal(current_end, next_element["end"]):
-                         # Must reverse this element to maintain chain direction
-                         reversed_element = next_element.copy()
-                         reversed_element["start"] = next_element["end"]
-                         reversed_element["end"] = next_element["start"]
-                         if next_element["type"] == "arc":
-                             # Swap angles for arc
-                             reversed_element["start_angle"] = next_element["end_angle"]
-                             reversed_element["end_angle"] = next_element["start_angle"]
-                             # For arcs, traversing in reverse changes CW/CCW sense
-                             # Inventor arcs are typically CCW. Code gen assumes P1->P2.
-                             # Three point arc code gen handles direction relative to midpoint.
-                             pass
-                             
-                         current_path.append(reversed_element)
-                         next_element["used"] = True # Mark original as used
-                         current_end = reversed_element["end"]
-                         found_next = True
-                         break
+                        # Must reverse this element to maintain chain direction
+                        reversed_element = next_element.copy()
+                        reversed_element["start"] = next_element["end"]
+                        reversed_element["end"] = next_element["start"]
+                        if next_element["type"] == "arc":
+                            # Swap angles for arc
+                            reversed_element["start_angle"] = next_element["end_angle"]
+                            reversed_element["end_angle"] = next_element["start_angle"]
+                            # For arcs, traversing in reverse changes CW/CCW sense
+                            # Inventor arcs are typically CCW. Code gen assumes P1->P2.
+                            # Three point arc code gen handles direction relative to midpoint.
+                            pass
+
+                        current_path.append(reversed_element)
+                        next_element["used"] = True  # Mark original as used
+                        current_end = reversed_element["end"]
+                        found_next = True
+                        break
 
                 if not found_next:
                     break
@@ -672,27 +684,29 @@ class InventorReverseEngineer:
 
         # Start at the first point
         start_pt = path[0]["start"]
-        
+
         # Build the command chain as a single line
-        code_str = f"{wp_var}.move_to({self._fmt(start_pt[0])}, {self._fmt(start_pt[1])})"
+        code_str = (
+            f"{wp_var}.move_to({self._fmt(start_pt[0])}, {self._fmt(start_pt[1])})"
+        )
 
         for element in path:
             end_pt = element["end"]
-            
+
             if element["type"] == "line":
                 code_str += f".line_to({self._fmt(end_pt[0])}, {self._fmt(end_pt[1])})"
             elif element["type"] == "arc":
                 # Use the extracted midpoint directly
                 # This avoids issues with arc direction (CW vs CCW) and angle calculations
                 if "mid" in element:
-                     mid_x, mid_y = element["mid"]
+                    mid_x, mid_y = element["mid"]
                 else:
                     # Fallback for older extraction logic
                     center_pt = element["center"]
                     radius = element["radius"]
                     start_angle = element["start_angle"]
                     end_angle = element["end_angle"]
-                    
+
                     # Calculate midpoint on the arc for three_point_arc
                     # Assume CCW traversal for Inventor SketchArcs
                     diff = end_angle - start_angle
@@ -700,18 +714,18 @@ class InventorReverseEngineer:
                         diff += 2 * math.pi
                     while diff > 2 * math.pi:
                         diff -= 2 * math.pi
-                    
+
                     mid_angle = start_angle + (diff / 2.0)
                     mid_x = center_pt[0] + radius * math.cos(mid_angle)
                     mid_y = center_pt[1] + radius * math.sin(mid_angle)
-                
+
                 code_str += (
                     f".three_point_arc("
                     f"p1=({self._fmt(mid_x)}, {self._fmt(mid_y)}), "
                     f"p2=({self._fmt(end_pt[0])}, {self._fmt(end_pt[1])})"
                     f")"
                 )
-                
+
         self.generated_code.append(code_str)
 
     def _analyze_feature(
@@ -720,21 +734,21 @@ class InventorReverseEngineer:
         """Analyze extrude or revolve feature."""
         try:
             name = feature.Name
-            
+
             if feat_type == "extrude":
                 # Get Extrude details (distance, operation type)
                 extent = feature.Extent
                 extent_type = extent.Type
-                
+
                 dist = 1.0
                 symmetric = False
-                
+
                 try:
                     # In newer Inventor API, it might be separate defined object
                     # Simplified for typical extensive distance:
-                    
+
                     is_distance_extent = (
-                        extent_type == constants.kDistanceExtent 
+                        extent_type == constants.kDistanceExtent
                         or extent_type == constants.kDistanceExtentObject
                     )
                     if is_distance_extent:  # Distance
@@ -744,37 +758,45 @@ class InventorReverseEngineer:
                         try:
                             extent = win32.CastTo(extent, "DistanceExtent")
                         except Exception:
-                            print(f"Warning: Could not cast extent for {name} to DistanceExtent")
+                            print(
+                                f"Warning: Could not cast extent for {name} to DistanceExtent"
+                            )
 
                         try:
-                             dist = extent.Distance.Value
+                            dist = extent.Distance.Value
                         except Exception as e:
-                             print(f"DEBUG: Error getting Distance.Value for {name}: {e}")
-                             dist = 1.0 # Default fallback
-                        
+                            print(
+                                f"DEBUG: Error getting Distance.Value for {name}: {e}"
+                            )
+                            dist = 1.0  # Default fallback
+
                         # Determine direction to set sign of distance
                         try:
                             direction = extent.Direction
-                            
-                            if direction == constants.kNegativeExtentDirection: # Negative
-                                 dist = -dist
-                            elif direction == constants.kSymmetricExtentDirection: # Symmetric
-                                 symmetric = True
+
+                            if (
+                                direction == constants.kNegativeExtentDirection
+                            ):  # Negative
+                                dist = -dist
+                            elif (
+                                direction == constants.kSymmetricExtentDirection
+                            ):  # Symmetric
+                                symmetric = True
                         except Exception as e:
                             print(f"DEBUG: Error getting Direction for {name}: {e}")
 
                 except Exception as e:
                     print(f"Warning: Could not get extrude distance for {name}: {e}")
-                
+
                 # Check for symmetric
                 # Might be property on Feature or Definition
-                
+
                 op_type = feature.Operation
                 # kJoinOperation = 20737
                 # kCutOperation = 20738
                 # kIntersectOperation = 20739
                 # kNewBodyOperation = 20740
-                
+
                 op_str = "NewBodyFeatureOperation"
                 if op_type == 20737:
                     op_str = "JoinBodyFeatureOperation"
@@ -782,56 +804,54 @@ class InventorReverseEngineer:
                     op_str = "Cut"
                 elif op_type == constants.kIntersectOperation:
                     op_str = "Intersect"
-                
-                self.generated_code.append(
-                    f"# Extrude: {name}"
-                )
+
+                self.generated_code.append(f"# Extrude: {name}")
                 if symmetric:
                     self.generated_code.append(
-                         f'{wp_var}.extrude(distance={self._fmt(dist)}, operation="{op_str}", symmetric=True)'
+                        f'{wp_var}.extrude(distance={self._fmt(dist)}, operation="{op_str}", symmetric=True)'
                     )
-                else: 
+                else:
                     self.generated_code.append(
                         f'{wp_var}.extrude(distance={self._fmt(dist)}, operation="{op_str}")'
                     )
                 self.generated_code.append("")
-                
+
             elif feat_type == "revolve":
                 # Revolve details
                 angle_rad = 6.283185  # 360 deg
                 try:
                     extent = feature.Extent
-                    if extent.Type == constants.kAngleExtent: 
-                         angle_rad = extent.Angle.Value
+                    if extent.Type == constants.kAngleExtent:
+                        angle_rad = extent.Angle.Value
                 except Exception:
                     pass
-                
+
                 op_type = feature.Operation
                 # Operation mapping (RapidCAD Py constants/strings)
                 # kJoinOperation = 20737
                 # kCutOperation = 20738
                 # kIntersectOperation = 20739
                 # kNewBodyOperation = 20740
-                
+
                 op_str = "NewBodyFeatureOperation"
                 if op_type == 20737:
                     op_str = "JoinBodyFeatureOperation"
                 elif op_type == constants.kCutOperation:
-                    op_str = "Cut" # Matches Workplane.revolve logic
+                    op_str = "Cut"  # Matches Workplane.revolve logic
                 elif op_type == 20739:
                     op_str = "Intersect"
-                
+
                 # Axis determination
                 # RapidCAD Py Revolve expects axis="X", "Y", or "Z"
-                axis_char = "X" # Default
-                
+                axis_char = "X"  # Default
+
                 try:
                     if hasattr(feature, "AxisEntity"):
                         axis_ent = feature.AxisEntity
                         # Check for WorkAxis or Line alignment
                         # WorkAxes often have names like "X Axis", "Y Axis", "Z Axis"
                         axis_name = getattr(axis_ent, "Name", "")
-                        
+
                         if "X" in axis_name and "Axis" in axis_name:
                             axis_char = "X"
                         elif "Y" in axis_name and "Axis" in axis_name:
@@ -842,29 +862,31 @@ class InventorReverseEngineer:
                             # Try geometry analysis
                             geom = None
                             if hasattr(axis_ent, "Geometry"):
-                                geom = axis_ent.Geometry # Line or LineSegment
+                                geom = axis_ent.Geometry  # Line or LineSegment
                             elif hasattr(axis_ent, "Line"):
                                 geom = axis_ent.Line.Geometry
-                            
+
                             if geom:
                                 dir_vec = None
                                 if hasattr(geom, "Direction"):
                                     dir_vec = geom.Direction
-                                elif hasattr(geom, "StartPoint") and hasattr(geom, "EndPoint"):
+                                elif hasattr(geom, "StartPoint") and hasattr(
+                                    geom, "EndPoint"
+                                ):
                                     # Create direction from points
                                     dx = geom.EndPoint.X - geom.StartPoint.X
                                     dy = geom.EndPoint.Y - geom.StartPoint.Y
                                     dz = geom.EndPoint.Z - geom.StartPoint.Z
-                                    mag = math.sqrt(dx*dx + dy*dy + dz*dz)
+                                    mag = math.sqrt(dx * dx + dy * dy + dz * dz)
                                     if mag > 1e-9:
-                                        dir_vec = [dx/mag, dy/mag, dz/mag]
-                                
+                                        dir_vec = [dx / mag, dy / mag, dz / mag]
+
                                 if dir_vec:
                                     # Check alignment (handling win32 objects or lists)
                                     vx = 0.0
                                     vy = 0.0
                                     vz = 0.0
-                                    
+
                                     # Use getattr to avoid static type checker complaints about missing attributes
                                     if hasattr(dir_vec, "X"):
                                         vx = getattr(dir_vec, "X")
@@ -883,28 +905,29 @@ class InventorReverseEngineer:
                                             vz = dir_vec[2]
                                         else:
                                             vz = 0.0
-                                    
-                                    if abs(vx) > 0.9: axis_char = "X"
-                                    elif abs(vy) > 0.9: axis_char = "Y"
-                                    elif abs(vz) > 0.9: axis_char = "Z"
+
+                                    if abs(vx) > 0.9:
+                                        axis_char = "X"
+                                    elif abs(vy) > 0.9:
+                                        axis_char = "Y"
+                                    elif abs(vz) > 0.9:
+                                        axis_char = "Z"
                 except Exception as e:
                     print(f"Warning: Could not determine revolve axis: {e}")
-                
+
                 # Angle in "Turns" (0.0 - 1.0) because InventorWorkPlane.revolve does angle * 2 * pi
                 # But wait, InventorWorkPlane.revolve calls AddByAngle(..., angle * 2 * PI, ...)
                 # Inventor AddByAngle expects Radians.
                 # So if we pass 1.0 (turn), it passes 2*PI radians (360 deg). Correct.
                 # So we need to convert radians to turns.
                 angle_turns = angle_rad
-                
+
+                self.generated_code.append(f"# Revolve: {name}")
                 self.generated_code.append(
-                    f"# Revolve: {name}"
-                )
-                self.generated_code.append(
-                    f"{wp_var}.revolve(angle={self._fmt(angle_turns)}, axis=\"{axis_char}\", operation=\"{op_str}\")"
+                    f'{wp_var}.revolve(angle={self._fmt(angle_turns)}, axis="{axis_char}", operation="{op_str}")'
                 )
                 self.generated_code.append("")
-                
+
         except Exception as e:
             self.generated_code.append(f"# Error analyzing feature {feature.Name}: {e}")
             self.generated_code.append("")
@@ -1077,18 +1100,21 @@ class InventorReverseEngineer:
                     try:
                         # Use geometry center (on axis) instead of start point (on profile)
                         start_edge = thread_feature.StartEdge.Item(1)
-                        if start_edge.GeometryType == constants.kCircleCurve or start_edge.GeometryType == 5124: # kCircleCurve
-                             center = start_edge.Geometry.Center
-                             thread_info["x"] = round(center.X, 6)
-                             thread_info["y"] = round(center.Y, 6)
-                             thread_info["z"] = round(center.Z, 6)
+                        if (
+                            start_edge.GeometryType == constants.kCircleCurve
+                            or start_edge.GeometryType == 5124
+                        ):  # kCircleCurve
+                            center = start_edge.Geometry.Center
+                            thread_info["x"] = round(center.X, 6)
+                            thread_info["y"] = round(center.Y, 6)
+                            thread_info["z"] = round(center.Z, 6)
                         else:
-                             # Fallback for non-circular start edges (rare for threads)
-                             pt = start_edge.Geometry.StartPoint
-                             thread_info["x"] = round(pt.X, 6)
-                             thread_info["y"] = round(pt.Y, 6)
-                             thread_info["z"] = round(pt.Z, 6)
-                             
+                            # Fallback for non-circular start edges (rare for threads)
+                            pt = start_edge.Geometry.StartPoint
+                            thread_info["x"] = round(pt.X, 6)
+                            thread_info["y"] = round(pt.Y, 6)
+                            thread_info["z"] = round(pt.Z, 6)
+
                         radius = start_edge.Geometry.Radius
                         thread_info["radius"] = round(radius, 6)
                     except Exception as e:
@@ -1286,4 +1312,3 @@ class InventorReverseEngineer:
         code_lines.append(")")
 
         return code_lines
-
