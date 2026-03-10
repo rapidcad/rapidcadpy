@@ -59,7 +59,7 @@ class OccSketch3D(Sketch3D):
         from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
         from typing import cast
 
-        from .integrations.occ.shape import OccShape
+        from .shape import OccShape
 
         spine = self.wire()
         radius = diameter / 2.0
@@ -159,7 +159,7 @@ class OccSketch3D(Sketch3D):
         from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
         from typing import cast
 
-        from .integrations.occ.shape import OccShape
+        from .shape import OccShape
 
         spine = self.wire()
         profile_wire = profile._make_wire()

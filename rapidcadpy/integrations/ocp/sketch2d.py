@@ -177,7 +177,7 @@ class OccSketch2D(Sketch2D):
 
         # Use BRepBuilderAPI_MakeFace to create face from wire
         face_builder = BRepBuilderAPI_MakeFace(wire)
-        
+
         if not face_builder.IsDone():
             if self._silent_fail_enabled():
                 return None
@@ -225,11 +225,13 @@ class OccSketch2D(Sketch2D):
 
             # Create translation transformation
             translation = gp_Trsf()
-            translation.SetTranslation(gp_Vec(
-                float(translation_vec[0]),
-                float(translation_vec[1]),
-                float(translation_vec[2])
-            ))
+            translation.SetTranslation(
+                gp_Vec(
+                    float(translation_vec[0]),
+                    float(translation_vec[1]),
+                    float(translation_vec[2]),
+                )
+            )
 
             # Transform the face
             transform_builder = BRepBuilderAPI_Transform(face, translation, True)
@@ -249,9 +251,11 @@ class OccSketch2D(Sketch2D):
             )
 
             # Create the prism (extrusion)
-            prism_builder: Any = BRepPrimAPI_MakePrism(transformed_face, extrude_vector, True)
+            prism_builder: Any = BRepPrimAPI_MakePrism(
+                transformed_face, extrude_vector, True
+            )
             extruded_shape = prism_builder.Shape()
-            
+
             # Fix the extruded shape
             fixer = ShapeFix_Shape(extruded_shape)
             fixer.SetPrecision(1e-6)

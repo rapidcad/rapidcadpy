@@ -464,7 +464,7 @@ class InventorApp(App):
             # Internal thread in a hole with full position specification
             app.add_thread(x=0, y=0, z=5, radius=0.35, axis='Z',
                           designation="M7x1", thread_type="internal")
-            
+
             # Thread with specified direction and length
             app.add_thread(x=37.1925, radius=4.0, axis='X', thread_axis='-X',
                           designation="M80x2", thread_type="external", length=1.7)
@@ -506,41 +506,47 @@ class InventorApp(App):
                 # Relaxed position matching: check if the provided point (x,y,z) is consistent with the cylinder
                 # 1. Check if the point lies on the axis (project point to axis line)
                 axis_vec = getattr(geom, "AxisVector", None)
-                if axis_vec is None: return False
-                
+                if axis_vec is None:
+                    return False
+
                 # Vector from BasePoint to (x,y,z)
                 dx = x - base_pt.X
                 dy = (y if y is not None else base_pt.Y) - base_pt.Y
                 dz = (z if z is not None else base_pt.Z) - base_pt.Z
-                
+
                 # Cross product with axis direction should be ~0 if point is on axis
                 # (dx, dy, dz) x (ax, ay, az)
                 # But simpler: distance from point to line.
                 # However, since we require x, y, z to be "face center", they SHOULD be on axis.
                 # If the user passed y, z, check them.
-                
+
                 # If axis is aligned with X/Y/Z, we can check specific coords
                 is_x_axis = abs(axis_vec.X) > 0.99
                 is_y_axis = abs(axis_vec.Y) > 0.99
                 is_z_axis = abs(axis_vec.Z) > 0.99
-                
+
                 if y is not None and is_x_axis:
-                     # For X-axis cylinder, Y and Z should match BasePoint (which is on axis)
-                     if abs(base_pt.Y - y) > tol: return False
-                
+                    # For X-axis cylinder, Y and Z should match BasePoint (which is on axis)
+                    if abs(base_pt.Y - y) > tol:
+                        return False
+
                 if z is not None and is_x_axis:
-                     if abs(base_pt.Z - z) > tol: return False
+                    if abs(base_pt.Z - z) > tol:
+                        return False
 
                 # 2. Check if the point is within the longitudinal bounds of the face
                 # Use RangeBox for this
                 rb = face.Evaluator.RangeBox
                 min_pt = rb.MinPoint
                 max_pt = rb.MaxPoint
-                
+
                 # Expand box slightly by tolerance
-                if not (min_pt.X - tol <= x <= max_pt.X + tol): return False
-                if y is not None and not (min_pt.Y - tol <= y <= max_pt.Y + tol): return False
-                if z is not None and not (min_pt.Z - tol <= z <= max_pt.Z + tol): return False
+                if not (min_pt.X - tol <= x <= max_pt.X + tol):
+                    return False
+                if y is not None and not (min_pt.Y - tol <= y <= max_pt.Y + tol):
+                    return False
+                if z is not None and not (min_pt.Z - tol <= z <= max_pt.Z + tol):
+                    return False
 
                 # Match axis direction if specified
                 if axis is not None:

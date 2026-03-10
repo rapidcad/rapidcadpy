@@ -151,22 +151,22 @@ class OccWorkplane(Workplane):
 
         # Create transformation to align box with workplane
         # The box needs to be rotated and translated
-        
+
         # Build transformation matrix
         # Origin point (where box center should be)
         origin = gp_Pnt(center_3d[0], center_3d[1], center_3d[2])
-        
+
         # Direction vectors for the coordinate system
         x_dir = gp_Dir(self._local_x.x, self._local_x.y, self._local_x.z)
         z_dir = gp_Dir(self._local_z.x, self._local_z.y, self._local_z.z)
-        
+
         # Create coordinate system aligned with workplane (gp_Ax3 for 3D coordinate system)
         coord_sys = gp_Ax3(origin, z_dir, x_dir)
-        
+
         # Create transformation from global to workplane coordinates
         trsf = gp_Trsf()
         trsf.SetTransformation(coord_sys)
-        
+
         # Apply transformation
         transform = BRepBuilderAPI_Transform(solid, trsf, False)
         transformed_solid = transform.Shape()

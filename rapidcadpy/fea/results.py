@@ -806,7 +806,7 @@ class OptimizationResult:
         export_mesh(
             self.model,
             filename,
-            elem_data={"density": density},
+            elem_data={"density": [density]},
         )
         print(f"Mesh exported to {filename}")
 
