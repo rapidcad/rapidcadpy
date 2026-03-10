@@ -118,6 +118,119 @@ class TorchFEMKernel(FEAKernel):
     def get_solver_name(cls) -> str:
         return "torch-fem"
 
+    # ------------------------------------------------------------------
+    # Shape → (nodes, elements) helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_meshio_mesh(obj) -> bool:
+        """Duck-type check for meshio.Mesh without a hard import."""
+        return (
+            hasattr(obj, "points")
+            and hasattr(obj, "cells")
+            and hasattr(obj, "point_sets")
+            and not hasattr(obj, "to_step")
+        )
+
+    def _meshio_to_tensors(self, mesh) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Convert a ``meshio.Mesh`` to (nodes, elements) torch tensors.
+
+        The highest-dimensional, largest cell block is selected as the
+        primary element array (same logic as ``LoadCase.from_inp``).
+        """
+        import numpy as np
+
+        points = np.asarray(mesh.points, dtype=np.float64)
+        if points.ndim == 2 and points.shape[1] == 2:
+            points = np.hstack([points, np.zeros((len(points), 1), dtype=np.float64)])
+
+        _dim_rank = {
+            "tetra": 3,
+            "tetra10": 3,
+            "hexahedron": 3,
+            "hexahedron20": 3,
+            "wedge": 3,
+            "pyramid": 3,
+            "quad": 2,
+            "triangle": 2,
+            "quad8": 2,
+            "triangle6": 2,
+            "line": 1,
+            "vertex": 0,
+        }
+        if not mesh.cells:
+            raise ValueError("meshio.Mesh contains no cell blocks")
+        best_block = max(
+            mesh.cells,
+            key=lambda cb: (_dim_rank.get(cb.type, 1), len(cb.data)),
+        )
+        elems = np.asarray(best_block.data, dtype=np.int64)
+        return (
+            torch.tensor(points, dtype=torch.float64),
+            torch.tensor(elems, dtype=torch.int64),
+        )
+
+    def _prepare_nodes_elements(
+        self, shape, mesh_size: float, element_type: str = "tet4"
+    ) -> Tuple[torch.Tensor, torch.Tensor, Optional[str]]:
+        """
+        Resolve any supported ``shape`` value to ``(nodes, elements, step_path)``.
+
+        Accepted types:
+
+        * **str** – path to a STEP file; meshed with the configured mesher.
+        * **meshio.Mesh** – nodes/elements are read directly; mesher is *not*
+          invoked.  Returns ``step_path=None``.
+        * **Shape** (has ``to_step``) – exported to a temp STEP file, then
+          meshed.
+
+        Returns:
+            (nodes_tensor, elements_tensor, step_path_or_None)
+        """
+        torch.set_default_dtype(torch.float64)
+
+        if self._is_meshio_mesh(shape):
+            nodes, elements = self._meshio_to_tensors(shape)
+            return nodes.to(self.device), elements.to(self.device), None
+
+        if isinstance(shape, str):
+            step_path = shape
+        elif hasattr(shape, "to_step"):
+            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+                step_path = tmp.name
+            shape.to_step(step_path)
+        else:
+            raise TypeError(
+                f"Unsupported shape type {type(shape).__name__!r}. "
+                "Expected a STEP path (str), meshio.Mesh, or a Shape with to_step()."
+            )
+
+        nodes, elements = self.mesher.generate_mesh(
+            step_path,
+            mesh_size=mesh_size,
+            element_type="tet4",
+            dim=3,
+        )
+        return (
+            nodes.to(torch.float64).to(self.device),
+            elements.to(self.device),
+            step_path,
+        )
+
+    @staticmethod
+    def _geo_props_from_nodes(nodes: torch.Tensor) -> dict:
+        """Approximate geometry properties from mesh nodes (no STEP file)."""
+        n = nodes.cpu().numpy()
+        x_range = float(n[:, 0].max() - n[:, 0].min())
+        y_range = float(n[:, 1].max() - n[:, 1].min())
+        z_range = float(n[:, 2].max() - n[:, 2].min())
+        return {
+            "volume_mm3": x_range * y_range * z_range,
+            "mass_kg": -1.0,
+            "density_g_cm3": 1.0,
+        }
+
     def solve(
         self,
         shape: Union["Shape", str],
@@ -142,28 +255,10 @@ class TorchFEMKernel(FEAKernel):
             FEAResults object containing analysis results
         """
 
-        # Step 1: Export mesh or use provided STEP file
-        if isinstance(shape, str):
-            # shape is a path to a STEP file
-            step_path = shape
-        else:
-            # shape is a Shape object, export to STEP
-            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
-                step_path = tmp.name
-            shape.to_step(step_path)
-        torch.set_default_dtype(torch.float64)
-        nodes, elements = self.mesher.generate_mesh(
-            step_path,
-            mesh_size=mesh_size,
-            element_type="tet4",
-            dim=3,
+        # Step 1: Resolve shape → (nodes, elements) tensors
+        nodes, elements, step_path = self._prepare_nodes_elements(
+            shape, mesh_size, element_type
         )
-
-        # elements = elements[:, [1, 0, 2, 3]]
-
-        # Convert nodes to float64 and move to device
-        nodes = nodes.to(torch.float64).to(self.device)
-        elements = elements.to(self.device)
 
         # Step 2: Create FEM model
         from torchfem import Solid
@@ -190,7 +285,11 @@ class TorchFEMKernel(FEAKernel):
         solution = model.solve()
 
         # Get geo props
-        geo_props = get_geometry_properties(step_file_path=step_path)
+        geo_props = (
+            get_geometry_properties(step_file_path=step_path)
+            if step_path is not None
+            else self._geo_props_from_nodes(nodes)
+        )
 
         # Step 5: Extract results
         results = self._extract_results(
@@ -615,50 +714,34 @@ class TorchFEMKernel(FEAKernel):
         mesh_time = 0
 
         # Step 1: Create mesh and model
-        torch.set_default_dtype(torch.float64)
-        if isinstance(shape, str):
-            # shape is a path to a STEP file
-            step_path = shape
+        if (
+            self._is_meshio_mesh(shape)
+            or isinstance(shape, str)
+            or hasattr(shape, "to_step")
+        ):
             t0 = time.perf_counter()
-            nodes, elements = self.mesher.generate_mesh(
-                step_path,
-                mesh_size=mesh_size,
-                element_type="tet4",
-                dim=3,
+            nodes, elements, _step_path = self._prepare_nodes_elements(
+                shape, mesh_size, element_type
             )
             mesh_time = time.perf_counter() - t0
 
-            elements = elements[:, [1, 0, 2, 3]]
-            nodes = nodes.to(torch.float64)
+            # Infer mesh_size from bounding box + node count when not supplied
+            # (common for pre-meshed INP inputs where no re-meshing is performed)
+            if mesh_size is None:
+                _n_arr = nodes.cpu().numpy()
+                _dims = [
+                    float(_n_arr[:, 0].max() - _n_arr[:, 0].min()),
+                    float(_n_arr[:, 1].max() - _n_arr[:, 1].min()),
+                    float(_n_arr[:, 2].max() - _n_arr[:, 2].min()),
+                ]
+                _vol = max(_dims[0], 1e-6) * max(_dims[1], 1e-6) * max(_dims[2], 1e-6)
+                _npts = max(_n_arr.shape[0], 1)
+                mesh_size = float(_vol / _npts) ** (1.0 / 3.0)
 
             # Step 2: Create FEM model
-
-            material_fem = material.to_torchfem()
-            model = Solid(
-                nodes,
-                elements,
-                IsotropicElasticity3D(E=210000.0, nu=0.3),
+            material_fem = (
+                material.to_torchfem() if hasattr(material, "to_torchfem") else None
             )
-        elif hasattr(shape, "to_step"):  # Check if it's a Shape (duck typing)
-            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
-                step_path = tmp.name
-            shape.to_step(step_path)
-
-            t0 = time.perf_counter()
-            nodes, elements = self.mesher.generate_mesh(
-                step_path,
-                mesh_size=mesh_size,
-                element_type="tet4",
-                dim=3,
-            )
-            mesh_time = time.perf_counter() - t0
-
-            elements = elements[:, [1, 0, 2, 3]]
-            nodes = nodes.to(torch.float64)
-
-            # Step 2: Create FEM model
-
-            material_fem = material.to_torchfem()
             model = Solid(
                 nodes,
                 elements,
@@ -834,7 +917,7 @@ class TorchFEMKernel(FEAKernel):
             mass = volume * material.density / 1e9  # mm³ to m³
             geo_props = {"volume_mm3": volume, "mass_kg": mass}
         else:
-            geo_props = get_geometry_properties(step_file_path=step_path)
+            geo_props = get_geometry_properties(step_file_path=_step_path)
 
         # Create optimization result
         result = OptimizationResult(
@@ -1053,25 +1136,10 @@ class TorchFEMKernel(FEAKernel):
         import numpy as np
         import pyvista as pv
 
-        # Step 1: Export shape or use provided STEP file
-        if isinstance(shape, str):
-            # shape is a path to a STEP file
-            step_path = shape
-        else:
-            # shape is a Shape object, export to STEP
-            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
-                step_path = tmp.name
-            shape.to_step(step_path)
-        torch.set_default_dtype(torch.float64)
-
-        nodes, elements = self.mesher.generate_mesh(
-            step_path,
-            mesh_size=mesh_size,
-            element_type="tet4",
-            dim=3,
+        # Step 1: Resolve shape → (nodes, elements) tensors
+        nodes, elements, _step_path = self._prepare_nodes_elements(
+            shape, mesh_size, element_type
         )
-
-        # elements = elements[:, [1, 0, 2, 3]]
         nodes = nodes.to(torch.float64)
 
         # Optimization: If no loads/constraints, skip FEM model creation

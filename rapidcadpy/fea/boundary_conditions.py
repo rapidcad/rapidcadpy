@@ -744,14 +744,39 @@ class PointLoad(Load):
                     [x, y, z], dtype=nodes.dtype, device=nodes.device
                 )
                 rel = candidate_positions - center_tensor
-                ellipsoid = (
-                    (rel[:, 0] / rx) ** 2
-                    + (rel[:, 1] / ry) ** 2
-                    + (rel[:, 2] / rz) ** 2
-                )
-                load_nodes = candidate_nodes  # [ellipsoid <= 1.0 + 1e-9]
+                # ellipsoid = (
+                #     (rel[:, 0] / rx) ** 2
+                #     + (rel[:, 1] / ry) ** 2
+                #     + (rel[:, 2] / rz) ** 2
+                # )
+                load_nodes = candidate_nodes
             else:
                 load_nodes = candidate_nodes
+
+            # Fallback 1: if anisotropic search misses due remeshing/coarse spacing,
+            # try standard mesh-scaled point selection.
+            if len(load_nodes) == 0:
+                load_nodes = find_nodes_in_box(
+                    nodes,
+                    xmin=x,
+                    xmax=x,
+                    ymin=y,
+                    ymax=y,
+                    zmin=z,
+                    zmax=z,
+                    tolerance=self.tolerance * mesh_size,
+                )
+
+            # Fallback 2: always map to nearest node as a last resort.
+            if len(load_nodes) == 0:
+                point_tensor = torch.tensor(
+                    [x, y, z], dtype=nodes.dtype, device=nodes.device
+                )
+                distances = torch.norm(nodes - point_tensor, dim=1)
+                nearest = int(torch.argmin(distances).item())
+                load_nodes = torch.tensor(
+                    [nearest], dtype=torch.long, device=nodes.device
+                )
         else:
             # Find nodes near the point
             load_nodes = find_nodes_in_box(

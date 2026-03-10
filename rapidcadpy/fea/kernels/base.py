@@ -195,7 +195,7 @@ class FEAAnalyzer:
 
     def __init__(
         self,
-        shape: Union["Shape", str],
+        shape: Union["Shape", str, Any],
         material: Optional["MaterialProperties"] = None,
         kernel: str = "torch-fem",
         mesh_size: float = 2.0,
@@ -208,7 +208,7 @@ class FEAAnalyzer:
         Initialize FEA analyzer with dependency injection.
 
         Args:
-            shape: Shape to analyze or path to STEP file
+            shape: Shape to analyze, path to STEP file (str), or meshio.Mesh
             material: Material properties (ignored if load_case is provided)
             kernel: FEAKernel implementation to use for solving
             mesh_size: Target mesh element size (mm)
