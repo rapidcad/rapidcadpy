@@ -392,6 +392,147 @@ class FEAAnalyzer:
         """
         return self.kernel.get_solver_name()
 
+    def get_bc_node_coverage(self) -> dict:
+        """
+        Return raw mesh-node counts for loaded and constrained zones.
+
+        These raw counts should be normalised by the maximum possible counts
+        (obtainable via :meth:`compute_max_bc_node_counts`, called once at
+        dataset-creation time and stored in ``load_case.max_n_loaded_nodes`` /
+        ``load_case.max_n_constraint_nodes``).  A ratio of 1.0 means the
+        generated geometry fully covers the intended load / support area.
+
+        Returns:
+            Dict with keys:
+                n_loaded_nodes     (int) – nodes in all load zones combined
+                n_constraint_nodes (int) – nodes in all constraint zones combined
+                n_total_nodes      (int) – total FE mesh nodes (for reference)
+
+        Notes:
+            - Returns all-zero dict with ``error`` key when meshing fails.
+            - Requires the kernel to support ``get_visualization_data()``.
+        """
+        zero = {
+            "n_loaded_nodes": 0,
+            "n_constraint_nodes": 0,
+            "n_total_nodes": 0,
+        }
+        try:
+            pv_mesh, nodes, constraint_mask, force_mask, _ = (
+                self.kernel.get_visualization_data(
+                    shape=self.shape,
+                    material=self.load_case.material,
+                    loads=self.load_case.loads,
+                    constraints=self.load_case.constraints,
+                    mesh_size=self.mesh_size,
+                    element_type=self.element_type,
+                    with_conditions=True,
+                )
+            )
+            n_total = int(nodes.shape[0])
+            if n_total == 0:
+                return {**zero, "error": "Empty mesh"}
+
+            return {
+                "n_loaded_nodes": int(np.sum(force_mask)),
+                "n_constraint_nodes": int(np.sum(constraint_mask)),
+                "n_total_nodes": n_total,
+            }
+        except Exception as e:
+            return {**zero, "error": str(e)}
+
+    def compute_max_bc_node_counts(self) -> dict:
+        """
+        Compute the theoretical maximum loaded/constrained node counts.
+
+        Meshes a solid box that fills the entire design domain (from
+        ``load_case.bounds``) and counts how many nodes fall in each BC zone.
+        This represents coverage = 1.0 — achievable only when the generated
+        part completely fills every load and constraint region.
+
+        Call this **once per load case at dataset-creation time** and store
+        the results::
+
+            counts = fea.compute_max_bc_node_counts()
+            load_case.max_n_loaded_nodes     = counts["max_n_loaded_nodes"]
+            load_case.max_n_constraint_nodes = counts["max_n_constraint_nodes"]
+
+        Returns:
+            Dict with keys:
+                max_n_loaded_nodes     (int)
+                max_n_constraint_nodes (int)
+            Plus ``error`` key when the computation fails.
+        """
+        import os
+        import tempfile
+
+        try:
+            import cadquery as cq
+        except ImportError:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": "cadquery not available",
+            }
+
+        bounds = self.load_case.bounds
+        if not bounds:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": "No bounds in load_case",
+            }
+
+        try:
+            x_min = bounds.get("x_min", 0.0)
+            x_max = bounds.get("x_max", 100.0)
+            y_min = bounds.get("y_min", 0.0)
+            y_max = bounds.get("y_max", 100.0)
+            z_min = bounds.get("z_min", 0.0)
+            z_max = bounds.get("z_max", 100.0)
+            dx = max(x_max - x_min, 1e-6)
+            dy = max(y_max - y_min, 1e-6)
+            dz = max(z_max - z_min, 1e-6)
+
+            box_shape = (
+                cq.Workplane("XY")
+                .box(dx, dy, dz, centered=False)
+                .translate((x_min, y_min, z_min))
+            )
+
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
+            os.close(tmp_fd)
+            try:
+                cq.exporters.export(box_shape, tmp_path)
+
+                _, nodes, constraint_mask, force_mask, _ = (
+                    self.kernel.get_visualization_data(
+                        shape=tmp_path,
+                        material=self.load_case.material,
+                        loads=self.load_case.loads,
+                        constraints=self.load_case.constraints,
+                        mesh_size=self.mesh_size,
+                        element_type=self.element_type,
+                        with_conditions=True,
+                    )
+                )
+                return {
+                    "max_n_loaded_nodes": int(np.sum(force_mask)),
+                    "max_n_constraint_nodes": int(np.sum(constraint_mask)),
+                }
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        except Exception as e:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": str(e),
+            }
+
     def validate_connectivity(self) -> bool:
         """
         Check if loaded and constrained nodes are connected via the mesh.
@@ -525,9 +666,6 @@ class FEAAnalyzer:
         def _extract_bounds(
             bounds: Optional[dict],
         ) -> Optional[Tuple[float, float, float, float, float, float]]:
-        def _extract_bounds(
-            bounds: Optional[dict],
-        ) -> Optional[Tuple[float, float, float, float, float, float]]:
             if not isinstance(bounds, dict):
                 return None
             keys = ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
@@ -639,15 +777,9 @@ class FEAAnalyzer:
                     x0,
                     y0,
                     z0,
-                    x0,
-                    y0,
-                    z0,
                     max(x1 - x0, 1e-9),
                     max(y1 - y0, 1e-9),
                     max(z1 - z0, 1e-9),
-                    alpha=alpha,
-                    color=color,
-                    shade=False,
                     alpha=alpha,
                     color=color,
                     shade=False,
@@ -674,11 +806,6 @@ class FEAAnalyzer:
                         _draw_bbox(loc, "tab:red", label, alpha=0.15)
                     elif isinstance(loc, (tuple, list)) and len(loc) == 3:
                         ax.scatter(
-                            loc[0],
-                            loc[1],
-                            loc[2],
-                            color="tab:red",
-                            s=100,
                             loc[0],
                             loc[1],
                             loc[2],

@@ -103,8 +103,6 @@ class TorchFEMKernel(FEAKernel):
         if os.environ.get("RAPIDCADPY_SET_TORCH_DEFAULT_DEVICE", "0") == "1":
             torch.set_default_device(self.device)
 
-        print(f"TorchFEMKernel initialized with device: {self.device}")
-
     @classmethod
     def is_available(cls) -> bool:
         """Check if torch-fem dependencies are available"""

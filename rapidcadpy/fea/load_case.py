@@ -47,6 +47,12 @@ class LoadCase:
     mesh_elements: Optional[np.ndarray] = None
     mesh_element_type: Optional[str] = None
 
+    # Maximum possible loaded / constrained node counts, computed once during
+    # dataset creation by meshing a full design-domain box with this load case.
+    # Used to normalise get_bc_node_coverage() raw counts into [0, 1] ratios.
+    max_n_loaded_nodes: Optional[int] = None
+    max_n_constraint_nodes: Optional[int] = None
+
     @property
     def boundary_conditions(self) -> List[BoundaryCondition]:
         """Backward-compatible alias for `constraints`."""
@@ -519,6 +525,33 @@ class LoadCase:
         - Lattice or honeycomb patterns for lightweight designs
         - Material placement where stress is highest (top/bottom for bending)
         - Smooth transitions to avoid stress concentrations
+        
+        CADQUERY API REFERENCE (use exactly as shown):
+        
+        # box(xLen, yLen, zLen) — always 3 positional args; centered=True/False optional
+        cq.Workplane("XY").box(10, 20, 5)                  # box centered at origin
+        cq.Workplane("XY").box(10, 20, 5, centered=False)  # box with corner at origin
+        
+        # translate((x, y, z)) — move the result solid
+        cq.Workplane("XY").box(L, W, t).translate((L/2, W/2, t/2))
+        
+        # center(x, y) — 2D only, moves the 2D workplane origin (NOT for 3D positioning)
+        cq.Workplane("XY").center(cx, cy).box(10, 20, 5)   # only x and y args
+        
+        # union / cut / intersect — boolean ops between Workplane objects
+        result = solid_a.union(solid_b)
+        result = solid_a.cut(solid_b)
+        
+        # export
+        cq.exporters.export(result, "output.step")
+        
+        COMMON MISTAKES TO AVOID:
+        - WRONG: .box(xLen, yLen)              # missing height arg
+        - WRONG: .center(x, y, z)              # center() is 2D only
+        - WRONG: .translate([x, y, z])         # must be a tuple, not a list
+        - RIGHT: .box(xLen, yLen, zLen)
+        - RIGHT: .center(x, y)
+        - RIGHT: .translate((x, y, z))
         """
 
         return requirement
