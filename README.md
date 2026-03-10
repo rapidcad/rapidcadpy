@@ -23,7 +23,7 @@ pip install -e ".[fea]"   # With FEA support
 
 # Documentation
 
-[![Docs](https://img.shields.io/badge/docs-online-blue)](https://rapidcadpy-yk28.vercel.app)
+[![Docs](https://img.shields.io/badge/docs-online-blue)](https://docs.rapidcad.ai)
 
 ## 🏁 Quick Start
 
