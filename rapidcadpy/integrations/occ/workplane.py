@@ -9,7 +9,7 @@ from OCC.Core.TopoDS import TopoDS_Compound
 
 from .app import App
 from .cad_types import Vector, VectorLike, Vertex
-from .integrations.occ.shape import OccShape
+from .shape import OccShape
 from .primitives import Line
 from .workplane import Workplane
 

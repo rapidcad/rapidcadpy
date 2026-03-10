@@ -326,18 +326,99 @@ class DesignDomain:
 
         return result
 
-    def export_step(self, filepath: str) -> str:
-        """Export the design domain to a STEP file."""
-        import cadquery as cq
+    def _export_step_occ(self, filepath: str) -> str:
+        """
+        Export using pythonOCC (OCC.Core) when cadquery is not available.
 
-        geometry = self.build_geometry()
-        cq.exporters.export(geometry, filepath)
-        logger.info(f"Exported design domain to {filepath}")
+        Supports box, cylinder and sphere analytically.  Other shapes fall back
+        to building the full geometry via CadQuery (which may still fail if
+        cadquery is absent).
+        """
+        from OCC.Core.STEPControl import STEPControl_AsIs, STEPControl_Writer
+        from OCC.Core.IFSelect import IFSelect_RetDone
+
+        p = self.params or {}
+        shape = None
+
+        if self.shape_type == "box":
+            from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
+            from OCC.Core.gp import gp_Pnt
+
+            b = self.bounds or {}
+            x_min = float(b.get("x_min", 0))
+            y_min = float(b.get("y_min", 0))
+            z_min = float(b.get("z_min", 0))
+            dx = float(b.get("x_max", 100)) - x_min
+            dy = float(b.get("y_max", 100)) - y_min
+            dz = float(b.get("z_max", 100)) - z_min
+            shape = BRepPrimAPI_MakeBox(gp_Pnt(x_min, y_min, z_min), dx, dy, dz).Shape()
+
+        elif self.shape_type == "cylinder":
+            from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeCylinder
+            from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt
+
+            radius = float(p.get("radius", 50))
+            height = float(p.get("height", 100))
+            center = list(p.get("center", [0, 0, 0]))
+            cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
+            axis_str = str(p.get("axis", "z")).lower()
+            axis_dir = {"z": (0, 0, 1), "x": (1, 0, 0), "y": (0, 1, 0)}.get(
+                axis_str, (0, 0, 1)
+            )
+            ax2 = gp_Ax2(gp_Pnt(cx, cy, cz), gp_Dir(*axis_dir))
+            shape = BRepPrimAPI_MakeCylinder(ax2, radius, height).Shape()
+
+        elif self.shape_type == "sphere":
+            from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeSphere
+            from OCC.Core.gp import gp_Pnt
+
+            radius = float(p.get("radius", 50))
+            center = list(p.get("center", [0, 0, 0]))
+            shape = BRepPrimAPI_MakeSphere(
+                gp_Pnt(float(center[0]), float(center[1]), float(center[2])), radius
+            ).Shape()
+
+        if shape is None:
+            raise ValueError(
+                f"OCC export not implemented for shape_type='{self.shape_type}'. "
+                "Install cadquery for full shape support."
+            )
+
+        writer = STEPControl_Writer()
+        writer.Transfer(shape, STEPControl_AsIs)
+        status = writer.Write(filepath)
+        if status != IFSelect_RetDone:
+            raise RuntimeError(
+                f"OCC STEP writer failed (status={status}) for {filepath}"
+            )
+
+        logger.info(f"Exported design domain to {filepath} via OCC")
         return filepath
+
+    def export_step(self, filepath: str) -> str:
+        """Export the design domain to a STEP file.
+
+        Tries cadquery first; falls back to pythonOCC for primitive shapes when
+        cadquery is not installed.
+        """
+        try:
+            import cadquery as cq
+
+            geometry = self.build_geometry()
+            cq.exporters.export(geometry, filepath)
+            logger.info(f"Exported design domain to {filepath}")
+            return filepath
+        except ImportError:
+            logger.debug("cadquery unavailable, falling back to OCC STEP export")
+            return self._export_step_occ(filepath)
 
     def get_bounding_box(self) -> Dict[str, float]:
         """
         Get the axis-aligned bounding box of the design domain.
+
+        For well-known primitive shapes (box, cylinder, sphere, l_shape, t_shape,
+        plus) the bounding box is computed analytically without building the full
+        CadQuery geometry.  CSG and unknown shapes fall back to the geometry build.
 
         Returns:
             Dict with x_min, x_max, y_min, y_max, z_min, z_max
@@ -345,7 +426,100 @@ class DesignDomain:
         if self.shape_type == "box" and self.bounds:
             return self.bounds
 
-        # For other shapes, compute from geometry
+        p = self.params or {}
+
+        if self.shape_type == "cylinder":
+            radius = float(p.get("radius", 50))
+            height = float(p.get("height", 100))
+            center = list(p.get("center", [0, 0, 0]))
+            cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
+            axis = str(p.get("axis", "z")).lower()
+
+            # The cylinder base is placed at the origin (not-centered in Z),
+            # then translated by `center`.  Axis rotations move the extrusion
+            # direction from Z to the target axis.
+            if axis == "z":
+                return {
+                    "x_min": cx - radius,
+                    "x_max": cx + radius,
+                    "y_min": cy - radius,
+                    "y_max": cy + radius,
+                    "z_min": cz,
+                    "z_max": cz + height,
+                }
+            elif axis == "x":
+                return {
+                    "x_min": cx,
+                    "x_max": cx + height,
+                    "y_min": cy - radius,
+                    "y_max": cy + radius,
+                    "z_min": cz - radius,
+                    "z_max": cz + radius,
+                }
+            elif axis == "y":
+                return {
+                    "x_min": cx - radius,
+                    "x_max": cx + radius,
+                    "y_min": cy,
+                    "y_max": cy + height,
+                    "z_min": cz - radius,
+                    "z_max": cz + radius,
+                }
+
+        elif self.shape_type == "sphere":
+            radius = float(p.get("radius", 50))
+            center = list(p.get("center", [0, 0, 0]))
+            cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
+            return {
+                "x_min": cx - radius,
+                "x_max": cx + radius,
+                "y_min": cy - radius,
+                "y_max": cy + radius,
+                "z_min": cz - radius,
+                "z_max": cz + radius,
+            }
+
+        elif self.shape_type == "l_shape":
+            width = float(p.get("width", 200))
+            height = float(p.get("height", 200))
+            depth = float(p.get("depth", 100))
+            # Union of base (full width) and vertical leg → overall box
+            return {
+                "x_min": 0.0,
+                "x_max": width,
+                "y_min": 0.0,
+                "y_max": depth,
+                "z_min": 0.0,
+                "z_max": height,
+            }
+
+        elif self.shape_type == "t_shape":
+            width = float(p.get("width", 200))
+            height = float(p.get("height", 200))
+            depth = float(p.get("depth", 100))
+            return {
+                "x_min": 0.0,
+                "x_max": width,
+                "y_min": 0.0,
+                "y_max": depth,
+                "z_min": 0.0,
+                "z_max": height,
+            }
+
+        elif self.shape_type == "plus":
+            width = float(p.get("width", 200))
+            height = float(p.get("height", 200))
+            depth = float(p.get("depth", 100))
+            return {
+                "x_min": 0.0,
+                "x_max": width,
+                "y_min": 0.0,
+                "y_max": depth,
+                "z_min": 0.0,
+                "z_max": height,
+            }
+
+        # For CSG and unknown shapes fall back to building the geometry
         geometry = self.build_geometry()
         bb = geometry.val().BoundingBox()
 

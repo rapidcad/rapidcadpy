@@ -14,7 +14,7 @@ from OCC.Core.BRepBuilderAPI import (
 )
 from OCC.Core.TopTools import TopTools_ListOfShape
 from OCC.Core.TopoDS import TopoDS_Compound
-from rapidcadpy.integrations.occ.shape import OccShape
+from .shape import OccShape
 from rapidcadpy.primitives import Arc, Circle, Line
 from rapidcadpy.sketch2d import Sketch2D
 

@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 from pathlib import Path
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 from venv import logger
 
 import numpy as np
@@ -556,259 +556,636 @@ class LoadCase:
 
         return requirement
 
+    def to_inp(
+        self,
+        filepath: Union[str, Path],
+        mesh_size: Optional[float] = None,
+        mesher: str = "gmsh-subprocess",
+        element_type: str = "tet4",
+        geometry_path: Optional[Union[str, Path]] = None,
+        analysis_title: Optional[str] = None,
+        verbose: bool = False,
+    ) -> Path:
+        """
+        Export this load case to an Abaqus/CalculiX-compatible ``.inp`` file.
+
+        If mesh data is already present on the load case (``mesh_nodes`` and
+        ``mesh_elements``), it is reused directly. Otherwise a mesh is generated
+        from ``geometry_path`` (if provided), then ``domain``, then ``bounds``.
+
+        Args:
+            filepath: Destination ``.inp`` file path.
+            mesh_size: Meshing size when a mesh must be generated.
+            mesher: Mesher backend name (e.g. ``gmsh-subprocess``, ``netgen``).
+            element_type: Target element type for generated meshes.
+            geometry_path: Optional STEP/BREP geometry input for meshing.
+            analysis_title: Optional header title.
+            verbose: Enable mesher verbosity.
+
+        Returns:
+            Path to the written ``.inp`` file.
+        """
+
+        def _sanitize_set_name(name: str, default: str) -> str:
+            raw = (name or default).upper()
+            safe = re.sub(r"[^A-Z0-9_]", "_", raw)
+            return safe[:80] if safe else default
+
+        def _bounds_from_nodes(nodes_arr: np.ndarray) -> Dict[str, float]:
+            return {
+                "x_min": float(np.min(nodes_arr[:, 0])),
+                "x_max": float(np.max(nodes_arr[:, 0])),
+                "y_min": float(np.min(nodes_arr[:, 1])),
+                "y_max": float(np.max(nodes_arr[:, 1])),
+                "z_min": float(np.min(nodes_arr[:, 2])),
+                "z_max": float(np.max(nodes_arr[:, 2])),
+            }
+
+        def _select_nodes(
+            nodes_arr: np.ndarray,
+            location: Any,
+            tolerance_scale: float = 1.0,
+        ) -> np.ndarray:
+            spans = np.ptp(nodes_arr, axis=0)
+            model_scale = max(float(np.max(spans)), 1.0)
+            base_tol = max(model_scale * 1e-6, 1e-8)
+            tol = base_tol * max(float(tolerance_scale), 1.0)
+            x = nodes_arr[:, 0]
+            y = nodes_arr[:, 1]
+            z = nodes_arr[:, 2]
+
+            if isinstance(location, dict):
+                if all(
+                    k in location
+                    for k in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+                ):
+                    mask = (
+                        (x >= float(location["x_min"]) - tol)
+                        & (x <= float(location["x_max"]) + tol)
+                        & (y >= float(location["y_min"]) - tol)
+                        & (y <= float(location["y_max"]) + tol)
+                        & (z >= float(location["z_min"]) - tol)
+                        & (z <= float(location["z_max"]) + tol)
+                    )
+                    idx = np.where(mask)[0]
+                    if idx.size > 0:
+                        return idx
+                if all(k in location for k in ("x", "y", "z")):
+                    px, py, pz = (
+                        float(location["x"]),
+                        float(location["y"]),
+                        float(location["z"]),
+                    )
+                    dist = np.sqrt((x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2)
+                    nearest = int(np.argmin(dist))
+                    return np.array([nearest], dtype=np.int64)
+
+            if isinstance(location, (tuple, list)) and len(location) >= 3:
+                px, py, pz = float(location[0]), float(location[1]), float(location[2])
+                dist = np.sqrt((x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2)
+                nearest = int(np.argmin(dist))
+                return np.array([nearest], dtype=np.int64)
+
+            if isinstance(location, str):
+                loc = location.lower().strip()
+                bounds = self.bounds or _bounds_from_nodes(nodes_arr)
+                if loc in ["end_1", "x_min"]:
+                    return np.where(np.abs(x - bounds["x_min"]) <= tol)[0]
+                if loc in ["end_2", "x_max"]:
+                    return np.where(np.abs(x - bounds["x_max"]) <= tol)[0]
+                if loc in ["y_min"]:
+                    return np.where(np.abs(y - bounds["y_min"]) <= tol)[0]
+                if loc in ["y_max"]:
+                    return np.where(np.abs(y - bounds["y_max"]) <= tol)[0]
+                if loc in ["bottom", "z_min"]:
+                    return np.where(np.abs(z - bounds["z_min"]) <= tol)[0]
+                if loc in ["top", "z_max"]:
+                    return np.where(np.abs(z - bounds["z_max"]) <= tol)[0]
+
+            return np.array([], dtype=np.int64)
+
+        def _resolve_mesh() -> Tuple[np.ndarray, np.ndarray, str]:
+            if self.mesh_nodes is not None and self.mesh_elements is not None:
+                nodes_arr = np.asarray(self.mesh_nodes, dtype=np.float64)
+                elems_arr = np.asarray(self.mesh_elements, dtype=np.int64)
+                elem_name = self.mesh_element_type or element_type
+                return nodes_arr, elems_arr, elem_name
+
+            step_path: Optional[Path] = None
+            cleanup_path: Optional[Path] = None
+            if geometry_path is not None:
+                step_path = Path(geometry_path)
+            elif self.domain is not None:
+                import tempfile
+                import os
+
+                fd, tmp_path = tempfile.mkstemp(suffix="_domain.step", prefix="fea_")
+                os.close(fd)
+                step_path = Path(tmp_path)
+                cleanup_path = step_path
+                self.domain.export_step(str(step_path))
+            elif self.bounds is not None:
+                import cadquery as cq
+                import tempfile
+                import os
+
+                x_min = float(self.bounds["x_min"])
+                x_max = float(self.bounds["x_max"])
+                y_min = float(self.bounds["y_min"])
+                y_max = float(self.bounds["y_max"])
+                z_min = float(self.bounds["z_min"])
+                z_max = float(self.bounds["z_max"])
+                box = (
+                    cq.Workplane("XY")
+                    .box(x_max - x_min, y_max - y_min, z_max - z_min, centered=False)
+                    .translate((x_min, y_min, z_min))
+                )
+                fd, tmp_path = tempfile.mkstemp(suffix="_domain.step", prefix="fea_")
+                os.close(fd)
+                step_path = Path(tmp_path)
+                cleanup_path = step_path
+                cq.exporters.export(box, str(step_path))
+
+            if step_path is None:
+                raise ValueError(
+                    "Cannot generate mesh for to_inp(): provide mesh_nodes/mesh_elements, "
+                    "geometry_path, domain, or bounds."
+                )
+
+            try:
+                from .mesher import (
+                    GmshMesher,
+                    GmshSubprocessMesher,
+                    IsolatedGmshMesher,
+                    NetgenMesher,
+                    NetgenSubprocessMesher,
+                )
+
+                mesher_key = mesher.lower().strip()
+                if mesher_key in {"gmsh-subprocess", "gmsh_subprocess"}:
+                    mesher_obj = GmshSubprocessMesher()
+                elif mesher_key == "gmsh":
+                    mesher_obj = GmshMesher()
+                elif mesher_key in {"netgen-subprocess", "netgen_subprocess"}:
+                    mesher_obj = NetgenSubprocessMesher()
+                elif mesher_key == "netgen":
+                    mesher_obj = NetgenMesher()
+                elif mesher_key in {"gmsh-isolated", "gmsh_isolated"}:
+                    mesher_obj = IsolatedGmshMesher()
+                else:
+                    raise ValueError(f"Unsupported mesher '{mesher}' for to_inp()")
+
+                h = float(mesh_size) if mesh_size is not None else 1.0
+                nodes_t, elems_t = mesher_obj.generate_mesh(
+                    str(step_path),
+                    mesh_size=h,
+                    element_type=element_type,
+                    dim=3,
+                    verbose=verbose,
+                )
+                nodes_arr = nodes_t.detach().cpu().numpy().astype(np.float64)
+                elems_arr = elems_t.detach().cpu().numpy().astype(np.int64)
+                return nodes_arr, elems_arr, element_type
+            finally:
+                if cleanup_path is not None:
+                    try:
+                        cleanup_path.unlink()
+                    except Exception:
+                        pass
+
+        nodes, elements, resolved_elem_type = _resolve_mesh()
+        self.mesh_nodes = nodes
+        self.mesh_elements = elements
+        self.mesh_element_type = resolved_elem_type
+
+        if self.bounds is None:
+            self.bounds = _bounds_from_nodes(nodes)
+
+        element_type_to_ccx = {
+            "tet4": "C3D4",
+            "tet10": "C3D10",
+            "hex8": "C3D8",
+            "hex20": "C3D20",
+            "quad4": "CPS4",
+            "tri3": "CPS3",
+        }
+        nodes_per_elem_to_ccx = {4: "C3D4", 8: "C3D8", 10: "C3D10", 20: "C3D20"}
+        ccx_elem_type = element_type_to_ccx.get(
+            (resolved_elem_type or "").lower(),
+            nodes_per_elem_to_ccx.get(int(elements.shape[1]), "C3D4"),
+        )
+
+        selectors = getattr(self, "selectors", None) or {}
+        if not selectors and self.meta:
+            selectors = self.meta.get("selectors", {})
+
+        constraint_sets: List[Tuple[str, np.ndarray, Tuple[bool, bool, bool]]] = []
+        for idx, bc in enumerate(self.boundary_conditions, start=1):
+            if not isinstance(bc, FixedConstraint):
+                continue
+
+            node_idx = _select_nodes(
+                nodes,
+                getattr(bc, "location", None),
+                tolerance_scale=float(getattr(bc, "tolerance", 1.0)),
+            )
+            if node_idx.size == 0:
+                continue
+
+            set_name = _sanitize_set_name(f"constraint_{idx}", f"CONSTRAINT_{idx}")
+            dofs = getattr(bc, "dofs", (True, True, True))
+            constraint_sets.append((set_name, np.unique(node_idx), dofs))
+
+        load_sets: List[Tuple[str, np.ndarray, Dict[str, float]]] = []
+        for idx, load in enumerate(self.loads, start=1):
+            if isinstance(load, PointLoad):
+                loc = getattr(load, "point", None)
+                region_id = getattr(load, "region_id", None)
+                if region_id and region_id in selectors:
+                    selector_obj = selectors[region_id]
+                    loc = getattr(selector_obj, "query", loc)
+
+                node_idx = _select_nodes(
+                    nodes,
+                    loc,
+                    tolerance_scale=float(getattr(load, "tolerance", 1.0)),
+                )
+                if node_idx.size == 0:
+                    continue
+
+                force = getattr(load, "force", 0.0)
+                if isinstance(force, (tuple, list)) and len(force) >= 3:
+                    fx, fy, fz = float(force[0]), float(force[1]), float(force[2])
+                elif isinstance(force, (int, float)):
+                    direction = (getattr(load, "direction", None) or "z").lower()
+                    mag = float(force)
+                    fx, fy, fz = 0.0, 0.0, 0.0
+                    if direction in {"x", "+x"}:
+                        fx = mag
+                    elif direction == "-x":
+                        fx = -abs(mag)
+                    elif direction in {"y", "+y"}:
+                        fy = mag
+                    elif direction == "-y":
+                        fy = -abs(mag)
+                    elif direction in {"z", "+z"}:
+                        fz = mag
+                    elif direction == "-z":
+                        fz = -abs(mag)
+                    else:
+                        fz = mag
+                else:
+                    continue
+
+                load_name = _sanitize_set_name(
+                    getattr(load, "name", f"LOAD_{idx}"), f"LOAD_{idx}"
+                )
+                load_sets.append(
+                    (
+                        load_name,
+                        np.unique(node_idx),
+                        {"x": fx, "y": fy, "z": fz},
+                    )
+                )
+
+            elif isinstance(load, DistributedLoad):
+                node_idx = _select_nodes(
+                    nodes,
+                    getattr(load, "location", None),
+                    tolerance_scale=float(getattr(load, "tolerance", 1.0)),
+                )
+                if node_idx.size == 0:
+                    continue
+
+                force = getattr(load, "force", 0.0)
+                if isinstance(force, (tuple, list)) and len(force) >= 3:
+                    fx, fy, fz = float(force[0]), float(force[1]), float(force[2])
+                else:
+                    mag = float(force)
+                    direction = (getattr(load, "direction", None) or "z").lower()
+                    fx, fy, fz = 0.0, 0.0, 0.0
+                    if direction in {"x", "+x"}:
+                        fx = mag
+                    elif direction == "-x":
+                        fx = -abs(mag)
+                    elif direction in {"y", "+y"}:
+                        fy = mag
+                    elif direction == "-y":
+                        fy = -abs(mag)
+                    elif direction in {"z", "+z", "normal"}:
+                        fz = mag
+                    elif direction == "-z":
+                        fz = -abs(mag)
+                    else:
+                        fz = mag
+
+                load_name = _sanitize_set_name(f"DLOAD_{idx}", f"DLOAD_{idx}")
+                load_sets.append(
+                    (
+                        load_name,
+                        np.unique(node_idx),
+                        {"x": fx, "y": fy, "z": fz},
+                    )
+                )
+
+        mat_name = _sanitize_set_name(
+            getattr(self.material, "name", "MATERIAL"), "MATERIAL"
+        )
+        E = getattr(self.material, "elastic_modulus_mpa", None)
+        if E is None:
+            E = getattr(self.material, "E", 210000)
+        nu = getattr(self.material, "poissons_ratio", None)
+        if nu is None:
+            nu = getattr(self.material, "nu", 0.3)
+
+        out_path = Path(filepath)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        title = (
+            analysis_title
+            or self.description
+            or f"LoadCase {self.problem_id or ''}".strip()
+        )
+
+        with out_path.open("w") as f:
+            f.write("*HEADING\n")
+            f.write(f"{title}\n\n")
+
+            f.write("*NODE, NSET=ALL_NODES\n")
+            for i, (x, y, z) in enumerate(nodes, start=1):
+                f.write(f"{i}, {x:.6f}, {y:.6f}, {z:.6f}\n")
+            f.write("\n")
+
+            f.write(f"*ELEMENT, TYPE={ccx_elem_type}, ELSET=ALL_ELEMENTS\n")
+            for i, elem in enumerate(elements, start=1):
+                node_ids = [int(n) + 1 for n in elem.tolist()]
+                f.write(f"{i}, " + ", ".join(map(str, node_ids)) + "\n")
+            f.write("\n")
+
+            for set_name, node_idx, _ in constraint_sets:
+                node_ids = sorted(int(n) + 1 for n in node_idx.tolist())
+                if not node_ids:
+                    continue
+                f.write(f"*NSET, NSET={set_name}\n")
+                for i in range(0, len(node_ids), 16):
+                    f.write(", ".join(map(str, node_ids[i : i + 16])) + "\n")
+                f.write("\n")
+
+            for set_name, node_idx, _ in load_sets:
+                node_ids = sorted(int(n) + 1 for n in node_idx.tolist())
+                if not node_ids:
+                    continue
+                f.write(f"*NSET, NSET={set_name}\n")
+                for i in range(0, len(node_ids), 16):
+                    f.write(", ".join(map(str, node_ids[i : i + 16])) + "\n")
+                f.write("\n")
+
+            f.write(f"*MATERIAL, NAME={mat_name}\n")
+            f.write("*ELASTIC\n")
+            f.write(f"{float(E):.6f}, {float(nu):.6f}\n\n")
+
+            f.write(f"*SOLID SECTION, ELSET=ALL_ELEMENTS, MATERIAL={mat_name}\n\n")
+
+            for set_name, _, dofs in constraint_sets:
+                f.write("*BOUNDARY\n")
+
+                # Emit contiguous DOF ranges to preserve compact boundary
+                # representation through INP round-trips.
+                locked = [i + 1 for i, is_locked in enumerate(dofs) if is_locked]
+                if locked:
+                    start = locked[0]
+                    prev = locked[0]
+                    for dof_idx in locked[1:]:
+                        if dof_idx == prev + 1:
+                            prev = dof_idx
+                            continue
+                        f.write(f"{set_name}, {start}, {prev}\n")
+                        start = dof_idx
+                        prev = dof_idx
+                    f.write(f"{set_name}, {start}, {prev}\n")
+                f.write("\n")
+
+            f.write("*STEP, NLGEOM=NO\n")
+            f.write("*STATIC\n")
+            f.write("0.1, 1.0\n\n")
+
+            for set_name, node_idx, force_vec in load_sets:
+                # Preserve parsed load-component semantics across INP round-trips:
+                # from_inp() stores CLOAD magnitudes directly as PointLoad.force
+                # (without multiplying by NSET cardinality), so export should write
+                # the same component values back to CLOAD.
+                fx = float(force_vec.get("x", 0.0))
+                fy = float(force_vec.get("y", 0.0))
+                fz = float(force_vec.get("z", 0.0))
+
+                components = ((1, fx), (2, fy), (3, fz))
+                for dof, value in components:
+                    if abs(value) < 1e-12:
+                        continue
+                    f.write("*CLOAD\n")
+                    f.write(f"{set_name}, {dof}, {value:.6f}\n\n")
+
+            f.write("*NODE FILE\n")
+            f.write("U, RF\n")
+            f.write("*EL FILE\n")
+            f.write("S, E\n\n")
+            f.write("*END STEP\n")
+
+        return out_path
+
     @staticmethod
     def from_inp(filepath: str) -> "LoadCase":
         """
-        Parse an Abaqus .inp file and convert it to a LoadCase object.
+        Parse an Abaqus .inp file and return a LoadCase.
 
-        This function performs a "reverse engineering" of the explicit FEA model:
-        1. Calculates the bounding box of all nodes to define the Design Domain.
-        2. Converts Node Sets (*NSET) into box-based Spatial Selectors.
-        3. Maps *BOUNDARY constraints to fixed constraints.
-        4. Maps *CLOAD forces to concentrated loads.
+        Mesh data (nodes, elements, NSETs, ELSETs) is read via *meshio* for
+        robustness and broad format support.  Boundary conditions (*BOUNDARY)
+        and concentrated loads (*CLOAD) are extracted with a targeted custom
+        pass because meshio does not parse FEA solver directives.
 
         Args:
-            filepath: Path to the .inp file
+            filepath: Path to the ``.inp`` file.
 
         Returns:
-            LoadCase object
+            LoadCase with mesh, selectors, constraints and loads populated.
         """
+        import meshio
+
         path = Path(filepath)
         if not path.exists():
             raise FileNotFoundError(f"Abaqus file not found: {filepath}")
 
-        with open(path, "r") as f:
-            lines = f.readlines()
+        # ------------------------------------------------------------------
+        # 1. Parse mesh via meshio (nodes, elements, NSETs, ELSETs)
+        # ------------------------------------------------------------------
+        mesh = meshio.read(str(path))
 
-        nodes: Dict[int, Tuple[float, float, float]] = {}
-        node_sets: Dict[str, List[int]] = {}
-        element_sets: Dict[str, List[int]] = {}
-        elements: Dict[int, List[int]] = {}  # elem_id -> [node_ids]
+        nodes_arr = np.asarray(mesh.points, dtype=np.float64)
+        # Ensure 3-D coordinate array even when meshio returns 2-D geometry
+        if nodes_arr.ndim == 2 and nodes_arr.shape[1] == 2:
+            nodes_arr = np.hstack(
+                [nodes_arr, np.zeros((len(nodes_arr), 1), dtype=np.float64)]
+            )
 
-        # Regex patterns
-        # Matches: 1, 0.0, 0.0, 0.0
-        p_node = re.compile(r"^\s*(\d+),\s*([\d\.-]+),\s*([\d\.-]+)(?:,\s*([\d\.-]+))?")
-        # Matches: *KEYWORD, PARAM=VALUE
+        # point_sets: name -> 0-based index array
+        point_sets: Dict[str, np.ndarray] = {
+            k: np.asarray(v, dtype=np.int64) for k, v in (mesh.point_sets or {}).items()
+        }
+        cell_sets: Dict[str, Any] = mesh.cell_sets or {}
+
+        # Choose primary cell block: prefer 3-D (tet/hex) over 2-D/1-D
+        _dim_rank = {
+            "tetra": 3,
+            "tetra10": 3,
+            "hexahedron": 3,
+            "hexahedron20": 3,
+            "wedge": 3,
+            "pyramid": 3,
+            "quad": 2,
+            "triangle": 2,
+            "quad8": 2,
+            "triangle6": 2,
+            "line": 1,
+            "vertex": 0,
+        }
+        best_block = None
+        best_rank = -1
+        for cb in mesh.cells:
+            rank = _dim_rank.get(cb.type, 1)
+            if rank > best_rank or (
+                rank == best_rank
+                and best_block is not None
+                and len(cb.data) > len(best_block.data)
+            ):
+                best_block = cb
+                best_rank = rank
+
+        _meshio_to_type = {
+            "tetra": "tet4",
+            "tetra10": "tet10",
+            "hexahedron": "hex8",
+            "hexahedron20": "hex20",
+            "quad": "quad4",
+            "quad8": "quad8",
+            "triangle": "tri3",
+            "triangle6": "tri6",
+        }
+        if best_block is not None:
+            elems_arr = np.asarray(best_block.data, dtype=np.int64)
+            resolved_elem_type = _meshio_to_type.get(best_block.type, best_block.type)
+        else:
+            elems_arr = np.empty((0, 4), dtype=np.int64)
+            resolved_elem_type = "tet4"
+
+        if len(nodes_arr) == 0:
+            raise ValueError("No nodes found in .inp file")
+
+        # ------------------------------------------------------------------
+        # 2. Single targeted pass: build orig-1-based-node-ID → 0-based-idx
+        #    map (needed for CLOAD lines referencing explicit node IDs), and
+        #    collect raw *BOUNDARY / *CLOAD data lines.
+        # ------------------------------------------------------------------
         p_keyword = re.compile(r"^\*([\w\s]+)(?:,\s*(.*))?")
+        p_node_id = re.compile(r"^\s*(\d+),\s*[\d\.\-eE]")
 
-        current_section = None
-        current_nset_name = None
-        current_elset_name = None
-        current_nset_generate = False
-        current_elset_generate = False
-        current_element_type = None
+        node_id_to_idx: Dict[int, int] = {}
+        raw_bc_lines: List[str] = []
+        raw_cload_lines: List[str] = []
+
+        with open(path, "r") as _f:
+            raw_lines = _f.readlines()
+
+        section = None
+        node_counter = 0
+
+        for raw in raw_lines:
+            line = raw.strip()
+            if not line or line.startswith("**"):
+                continue
+            if line.startswith("*"):
+                m = p_keyword.match(line)
+                if not m:
+                    section = None
+                    continue
+                kw = m.group(1).upper().strip()
+                section = kw if kw in {"NODE", "BOUNDARY", "CLOAD"} else None
+                continue
+
+            if section == "NODE":
+                m = p_node_id.match(line)
+                if m:
+                    node_id_to_idx[int(m.group(1))] = node_counter
+                    node_counter += 1
+            elif section == "BOUNDARY":
+                raw_bc_lines.append(line)
+            elif section == "CLOAD":
+                raw_cload_lines.append(line)
+
+        # ------------------------------------------------------------------
+        # 3. Derive design-domain bounds from node coordinates
+        # ------------------------------------------------------------------
+        xs, ys, zs = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
+        bounds: Dict[str, float] = {
+            "x_min": float(xs.min()),
+            "x_max": float(xs.max()),
+            "y_min": float(ys.min()),
+            "y_max": float(ys.max()),
+            "z_min": float(zs.min()),
+            "z_max": float(zs.max()),
+        }
+
+        positive_dims = [
+            d
+            for d in (
+                bounds["x_max"] - bounds["x_min"],
+                bounds["y_max"] - bounds["y_min"],
+                bounds["z_max"] - bounds["z_min"],
+            )
+            if d > 0
+        ]
+        min_dim = min(positive_dims) if positive_dims else 1.0
+        selector_tol = max(min_dim * 0.01, 1e-4)
+        min_radius = max(min_dim * 0.02, 5e-5)
 
         problem_id = path.stem.upper()
         load_case = LoadCase(
             problem_id=problem_id, description=f"Imported from {path.name}"
         )
-        # Keep selector mapping available for existing region-based consumers.
-        load_case.meta = load_case.meta or {}
         load_case.selectors = {}
-        load_case.meta["selectors"] = load_case.selectors
-
-        # -------------------------------------------------------------
-        # PASS 1: Parse Nodes and Node Sets
-        # -------------------------------------------------------------
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith("**"):
-                continue
-
-            if line.startswith("*"):
-                match = p_keyword.match(line)
-                if not match:
-                    continue
-
-                keyword = match.group(1).upper().strip()
-                params = match.group(2) or ""
-
-                if keyword == "NODE":
-                    current_section = "NODE"
-                    current_nset_name = None
-                    current_elset_name = None
-                    current_nset_generate = False
-                    current_elset_generate = False
-                elif keyword == "NSET":
-                    current_section = "NSET"
-                    current_elset_name = None
-                    current_nset_generate = "GENERATE" in params.upper()
-                    # Extract NSET name: NSET=FIXED_BACK -> FIXED_BACK
-                    nset_match = re.search(r"NSET=([\w_\-\.]+)", params, re.IGNORECASE)
-                    if nset_match:
-                        current_nset_name = nset_match.group(1)
-                        if current_nset_name not in node_sets:
-                            node_sets[current_nset_name] = []
-                    else:
-                        current_nset_name = None
-                elif keyword == "ELSET":
-                    current_section = "ELSET"
-                    current_nset_name = None
-                    current_elset_generate = "GENERATE" in params.upper()
-                    elset_match = re.search(
-                        r"ELSET=([\w_\-\.]+)", params, re.IGNORECASE
-                    )
-                    if elset_match:
-                        current_elset_name = elset_match.group(1)
-                        if current_elset_name not in element_sets:
-                            element_sets[current_elset_name] = []
-                    else:
-                        current_elset_name = None
-                elif keyword == "ELEMENT":
-                    current_section = "ELEMENT"
-                    current_nset_name = None
-                    current_elset_name = None
-                    current_nset_generate = False
-                    current_elset_generate = False
-                    # Extract element type: TYPE=CPS4 or TYPE=C3D4
-                    type_match = re.search(r"TYPE=([\w\d]+)", params, re.IGNORECASE)
-                    if type_match:
-                        current_element_type = type_match.group(1).upper()
-                    else:
-                        current_element_type = None
-                else:
-                    current_section = None  # Skip materials, steps for now in this pass
-                    current_nset_name = None
-                    current_elset_name = None
-                    current_nset_generate = False
-                    current_elset_generate = False
-                continue
-
-            # Data parsing based on section
-            if current_section == "NODE":
-                m = p_node.match(line)
-                if m:
-                    nid = int(m.group(1))
-                    x = float(m.group(2))
-                    y = float(m.group(3))
-                    z = float(m.group(4)) if m.group(4) else 0.0
-                    nodes[nid] = (x, y, z)
-
-            elif current_section == "NSET" and current_nset_name:
-                # Parse comma separated node IDs.
-                # Note: Abaqus can split lists across 'generate' statements but valid lists are just comma sep
-                if current_nset_generate:
-                    # Handle generation: start, end, step
-                    parts = [p.strip() for p in line.split(",") if p.strip()]
-                    if len(parts) >= 2:
-                        start = int(parts[0])
-                        end = int(parts[1])
-                        step = int(parts[2]) if len(parts) > 2 else 1
-                        node_sets[current_nset_name].extend(range(start, end + 1, step))
-                else:
-                    # Standard list
-                    try:
-                        ids = [int(x) for x in line.split(",") if x.strip()]
-                        node_sets[current_nset_name].extend(ids)
-                    except ValueError:
-                        pass  # Ignore lines that might not match simple int lists
-
-            elif current_section == "ELSET" and current_elset_name:
-                if current_elset_generate:
-                    parts = [p.strip() for p in line.split(",") if p.strip()]
-                    if len(parts) >= 2:
-                        try:
-                            start = int(parts[0])
-                            end = int(parts[1])
-                            step = int(parts[2]) if len(parts) > 2 else 1
-                            element_sets[current_elset_name].extend(
-                                range(start, end + 1, step)
-                            )
-                        except ValueError:
-                            pass
-                else:
-                    try:
-                        ids = [int(x) for x in line.split(",") if x.strip()]
-                        element_sets[current_elset_name].extend(ids)
-                    except ValueError:
-                        pass
-
-            elif current_section == "ELEMENT":
-                # Parse element: elem_id, node1, node2, node3, ...
-                parts = [p.strip() for p in line.split(",") if p.strip()]
-                if len(parts) >= 2:
-                    try:
-                        elem_id = int(parts[0])
-                        node_ids = [int(parts[i]) for i in range(1, len(parts))]
-                        elements[elem_id] = node_ids
-                    except ValueError:
-                        pass
-
-        if not nodes:
-            raise ValueError("No nodes found in .inp file")
-
-        # -------------------------------------------------------------
-        # 2. Derive Design Domain from all Nodes
-        # -------------------------------------------------------------
-        all_coords = list(nodes.values())
-        xs, ys, zs = zip(*all_coords)
-
-        # Create valid bounds
-        bounds = {
-            "x_min": min(xs),
-            "x_max": max(xs),
-            "y_min": min(ys),
-            "y_max": max(ys),
-            "z_min": min(zs),
-            "z_max": max(zs),
+        load_case.meta = {
+            "node_sets_count": len(point_sets),
+            "element_sets_count": len(cell_sets),
+            "node_sets": sorted(point_sets.keys()),
+            "element_sets": sorted(cell_sets.keys()),
+            "selectors": load_case.selectors,
         }
+        load_case.domain = DesignDomain(shape_type="box", bounds=bounds, units="mm")
+        load_case.bounds = bounds
+        load_case.mesh_nodes = nodes_arr.astype(np.float32)
+        load_case.mesh_elements = elems_arr.astype(np.int32)
+        load_case.mesh_element_type = resolved_elem_type
 
-        dx = bounds["x_max"] - bounds["x_min"]
-        dy = bounds["y_max"] - bounds["y_min"]
-        dz = bounds["z_max"] - bounds["z_min"]
-        positive_dims = [d for d in (dx, dy, dz) if d > 0]
-        min_dim = min(positive_dims) if positive_dims else 1.0
+        # ------------------------------------------------------------------
+        # 4. Build spatial selectors from NSETs (meshio point_sets)
+        # ------------------------------------------------------------------
+        selector_map: Dict[str, str] = {}  # nset_name -> selector_id
 
-        # Scale-aware tolerances: avoid hard-coded 0.5mm which is enormous for sub-mm models.
-        selector_tol = max(min_dim * 0.01, 1e-4)
-        min_radius = max(min_dim * 0.02, 5e-5)
-
-        load_case.domain = DesignDomain(
-            shape_type="box", bounds=bounds, units="mm"  # Assumption
-        )
-        load_case.bounds = bounds  # Populate legacy bounds too
-        load_case.meta = load_case.meta or {}
-        load_case.meta["node_sets_count"] = len(node_sets)
-        load_case.meta["element_sets_count"] = len(element_sets)
-        load_case.meta["abaqus_element_type"] = current_element_type
-        load_case.meta["node_sets"] = sorted(node_sets.keys())
-        load_case.meta["element_sets"] = sorted(element_sets.keys())
-
-        # -------------------------------------------------------------
-        # 3. Create Spatial Selectors from Node Sets
-        # -------------------------------------------------------------
-        selector_map = {}  # nset_name -> selector_id
-
-        for name, nids in node_sets.items():
-            if not nids:
+        for name, idx_arr in point_sets.items():
+            if idx_arr.size == 0:
                 continue
+            coords = nodes_arr[idx_arr]
+            s_xs, s_ys, s_zs = coords[:, 0], coords[:, 1], coords[:, 2]
+            cx, cy, cz = float(s_xs.mean()), float(s_ys.mean()), float(s_zs.mean())
+            rx = max((float(s_xs.max()) - float(s_xs.min())) / 2.0, min_radius)
+            ry = max((float(s_ys.max()) - float(s_ys.min())) / 2.0, min_radius)
+            rz = max((float(s_zs.max()) - float(s_zs.min())) / 2.0, min_radius)
 
-            # Get coords for this set
-            set_coords = [nodes[nid] for nid in nids if nid in nodes]
-            if not set_coords:
-                continue
-
-            s_xs, s_ys, s_zs = zip(*set_coords)
-
-            # Centroid and anisotropic search radii for robust remapping
-            cx = float(np.mean(s_xs))
-            cy = float(np.mean(s_ys))
-            cz = float(np.mean(s_zs))
-
-            # Use half extents as anisotropic radii and enforce a small scale-aware minimum
-            rx = max((max(s_xs) - min(s_xs)) / 2.0, min_radius)
-            ry = max((max(s_ys) - min(s_ys)) / 2.0, min_radius)
-            rz = max((max(s_zs) - min(s_zs)) / 2.0, min_radius)
-
-            # Tolerance expansion is clamped to global design bounds to prevent oversized regions.
             query = {
-                "x_min": max(min(s_xs) - selector_tol, bounds["x_min"]),
-                "x_max": min(max(s_xs) + selector_tol, bounds["x_max"]),
-                "y_min": max(min(s_ys) - selector_tol, bounds["y_min"]),
-                "y_max": min(max(s_ys) + selector_tol, bounds["y_max"]),
-                "z_min": max(min(s_zs) - selector_tol, bounds["z_min"]),
-                "z_max": min(max(s_zs) + selector_tol, bounds["z_max"]),
-                # Extra metadata used for anisotropic point-load remapping
+                "x_min": max(float(s_xs.min()) - selector_tol, bounds["x_min"]),
+                "x_max": min(float(s_xs.max()) + selector_tol, bounds["x_max"]),
+                "y_min": max(float(s_ys.min()) - selector_tol, bounds["y_min"]),
+                "y_max": min(float(s_ys.max()) + selector_tol, bounds["y_max"]),
+                "z_min": max(float(s_zs.min()) - selector_tol, bounds["z_min"]),
+                "z_max": min(float(s_zs.max()) + selector_tol, bounds["z_max"]),
                 "x": cx,
                 "y": cy,
                 "z": cz,
@@ -816,257 +1193,187 @@ class LoadCase:
                 "ry": ry,
                 "rz": rz,
             }
-
             sel_id = f"SELECTOR_{name}"
-            selector = SpatialSelector(id=sel_id, type="box_3d", query=query)
-            load_case.selectors[sel_id] = selector
+            load_case.selectors[sel_id] = SpatialSelector(
+                id=sel_id, type="box_3d", query=query
+            )
             selector_map[name] = sel_id
 
-        # -------------------------------------------------------------
-        # 4. PASS 2: Parse BCs and Loads requiring the selectors
-        # -------------------------------------------------------------
-        current_section = None
+        def _find_selector(target: str) -> Optional[str]:
+            """Case-insensitive NSET name → selector_id lookup."""
+            if target in selector_map:
+                return selector_map[target]
+            tl = target.lower()
+            for k, v in selector_map.items():
+                if k.lower() == tl:
+                    return v
+            return None
 
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith("**"):
+        # ------------------------------------------------------------------
+        # 5. Parse *BOUNDARY → FixedConstraints
+        # ------------------------------------------------------------------
+        for line in raw_bc_lines:
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
                 continue
-            if line.startswith("*"):
-                match = p_keyword.match(line)
-                if not match:
-                    continue
-                keyword = match.group(1).upper().strip()
-
-                if keyword in ["BOUNDARY", "CLOAD"]:
-                    current_section = keyword
-                else:
-                    # Reset if it's a new keyword we don't care about here
-                    current_section = None
+            nset_name = parts[0]
+            try:
+                first_dof, last_dof = int(parts[1]), int(parts[2])
+            except ValueError:
                 continue
 
-            if current_section == "BOUNDARY":
-                # Format: NodeSet, FirstDOF, LastDOF, Magnitude
-                # e.g. FIXED_BACK, 1, 2, 0.0
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) < 3:
-                    continue
+            dof_lock = tuple(first_dof <= i <= last_dof for i in (1, 2, 3))
 
-                nset_name = parts[0]
-                first_dof = int(parts[1])
-                last_dof = int(parts[2])
-                # mag = float(parts[3]) if len(parts) > 3 else 0.0 # Magnitude usually 0 for fixed
-
-                # Map DOFs to boolean lock
-                # 1=x, 2=y, 3=z.
-                # If 1,3 -> Locks 1, 2, 3.
-                # If 1,1 -> Locks 1.
-
-                dof_lock = {"x": False, "y": False, "z": False}
-                if first_dof <= 1 <= last_dof:
-                    dof_lock["x"] = True
-                if first_dof <= 2 <= last_dof:
-                    dof_lock["y"] = True
-                if first_dof <= 3 <= last_dof:
-                    dof_lock["z"] = True
-
-                # If strict NSET name match failed, try case-insensitive or search
-                target_sel_id = selector_map.get(nset_name)
-                if not target_sel_id:
-                    # Try finding it
-                    for k in selector_map:
-                        if k.lower() == nset_name.lower():
-                            target_sel_id = selector_map[k]
-                            break
-
-                if target_sel_id:
-                    selector = load_case.selectors.get(target_sel_id)
-                    location = selector.query if selector else target_sel_id
-                    bc = FixedConstraint(
-                        location=location,
-                        dofs=(dof_lock["x"], dof_lock["y"], dof_lock["z"]),
-                        tolerance=1,
+            sel_id = _find_selector(nset_name)
+            if sel_id:
+                bc = FixedConstraint(
+                    location=load_case.selectors[sel_id].query,
+                    dofs=dof_lock,
+                    tolerance=1,
+                )
+                load_case.boundary_conditions.append(bc)
+            elif nset_name.isdigit():
+                idx = node_id_to_idx.get(int(nset_name))
+                if idx is not None:
+                    nx, ny, nz = (
+                        float(nodes_arr[idx, 0]),
+                        float(nodes_arr[idx, 1]),
+                        float(nodes_arr[idx, 2]),
                     )
-                    load_case.boundary_conditions.append(bc)
-                else:
-                    # It might be a single node ID?
-                    if nset_name.isdigit():
-                        nid = int(nset_name)
-                        if nid in nodes:
-                            # Create point selector for this node
-                            pt_id = f"PT_{nid}"
-                            nx, ny, nz = nodes[nid]
-                            load_case.selectors[pt_id] = SpatialSelector(
-                                id=pt_id,
-                                type="point",
-                                query={"x": nx, "y": ny, "z": nz},
-                            )
-                            bc = FixedConstraint(
-                                location=(nx, ny, nz),
-                                dofs=(dof_lock["x"], dof_lock["y"], dof_lock["z"]),
-                                tolerance=1,
-                            )
-                            load_case.boundary_conditions.append(bc)
-
-            elif current_section == "CLOAD":
-                # Format: NodeID/NodeSet, DOF, Magnitude
-                # e.g. 19, 2, -500.
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) < 3:
-                    continue
-
-                target = parts[0]  # Could be int ID or string NSET
-                dof = int(parts[1])
-                mag = float(parts[2])
-
-                # Vector mapping
-                vec = {"x": 0.0, "y": 0.0, "z": 0.0}
-                axis = None
-                if dof == 1:
-                    vec["x"] = mag
-                    axis = "x" if mag > 0 else "-x"
-                elif dof == 2:
-                    vec["y"] = mag
-                    axis = "y" if mag > 0 else "-y"
-                elif dof == 3:
-                    vec["z"] = mag
-                    axis = "z" if mag > 0 else "-z"
-
-                # Check if target is a NSET
-                target_sel_id = selector_map.get(target)
-                if not target_sel_id:
-                    for k in selector_map:
-                        if k.lower() == target.lower():
-                            target_sel_id = selector_map[k]
-                            break
-
-                if target_sel_id:
-                    selector = load_case.selectors.get(target_sel_id)
-                    query = selector.query if selector else {}
-
-                    cx = query.get(
-                        "x", (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2
-                    )
-                    cy = query.get(
-                        "y", (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2
-                    )
-                    cz = query.get(
-                        "z", (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2
-                    )
-
-                    rx = query.get(
-                        "rx",
-                        max(
-                            (query.get("x_max", cx) - query.get("x_min", cx)) / 2,
-                            min_radius,
+                    pt_id = f"PT_{nset_name}"
+                    load_case.selectors.setdefault(
+                        pt_id,
+                        SpatialSelector(
+                            id=pt_id,
+                            type="point",
+                            query={"x": nx, "y": ny, "z": nz},
                         ),
                     )
-                    ry = query.get(
-                        "ry",
-                        max(
-                            (query.get("y_max", cy) - query.get("y_min", cy)) / 2,
-                            min_radius,
-                        ),
-                    )
-                    rz = query.get(
-                        "rz",
-                        max(
-                            (query.get("z_max", cz) - query.get("z_min", cz)) / 2,
-                            min_radius,
-                        ),
+                    load_case.boundary_conditions.append(
+                        FixedConstraint(
+                            location=(nx, ny, nz), dofs=dof_lock, tolerance=1
+                        )
                     )
 
+        # ------------------------------------------------------------------
+        # 6. Parse *CLOAD → PointLoads
+        # ------------------------------------------------------------------
+        for line in raw_cload_lines:
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
+                continue
+            target = parts[0]
+            try:
+                dof, mag = int(parts[1]), float(parts[2])
+            except ValueError:
+                continue
+
+            vec: Dict[str, float] = {"x": 0.0, "y": 0.0, "z": 0.0}
+            axis: Optional[str] = None
+            if dof == 1:
+                vec["x"] = mag
+                axis = "x" if mag >= 0 else "-x"
+            elif dof == 2:
+                vec["y"] = mag
+                axis = "y" if mag >= 0 else "-y"
+            elif dof == 3:
+                vec["z"] = mag
+                axis = "z" if mag >= 0 else "-z"
+
+            # Determine if target maps to a NSET
+            matched_nset: Optional[str] = None
+            for k in point_sets:
+                if k == target or k.lower() == target.lower():
+                    matched_nset = k
+                    break
+            singleton_nset = (
+                matched_nset is not None and point_sets[matched_nset].size <= 1
+            )
+
+            sel_id = _find_selector(target)
+            if sel_id:
+                query = load_case.selectors[sel_id].query
+                cx = query.get(
+                    "x", (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2
+                )
+                cy = query.get(
+                    "y", (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2
+                )
+                cz = query.get(
+                    "z", (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2
+                )
+                rx = query.get(
+                    "rx",
+                    max(
+                        (query.get("x_max", cx) - query.get("x_min", cx)) / 2,
+                        min_radius,
+                    ),
+                )
+                ry = query.get(
+                    "ry",
+                    max(
+                        (query.get("y_max", cy) - query.get("y_min", cy)) / 2,
+                        min_radius,
+                    ),
+                )
+                rz = query.get(
+                    "rz",
+                    max(
+                        (query.get("z_max", cz) - query.get("z_min", cz)) / 2,
+                        min_radius,
+                    ),
+                )
+
+                load = PointLoad(
+                    point=(cx, cy, cz),
+                    force=(vec["x"], vec["y"], vec["z"]),
+                    direction=None,
+                    tolerance=1,
+                    search_radius=None if singleton_nset else (rx, ry, rz),
+                )
+                load.name = f"LOAD_{target}_{dof}"
+                load.region_id = sel_id
+                load.vector_newtons = vec
+                load.direction = axis
+                load.magnitude_newtons = abs(mag)
+                load_case.loads.append(load)
+
+            elif target.isdigit():
+                idx = node_id_to_idx.get(int(target))
+                if idx is not None:
+                    n_x, n_y, n_z = (
+                        float(nodes_arr[idx, 0]),
+                        float(nodes_arr[idx, 1]),
+                        float(nodes_arr[idx, 2]),
+                    )
+                    pt_id = f"POINT_{target}"
+                    load_case.selectors.setdefault(
+                        pt_id,
+                        SpatialSelector(
+                            id=pt_id,
+                            type="box_3d",
+                            query={"x": n_x, "y": n_y, "z": n_z},
+                        ),
+                    )
                     load = PointLoad(
-                        point=(cx, cy, cz),
+                        point=(n_x, n_y, n_z),
                         force=(vec["x"], vec["y"], vec["z"]),
                         direction=None,
                         tolerance=1,
-                        search_radius=(rx, ry, rz),
+                        search_radius=None,
                     )
-                    # Compatibility attrs for downstream utilities expecting parser-style load fields
-                    load.name = f"LOAD_{target}_{dof}"
-                    load.region_id = target_sel_id
+                    load.name = f"LOAD_NODE_{target}_{dof}"
+                    load.region_id = pt_id
                     load.vector_newtons = vec
                     load.direction = axis
                     load.magnitude_newtons = abs(mag)
                     load_case.loads.append(load)
 
-                # Check if target is a NODE ID
-                elif target.isdigit():
-                    nid = int(target)
-                    if nid in nodes:
-                        n_x, n_y, n_z = nodes[nid]
-                        pt_id = f"POINT_{nid}"
-                        # Add selector only if not exists
-                        if pt_id not in load_case.selectors:
-                            load_case.selectors[pt_id] = SpatialSelector(
-                                id=pt_id,
-                                type="box_3d",
-                                query={"x": n_x, "y": n_y, "z": n_z},  # Treats as point
-                            )
-
-                        load = PointLoad(
-                            point=(n_x, n_y, n_z),
-                            force=(vec["x"], vec["y"], vec["z"]),
-                            direction=None,
-                            tolerance=1,
-                            search_radius=(min_radius, min_radius, min_radius),
-                        )
-                        load.name = f"LOAD_NODE_{nid}_{dof}"
-                        load.region_id = pt_id
-                        load.vector_newtons = vec
-                        load.direction = axis
-                        load.magnitude_newtons = abs(mag)
-                        load_case.loads.append(load)
-
-        # -------------------------------------------------------------
-        # 5. Convert mesh data to numpy arrays for LoadCase
-        # -------------------------------------------------------------
-        if nodes and elements:
-            # Create node array (sorted by node ID)
-            sorted_node_ids = sorted(nodes.keys())
-            node_id_map = {nid: idx for idx, nid in enumerate(sorted_node_ids)}
-
-            node_coords = np.array(
-                [nodes[nid] for nid in sorted_node_ids], dtype=np.float32
-            )
-
-            # Create element array (remap node IDs to indices)
-            elem_list = []
-            for eid in sorted(elements.keys()):
-                node_ids = elements[eid]
-                # Remap to 0-based indices
-                indices = [node_id_map[nid] for nid in node_ids if nid in node_id_map]
-                if len(indices) == len(node_ids):  # Only add if all nodes found
-                    elem_list.append(indices)
-
-            if elem_list:
-                # Determine element type from first element
-                nodes_per_elem = len(elem_list[0])
-                elem_array = np.array(elem_list, dtype=np.int32)
-
-                # Map Abaqus element types to standard names
-                elem_type_map = {
-                    "C3D4": "tet4",
-                    "C3D10": "tet10",
-                    "CPS4": "quad4",
-                    "CPS3": "tri3",
-                    "CPE4": "quad4",
-                    "CPE3": "tri3",
-                }
-
-                mesh_elem_type = elem_type_map.get(
-                    current_element_type or "", f"generic_{nodes_per_elem}node"
-                )
-
-                load_case.mesh_nodes = node_coords
-                load_case.mesh_elements = elem_array
-                load_case.mesh_element_type = mesh_elem_type
-
-                logger.info(
-                    f"Extracted mesh: {len(node_coords)} nodes, {len(elem_array)} {mesh_elem_type} elements"
-                )
-
         logger.info(
-            f"Parsed Abaqus INP: {len(nodes)} nodes, {len(node_sets)} node sets, {len(element_sets)} element sets, {len(load_case.boundary_conditions)} BCs, {len(load_case.loads)} Loads"
+            f"Parsed Abaqus INP (meshio): {len(nodes_arr)} nodes, "
+            f"{len(elems_arr)} {resolved_elem_type} elements, "
+            f"{len(point_sets)} NSETs, "
+            f"{len(load_case.boundary_conditions)} BCs, "
+            f"{len(load_case.loads)} loads"
         )
         return load_case

@@ -7,11 +7,14 @@ It requires GMSH to be installed and available in PATH.
 
 import subprocess
 import tempfile
+import logging
 from pathlib import Path
 from typing import Literal, Tuple
 import torch
 import os
 import meshio
+
+logger = logging.getLogger(__name__)
 
 from .base import MesherBase
 
@@ -35,7 +38,20 @@ class GmshSubprocessMesher(MesherBase):
         environment variable, falling back to ``gmsh`` (expected in PATH).
         """
         super().__init__(num_threads)
-        self.gmsh_path = os.environ.get("GMSH_EXECUTABLE_PATH", "gmsh")
+        configured = os.environ.get("GMSH_EXECUTABLE_PATH", "gmsh")
+        # If the configured path is an absolute path that does not exist on this
+        # machine (e.g. the Docker cadruntime path stored in .env), fall back to
+        # looking up "gmsh" on PATH so local runs work without editing .env.
+        if os.path.isabs(configured) and not os.path.isfile(configured):
+            import shutil
+
+            fallback = shutil.which("gmsh") or "gmsh"
+            logger.warning(
+                f"GMSH_EXECUTABLE_PATH='{configured}' not found; falling back to '{fallback}'"
+            )
+            self.gmsh_path = fallback
+        else:
+            self.gmsh_path = configured
 
     @classmethod
     def is_available(cls) -> bool:
