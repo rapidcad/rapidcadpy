@@ -84,7 +84,81 @@ cd docs && npm install && npm run dev
 
 Open http://localhost:3000/docs
 
-## 🧪 Testing
+## � MCP Server (Docs via Model Context Protocol)
+
+The `mcp/` directory contains a [FastMCP](https://github.com/jlowin/fastmcp) server
+that exposes all RapidCAD.py documentation as MCP resources and tools, making it
+directly accessible to AI assistants (Claude, GitHub Copilot, etc.).
+
+### Run via FastMCP CLI
+
+```bash
+fastmcp run mcp/server.py
+# HTTP/SSE transport:
+fastmcp run mcp/server.py --transport sse --port 8765
+```
+
+### Add to Claude Desktop / VS Code Copilot
+
+**Option A – let the client launch the process (stdio):**
+
+```json
+{
+  "mcpServers": {
+    "rapidcadpy-docs": {
+      "command": "python",
+      "args": ["path/to/rapidcadpy/mcp/server.py"]
+    }
+  }
+}
+```
+
+**Option B – connect to an already-running local SSE server on port 8765:**
+
+First start the server:
+```bash
+fastmcp run mcp/server.py --transport sse --port 8765
+```
+
+Then point your client at it:
+
+*Claude Desktop* (`claude_desktop_config.json`):
+```json
+{
+  "mcpServers": {
+    "rapidcadpy-docs": {
+      "url": "http://localhost:8765/sse"
+    }
+  }
+}
+```
+
+*VS Code Copilot* (`settings.json`):
+```json
+{
+  "mcp": {
+    "servers": {
+      "rapidcadpy-docs": {
+        "type": "sse",
+        "url": "http://localhost:8765/sse"
+      }
+    }
+  }
+}
+```
+
+### Available tools
+
+| Tool | Description |
+|---|---|
+| `list_docs` | List all documentation pages (path, title, section) |
+| `get_doc(path)` | Full content of a page, e.g. `"finite-element-analysis/fea-analysis"` |
+| `search_docs(query)` | Full-text search with snippets |
+| `get_doc_section(section)` | All pages in a section (`computer-aided-design`, `finite-element-analysis`, `advanced`, `api`) |
+
+Resource `docs://index` returns the top-level index page.
+
+## �🧪 Testing
 
 ```bash
 pytest tests/

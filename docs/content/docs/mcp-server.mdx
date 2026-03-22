@@ -1,0 +1,196 @@
+---
+title: MCP Server
+description: Expose RapidCAD.py documentation to AI assistants via the Model Context Protocol
+---
+
+# MCP Server
+
+The `mcp/` directory ships a [FastMCP](https://github.com/jlowin/fastmcp) server
+that makes all RapidCAD.py documentation available through the
+[Model Context Protocol](https://modelcontextprotocol.io) (MCP).
+
+Once connected, AI assistants such as Claude or GitHub Copilot can look up API
+references, FEA examples, and guides without leaving your IDE.
+
+## Installation
+
+The only extra dependency is `fastmcp`:
+
+```bash
+pip install fastmcp
+```
+
+## Running the server
+
+### Stdio transport (default)
+
+Most MCP clients communicate over stdin/stdout. Start the server with:
+
+```bash
+python mcp/server.py
+```
+
+Or via the FastMCP CLI:
+
+```bash
+fastmcp run mcp/server.py
+```
+
+### HTTP / SSE transport
+
+Useful for testing with tools like `curl` or for long-running shared deployments:
+
+```bash
+fastmcp run mcp/server.py --transport sse --port 8765
+```
+
+## Connecting an MCP client
+
+### Claude Desktop
+
+Add an entry to `~/Library/Application Support/Claude/claude_desktop_config.json`.
+
+**Option A – let Claude launch the process (stdio):**
+
+```json
+{
+  "mcpServers": {
+    "rapidcadpy-docs": {
+      "command": "python",
+      "args": ["/path/to/rapidcadpy/mcp/server.py"]
+    }
+  }
+}
+```
+
+**Option B – connect to an already-running local server on port 8765:**
+
+Start the server first:
+
+```bash
+fastmcp run mcp/server.py --transport sse --port 8765
+```
+
+Then configure Claude Desktop to connect via SSE:
+
+```json
+{
+  "mcpServers": {
+    "rapidcadpy-docs": {
+      "url": "http://localhost:8765/sse"
+    }
+  }
+}
+```
+
+### VS Code GitHub Copilot
+
+Add to your VS Code `settings.json` (workspace or user).
+
+**Option A – stdio (VS Code manages the process):**
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "rapidcadpy-docs": {
+        "type": "stdio",
+        "command": "python",
+        "args": ["vendor/rapidcadpy/mcp/server.py"]
+      }
+    }
+  }
+}
+```
+
+**Option B – SSE (connect to already-running server on port 8765):**
+
+```json
+{
+  "mcp": {
+    "servers": {
+      "rapidcadpy-docs": {
+        "type": "sse",
+        "url": "http://localhost:8765/sse"
+      }
+    }
+  }
+}
+```
+
+## Tools reference
+
+The server exposes four tools and one resource.
+
+### `list_docs`
+
+Returns a list of all documentation pages.
+
+```python
+# Example response item
+{
+  "path": "finite-element-analysis/fea-analysis",
+  "title": "FEA Example",
+  "description": "Perform structural analysis on your CAD models with integrated FEA",
+  "section": "finite-element-analysis"
+}
+```
+
+### `get_doc(path)`
+
+Returns the full Markdown content of a page.
+
+```text
+path examples:
+  "index"
+  "computer-aided-design/fluent-api"
+  "finite-element-analysis/fea-analysis"
+  "finite-element-analysis/optimization"
+  "advanced/3d-exports"
+```
+
+### `search_docs(query, max_results?)`
+
+Full-text search across all pages. Returns matching pages with a short
+snippet around the first occurrence.
+
+```python
+# Example call
+search_docs("FixedConstraint", max_results=5)
+
+# Example response item
+{
+  "path": "finite-element-analysis/constraints",
+  "title": "Constraints",
+  "snippet": "...via `analyzer.add_constraint()`)\n- **Loads** - Define forces applied..."
+}
+```
+
+### `get_doc_section(section)`
+
+Returns all pages (with full content) that belong to a section.
+
+| `section` argument | Content |
+|---|---|
+| `root` | Top-level index |
+| `computer-aided-design` | Fluent API, shapes, workplanes, sweep, profiles |
+| `finite-element-analysis` | FEA analysis, constraints, loads, materials, meshing, optimization, visualization |
+| `advanced` | 2D/3D exports, visualizations, Inventor reverse-engineering |
+| `api` | Low-level mesher example |
+
+### Resource: `docs://index`
+
+The top-level index page is also exposed as an MCP resource:
+
+```
+docs://index
+```
+
+## Example AI prompt
+
+Once connected you can ask your AI assistant:
+
+> "Using the rapidcadpy-docs MCP, show me how to run topology optimization from a FEA load case."
+
+The assistant will call `get_doc("finite-element-analysis/optimization")` and
+return the relevant guide text and code examples inline.
