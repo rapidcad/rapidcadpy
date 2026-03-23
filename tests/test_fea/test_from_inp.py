@@ -8,7 +8,7 @@ from ...rapidcadpy.fea.boundary_conditions import FixedConstraint, PointLoad
 
 
 class TestFromInp:
-    @pytest.fixture(params=["fea_test_4"])
+    @pytest.fixture(params=["fea_test_4", "fea_test_5"])
     def get_inp_file(self, request) -> dict:
         """Parametrized fixture: runs tests for both FEA input files."""
         inp_file = pathlib.Path(__file__).parent.parent / "test_files" / "fea"
@@ -36,9 +36,9 @@ class TestFromInp:
                 "mesh_element_type": "tet4",
             },
             "fea_test_4": {
-                "path": inp_file / "fea_test_4.inp",
-                "problem_id": "FEA_TEST_4",
-                "description_contains": "fea_test_4.inp",
+                "path": inp_file / "fea_test_4_freecad.inp",
+                "problem_id": "FEA_TEST_4_FREECAD",
+                "description_contains": "fea_test_4_freecad.inp",
                 "bounds": {
                     "x_min": -52.477569,
                     "x_max": 47.522431,
@@ -75,6 +75,27 @@ class TestFromInp:
                 "abaqus_element_type": None,
                 "mesh_nodes_shape": (1460, 3),
                 "mesh_elements_shape": (701, 10),
+                "mesh_element_type": "tet10",
+            },
+            "fea_test_5": {
+                "path": inp_file / "fea_test_5_freecad.inp",
+                "problem_id": "FEA_TEST_5_FREECAD",
+                "description_contains": "fea_test_5_freecad.inp",
+                "bounds": {
+                    "x_min": 0.0,
+                    "x_max": 8000.0,
+                    "y_min": 0.0,
+                    "y_max": 1000.0,
+                    "z_min": 0.0,
+                    "z_max": 1000.0,
+                },
+                "bc_dofs": (True, True, True),
+                "load_force": (0.0, 0.0, -9000000.0),
+                "load_magnitude": 9000000.0,
+                "node_sets_count_min": 1,
+                "abaqus_element_type": None,
+                "mesh_nodes_shape": (569, 3),
+                "mesh_elements_shape": (242, 10),
                 "mesh_element_type": "tet10",
             },
         }
