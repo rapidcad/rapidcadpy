@@ -2,3 +2,60 @@
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
 @import 'fumadocs-python/preset.css';
+
+/* ═══════════════════════════════════════════════════════════════
+   Engineering dark theme — matches landing page
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Override Fumadocs color tokens (light root — always forced dark) */
+@theme {
+  --color-fd-background:         #14141f;
+  --color-fd-foreground:         #e6e6f0;
+  --color-fd-muted:              #1a1a26;
+  --color-fd-muted-foreground:   #7878a0;
+  --color-fd-popover:            #1a1a26;
+  --color-fd-popover-foreground: #e6e6f0;
+  --color-fd-card:               #1a1a26;
+  --color-fd-card-foreground:    #e6e6f0;
+  --color-fd-border:             #2a2a3c;
+  --color-fd-primary:            #4d7cfe;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary:          #222232;
+  --color-fd-secondary-foreground: #e6e6f0;
+  --color-fd-accent:             rgba(77, 124, 254, 0.08);
+  --color-fd-accent-foreground:  #e6e6f0;
+  --color-fd-ring:               #4d7cfe;
+  --color-fd-overlay:            rgba(0, 0, 0, 0.4);
+
+  /* Fonts */
+  --font-sans:    var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono:    var(--font-ibm-plex-mono), ui-monospace, monospace;
+}
+
+/* Same values under .dark so the theme toggle stays consistent */
+.dark {
+  --color-fd-background:         #14141f;
+  --color-fd-foreground:         #e6e6f0;
+  --color-fd-muted:              #1a1a26;
+  --color-fd-muted-foreground:   #7878a0;
+  --color-fd-popover:            #1a1a26;
+  --color-fd-popover-foreground: #e6e6f0;
+  --color-fd-card:               #1a1a26;
+  --color-fd-card-foreground:    #e6e6f0;
+  --color-fd-border:             #2a2a3c;
+  --color-fd-primary:            #4d7cfe;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary:          #222232;
+  --color-fd-secondary-foreground: #e6e6f0;
+  --color-fd-accent:             rgba(77, 124, 254, 0.08);
+  --color-fd-accent-foreground:  #e6e6f0;
+  --color-fd-ring:               #4d7cfe;
+  --color-fd-overlay:            rgba(0, 0, 0, 0.4);
+}
+
+body {
+  background: #14141f;
+  color: #e6e6f0;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
