@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from ...shape import Shape
-    from ..load_case import LoadCase
+    from ..load_case.load_case import LoadCase
     from ..materials import MaterialProperties
     from ..boundary_conditions import Load, BoundaryCondition
     from ..results import FEAResults, OptimizationResult
@@ -219,7 +219,7 @@ class FEAAnalyzer:
         """
         self.shape = shape
         if load_case is None:
-            from ..load_case import LoadCase
+            from ..load_case.load_case import LoadCase
             from ..materials import Material
 
             self.load_case = LoadCase(

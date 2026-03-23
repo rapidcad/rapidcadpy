@@ -1,0 +1,44 @@
+*HEADING
+CalculiX FEA model: unit-cube with 6 C3D4 tet elements
+One fixed face (z=0), one loaded face (z=1).
+
+*NODE, NSET=ALL_NODES
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 1.0, 1.0, 0.0
+4, 0.0, 1.0, 0.0
+5, 0.0, 0.0, 1.0
+6, 1.0, 0.0, 1.0
+7, 1.0, 1.0, 1.0
+8, 0.0, 1.0, 1.0
+
+*ELEMENT, TYPE=C3D4, ELSET=ALL_ELEMENTS
+1, 1, 2, 6, 7
+2, 1, 2, 3, 7
+3, 1, 3, 4, 7
+4, 1, 4, 8, 7
+5, 1, 8, 5, 7
+6, 1, 5, 6, 7
+
+*NSET, NSET=CONSTRAINT
+1, 2, 3, 4
+
+*NSET, NSET=LOAD
+5, 6, 7, 8
+
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000.0, 0.300
+
+*SOLID SECTION, ELSET=ALL_ELEMENTS, MATERIAL=STEEL
+
+*BOUNDARY
+CONSTRAINT, 1, 3
+
+*STEP
+*STATIC
+
+*CLOAD
+LOAD, 3, -100.0
+
+*END STEP

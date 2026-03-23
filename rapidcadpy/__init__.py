@@ -9,7 +9,10 @@ __author__ = "Your Name"
 __email__ = "your.email@example.com"
 
 # Core fluent API components
-from .app import App
+try:
+    from .app import App
+except ImportError:
+    App = None
 
 # Core geometry types for fluent API
 from .cad_types import Vector, Vertex

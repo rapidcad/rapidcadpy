@@ -7,7 +7,7 @@ This module requires additional dependencies:
 
 # Always export base classes (no torch dependency needed)
 from .kernels.base import FEAKernel, FEAAnalyzer
-from .load_case import LoadCase
+from .load_case.load_case import LoadCase
 
 try:
     import torch

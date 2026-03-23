@@ -1,0 +1,1 @@
+fea_test_4.inp: example from FreeCAD cube with fixed constraint, area load, and pressure load
