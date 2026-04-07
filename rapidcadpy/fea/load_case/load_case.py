@@ -6,11 +6,11 @@ from venv import logger
 
 import numpy as np
 
-from .spatial_selector import SpatialSelector
+from ..spatial_selector import SpatialSelector
 
-from .design_domain import DesignDomain
+from ..design_domain import DesignDomain
 
-from .boundary_conditions import (
+from ..boundary_conditions import (
     BoundaryCondition,
     DistributedLoad,
     FixedConstraint,
@@ -18,11 +18,12 @@ from .boundary_conditions import (
     PressureLoad,
     PointLoad,
 )
-from .materials import Material, MaterialProperties
+from ..materials import Material, MaterialProperties
+from .freecad_inp_load_case import LoadCaseFromFreeCadInp
 
 
 @dataclass
-class LoadCase:
+class LoadCase(LoadCaseFromFreeCadInp):
     """Per-run FEA data bundle used by `FEAAnalyzer`."""
 
     # Core run inputs
@@ -197,7 +198,7 @@ class LoadCase:
         mesh_size: float = 1,
         device: str = "auto",
     ) -> "FEAAnalyzer":
-        from .kernels.base import FEAAnalyzer
+        from ..kernels.base import FEAAnalyzer
 
         # Create design space geometry and export to STEP
         shape_path = None
@@ -743,7 +744,7 @@ class LoadCase:
                 )
 
             try:
-                from .mesher import (
+                from ..mesher import (
                     GmshMesher,
                     GmshSubprocessMesher,
                     IsolatedGmshMesher,
@@ -1023,192 +1024,161 @@ class LoadCase:
         return out_path
 
     @staticmethod
-    def from_inp(filepath: str) -> "LoadCase":
+    def from_cdb(filepath: str) -> "LoadCase":
         """
-        Parse an Abaqus .inp file and return a LoadCase.
+        Parse an ANSYS Mechanical CDB (``/CDWRITE``) file and return a LoadCase.
 
-        Mesh data (nodes, elements, NSETs, ELSETs) is read via *meshio* for
-        robustness and broad format support.  Boundary conditions (*BOUNDARY)
-        and concentrated loads (*CLOAD) are extracted with a targeted custom
-        pass because meshio does not parse FEA solver directives.
+        Uses *ansys-mapdl-reader* (``pip install ansys-mapdl-reader``) to read
+        mesh topology and named node components (``NBLOCK``, ``EBLOCK``,
+        ``CMBLOCK``), then performs a lightweight single-pass scan for the solver
+        directives that the library does not expose:
+
+        * ``D``  commands – displacement constraints → ``FixedConstraint``
+        * ``F``  commands – concentrated forces      → ``PointLoad``
+        * ``MP`` commands – material properties      → ``MaterialProperties``
 
         Args:
-            filepath: Path to the ``.inp`` file.
+            filepath: Path to the ``.cdb`` file.
 
         Returns:
-            LoadCase with mesh, selectors, constraints and loads populated.
+            LoadCase with mesh, material, selectors, constraints and loads populated.
+
+        Raises:
+            ImportError: If *ansys-mapdl-reader* is not installed.
+            FileNotFoundError: If the file does not exist.
         """
-        import meshio
+        try:
+            from ansys.mapdl.reader import Archive
+        except ImportError as exc:
+            raise ImportError(
+                "ansys-mapdl-reader is required for from_cdb(). "
+                "Install it with: pip install ansys-mapdl-reader"
+            ) from exc
+        import math
 
         path = Path(filepath)
         if not path.exists():
-            raise FileNotFoundError(f"Abaqus file not found: {filepath}")
+            raise FileNotFoundError(f"ANSYS CDB file not found: {filepath}")
 
         # ------------------------------------------------------------------
-        # 1. Parse mesh via meshio (nodes, elements, NSETs, ELSETs)
+        # 1. Parse mesh + node components via ansys-mapdl-reader
         # ------------------------------------------------------------------
-        mesh = meshio.read(str(path))
-
-        nodes_arr = np.asarray(mesh.points, dtype=np.float64)
-        # Ensure 3-D coordinate array even when meshio returns 2-D geometry
-        if nodes_arr.ndim == 2 and nodes_arr.shape[1] == 2:
-            nodes_arr = np.hstack(
-                [nodes_arr, np.zeros((len(nodes_arr), 1), dtype=np.float64)]
-            )
-
-        # point_sets: name -> 0-based index array
-        point_sets: Dict[str, np.ndarray] = {
-            k: np.asarray(v, dtype=np.int64) for k, v in (mesh.point_sets or {}).items()
-        }
-        cell_sets: Dict[str, Any] = mesh.cell_sets or {}
-
-        # Choose primary cell block: prefer 3-D (tet/hex) over 2-D/1-D
-        _dim_rank = {
-            "tetra": 3,
-            "tetra10": 3,
-            "hexahedron": 3,
-            "hexahedron20": 3,
-            "wedge": 3,
-            "pyramid": 3,
-            "quad": 2,
-            "triangle": 2,
-            "quad8": 2,
-            "triangle6": 2,
-            "line": 1,
-            "vertex": 0,
-        }
-        best_block = None
-        best_rank = -1
-        for cb in mesh.cells:
-            rank = _dim_rank.get(cb.type, 1)
-            if rank > best_rank or (
-                rank == best_rank
-                and best_block is not None
-                and len(cb.data) > len(best_block.data)
-            ):
-                best_block = cb
-                best_rank = rank
-
-        _meshio_to_type = {
-            "tetra": "tet4",
-            "tetra10": "tet10",
-            "hexahedron": "hex8",
-            "hexahedron20": "hex20",
-            "quad": "quad4",
-            "quad8": "quad8",
-            "triangle": "tri3",
-            "triangle6": "tri6",
-        }
-        if best_block is not None:
-            elems_arr = np.asarray(best_block.data, dtype=np.int64)
-            resolved_elem_type = _meshio_to_type.get(best_block.type, best_block.type)
-        else:
-            elems_arr = np.empty((0, 4), dtype=np.int64)
-            resolved_elem_type = "tet4"
+        archive = Archive(str(path), parse_vtk=False, verbose=False)
+        nodes_arr = np.asarray(archive.nodes, dtype=np.float64)
+        nnum = archive.nnum  # 1-based ANSYS node IDs
+        node_id_to_idx: Dict[int, int] = {int(nid): i for i, nid in enumerate(nnum)}
 
         if len(nodes_arr) == 0:
-            raise ValueError("No nodes found in .inp file")
+            raise ValueError("No nodes found in CDB file")
 
         # ------------------------------------------------------------------
-        # 2. Single targeted pass: build orig-1-based-node-ID → 0-based-idx
-        #    map (needed for CLOAD lines referencing explicit node IDs), and
-        #    collect raw *BOUNDARY / *CLOAD data lines.
+        # 2. Build element connectivity array
+        #
+        # archive.elem: list of 1-D arrays, one per element.
+        # Layout: [mat, etype_ref, rc, sect, esys, death, sm, shape, enum,
+        #          base, nid1, nid2, ...]  (ANSYS 1-based node IDs at index 10+)
+        # Filter out zero padding (midside-node slots unused in linear elements).
         # ------------------------------------------------------------------
-        p_keyword = re.compile(r"^\*([\w\s]+)(?:,\s*(.*))?")
-        p_node_id = re.compile(r"^\s*(\d+),\s*[\d\.\-eE]")
+        _ncount_to_type: Dict[int, str] = {
+            4: "tet4", 8: "hex8", 10: "tet10", 20: "hex20",
+            6: "wedge6", 15: "wedge15",
+        }
+        _type_dim: Dict[str, int] = {
+            "tet4": 3, "tet10": 3, "hex8": 3, "hex20": 3,
+            "wedge6": 3, "wedge15": 3, "quad4": 2, "tri3": 2,
+        }
 
-        node_id_to_idx: Dict[int, int] = {}
-        raw_bc_lines: List[str] = []
-        raw_cload_lines: List[str] = []
-
-        with open(path, "r") as _f:
-            raw_lines = _f.readlines()
-
-        section = None
-        node_counter = 0
-
-        for raw in raw_lines:
-            line = raw.strip()
-            if not line or line.startswith("**"):
+        # Group elements by (type_str, n_nodes_per_elem)
+        # Nodes are extracted by filtering elem[8:] against node_id_to_idx.
+        # The library stores node IDs starting at _elem[8] (coincides with the
+        # sequential element number slot), with _elem[9]=0 (base-element slot).
+        # Using node_id_to_idx as a valid-ID filter avoids hard-coding field offsets.
+        type_buckets: Dict[Tuple[str, int], List[List[int]]] = {}
+        for raw_elem in archive.elem:
+            nonzero_ids = [int(v) for v in raw_elem[8:] if int(v) in node_id_to_idx]
+            n = len(nonzero_ids)
+            if n == 0:
                 continue
-            if line.startswith("*"):
-                m = p_keyword.match(line)
-                if not m:
-                    section = None
-                    continue
-                kw = m.group(1).upper().strip()
-                section = kw if kw in {"NODE", "BOUNDARY", "CLOAD"} else None
-                continue
+            elem_type_str = _ncount_to_type.get(n, f"unknown{n}")
+            key = (elem_type_str, n)
+            idxs = [node_id_to_idx[nid] for nid in nonzero_ids]
+            type_buckets.setdefault(key, []).append(idxs)
 
-            if section == "NODE":
-                m = p_node_id.match(line)
-                if m:
-                    node_id_to_idx[int(m.group(1))] = node_counter
-                    node_counter += 1
-            elif section == "BOUNDARY":
-                raw_bc_lines.append(line)
-            elif section == "CLOAD":
-                raw_cload_lines.append(line)
+        # Choose dominant bucket: prefer 3-D elements, then most elements
+        best_key: Optional[Tuple[str, int]] = None
+        best_score = (-1, 0)
+        for key, rows in type_buckets.items():
+            dim = _type_dim.get(key[0], 1)
+            score = (dim, len(rows))
+            if score > best_score:
+                best_score = score
+                best_key = key
+
+        if best_key is not None and type_buckets[best_key]:
+            resolved_elem_type = best_key[0]
+            elems_arr = np.array(type_buckets[best_key], dtype=np.int64)
+        else:
+            resolved_elem_type = "tet4"
+            elems_arr = np.empty((0, 4), dtype=np.int64)
 
         # ------------------------------------------------------------------
         # 3. Derive design-domain bounds from node coordinates
         # ------------------------------------------------------------------
-        xs, ys, zs = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
+        xs_a, ys_a, zs_a = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
         bounds: Dict[str, float] = {
-            "x_min": float(xs.min()),
-            "x_max": float(xs.max()),
-            "y_min": float(ys.min()),
-            "y_max": float(ys.max()),
-            "z_min": float(zs.min()),
-            "z_max": float(zs.max()),
+            "x_min": float(xs_a.min()), "x_max": float(xs_a.max()),
+            "y_min": float(ys_a.min()), "y_max": float(ys_a.max()),
+            "z_min": float(zs_a.min()), "z_max": float(zs_a.max()),
         }
-
         positive_dims = [
-            d
-            for d in (
+            d for d in (
                 bounds["x_max"] - bounds["x_min"],
                 bounds["y_max"] - bounds["y_min"],
                 bounds["z_max"] - bounds["z_min"],
-            )
-            if d > 0
+            ) if d > 0
         ]
         min_dim = min(positive_dims) if positive_dims else 1.0
         selector_tol = max(min_dim * 0.01, 1e-4)
         min_radius = max(min_dim * 0.02, 5e-5)
 
+        # ------------------------------------------------------------------
+        # 4. Build LoadCase skeleton
+        # ------------------------------------------------------------------
         problem_id = path.stem.upper()
         load_case = LoadCase(
             problem_id=problem_id, description=f"Imported from {path.name}"
         )
         load_case.selectors = {}
-        load_case.meta = {
-            "node_sets_count": len(point_sets),
-            "element_sets_count": len(cell_sets),
-            "node_sets": sorted(point_sets.keys()),
-            "element_sets": sorted(cell_sets.keys()),
-            "selectors": load_case.selectors,
-        }
-        load_case.domain = DesignDomain(shape_type="box", bounds=bounds, units="mm")
         load_case.bounds = bounds
+        load_case.domain = DesignDomain(shape_type="box", bounds=bounds, units="mm")
         load_case.mesh_nodes = nodes_arr.astype(np.float32)
         load_case.mesh_elements = elems_arr.astype(np.int32)
         load_case.mesh_element_type = resolved_elem_type
 
         # ------------------------------------------------------------------
-        # 4. Build spatial selectors from NSETs (meshio point_sets)
+        # 5. Build spatial selectors from node_components (CMBLOCK)
+        #    archive.node_components: {name: array_of_ANSYS_1based_nids}
         # ------------------------------------------------------------------
-        selector_map: Dict[str, str] = {}  # nset_name -> selector_id
+        point_sets: Dict[str, np.ndarray] = {}
+        selector_map: Dict[str, str] = {}
 
-        for name, idx_arr in point_sets.items():
+        for cm_name, ansys_nids in archive.node_components.items():
+            name = cm_name.strip()
+            idx_arr = np.array(
+                [node_id_to_idx[int(n)] for n in ansys_nids if int(n) in node_id_to_idx],
+                dtype=np.int64,
+            )
             if idx_arr.size == 0:
                 continue
+            point_sets[name] = idx_arr
             coords = nodes_arr[idx_arr]
             s_xs, s_ys, s_zs = coords[:, 0], coords[:, 1], coords[:, 2]
-            cx, cy, cz = float(s_xs.mean()), float(s_ys.mean()), float(s_zs.mean())
+            cx = float(np.mean(s_xs))
+            cy = float(np.mean(s_ys))
+            cz = float(np.mean(s_zs))
             rx = max((float(s_xs.max()) - float(s_xs.min())) / 2.0, min_radius)
             ry = max((float(s_ys.max()) - float(s_ys.min())) / 2.0, min_radius)
             rz = max((float(s_zs.max()) - float(s_zs.min())) / 2.0, min_radius)
-
             query = {
                 "x_min": max(float(s_xs.min()) - selector_tol, bounds["x_min"]),
                 "x_max": min(float(s_xs.max()) + selector_tol, bounds["x_max"]),
@@ -1216,12 +1186,8 @@ class LoadCase:
                 "y_max": min(float(s_ys.max()) + selector_tol, bounds["y_max"]),
                 "z_min": max(float(s_zs.min()) - selector_tol, bounds["z_min"]),
                 "z_max": min(float(s_zs.max()) + selector_tol, bounds["z_max"]),
-                "x": cx,
-                "y": cy,
-                "z": cz,
-                "rx": rx,
-                "ry": ry,
-                "rz": rz,
+                "x": cx, "y": cy, "z": cz,
+                "rx": rx, "ry": ry, "rz": rz,
             }
             sel_id = f"SELECTOR_{name}"
             load_case.selectors[sel_id] = SpatialSelector(
@@ -1229,8 +1195,15 @@ class LoadCase:
             )
             selector_map[name] = sel_id
 
+        load_case.meta = {
+            "node_sets_count": len(point_sets),
+            "node_sets": sorted(point_sets.keys()),
+            "selectors": load_case.selectors,
+            "source_format": "cdb",
+        }
+
         def _find_selector(target: str) -> Optional[str]:
-            """Case-insensitive NSET name → selector_id lookup."""
+            """Case-insensitive component name → selector_id lookup."""
             if target in selector_map:
                 return selector_map[target]
             tl = target.lower()
@@ -1240,169 +1213,547 @@ class LoadCase:
             return None
 
         # ------------------------------------------------------------------
-        # 5. Parse *BOUNDARY → FixedConstraints
+        # 6. Single-pass scan for D / F / MP solver directives
+        #    (ansys-mapdl-reader does not expose these)
         # ------------------------------------------------------------------
-        for line in raw_bc_lines:
-            parts = [p.strip() for p in line.split(",")]
+        d_lines: List[str] = []
+        f_lines: List[str] = []
+        mp_lines: List[str] = []
+
+        with open(path, "r", errors="replace") as fh:
+            for raw in fh:
+                stripped = raw.strip()
+                if not stripped or stripped.startswith("!"):
+                    continue
+                upper = stripped.upper()
+                if upper.startswith("D,") or upper.startswith("D ,"):
+                    d_lines.append(stripped)
+                elif upper.startswith("F,") or upper.startswith("F ,"):
+                    f_lines.append(stripped)
+                elif upper.startswith("MP,"):
+                    mp_lines.append(stripped)
+
+        # ------------------------------------------------------------------
+        # 7. Parse MP commands → MaterialProperties
+        #    MP,EX,matid,value  /  MP,NUXY,matid,value  /  MP,DENS,matid,value
+        # ------------------------------------------------------------------
+        mat_E: float = 210000.0
+        mat_nu: float = 0.3
+        mat_density: float = 7.85e-9
+
+        for mp in mp_lines:
+            parts = [p.strip() for p in mp.split(",")]
+            if len(parts) < 4:
+                continue
+            label = parts[1].upper()
+            try:
+                val = float(parts[3])
+            except (ValueError, IndexError):
+                continue
+            if label == "EX":
+                mat_E = val
+            elif label in ("NUXY", "PRXY"):
+                mat_nu = val
+            elif label == "DENS":
+                mat_density = val
+
+        if mat_E > 180000:
+            _mat_name = "Steel"
+        elif mat_E > 100000:
+            _mat_name = "Titanium"
+        else:
+            _mat_name = "Aluminum"
+        load_case.material = MaterialProperties(
+            name=_mat_name, E=mat_E, nu=mat_nu, density=mat_density
+        )
+
+        # ------------------------------------------------------------------
+        # 8. Parse D commands → FixedConstraints
+        #    D, NodeOrComp, DOFname, Value[, ...]
+        #    DOF names: UX / UY / UZ / ALL
+        # ------------------------------------------------------------------
+        _dof_name_to_idx: Dict[str, int] = {"UX": 0, "UY": 1, "UZ": 2}
+        d_accumulator: Dict[str, List[bool]] = {}
+
+        for d_line in d_lines:
+            parts = [p.strip() for p in d_line.split(",")]
             if len(parts) < 3:
                 continue
-            nset_name = parts[0]
-            try:
-                first_dof, last_dof = int(parts[1]), int(parts[2])
-            except ValueError:
-                continue
-
-            dof_lock = tuple(first_dof <= i <= last_dof for i in (1, 2, 3))
-
-            sel_id = _find_selector(nset_name)
-            if sel_id:
-                bc = FixedConstraint(
-                    location=load_case.selectors[sel_id].query,
-                    dofs=dof_lock,
-                    tolerance=1,
-                )
-                load_case.boundary_conditions.append(bc)
-            elif nset_name.isdigit():
-                idx = node_id_to_idx.get(int(nset_name))
+            target = parts[1].strip()
+            dof_name = parts[2].strip().upper()
+            dof_names = ["UX", "UY", "UZ"] if dof_name == "ALL" else [dof_name]
+            if target not in d_accumulator:
+                d_accumulator[target] = [False, False, False]
+            for dn in dof_names:
+                idx = _dof_name_to_idx.get(dn)
                 if idx is not None:
-                    nx, ny, nz = (
-                        float(nodes_arr[idx, 0]),
-                        float(nodes_arr[idx, 1]),
-                        float(nodes_arr[idx, 2]),
-                    )
-                    pt_id = f"PT_{nset_name}"
-                    load_case.selectors.setdefault(
-                        pt_id,
-                        SpatialSelector(
-                            id=pt_id,
-                            type="point",
-                            query={"x": nx, "y": ny, "z": nz},
-                        ),
-                    )
-                    load_case.boundary_conditions.append(
-                        FixedConstraint(
-                            location=(nx, ny, nz), dofs=dof_lock, tolerance=1
-                        )
-                    )
+                    d_accumulator[target][idx] = True
+
+        for target, dofs in d_accumulator.items():
+            dofs_tuple = tuple(dofs)
+            sel_id = _find_selector(target)
+            if sel_id:
+                sel = load_case.selectors[sel_id]
+                bc = FixedConstraint(
+                    location=sel.query,
+                    dofs=dofs_tuple,
+                    tolerance=selector_tol,
+                )
+                bc.name = f"BC_{target}"
+                bc.region_id = sel_id
+            elif target.isdigit():
+                nidx = node_id_to_idx.get(int(target))
+                if nidx is None:
+                    continue
+                n_x = float(nodes_arr[nidx, 0])
+                n_y = float(nodes_arr[nidx, 1])
+                n_z = float(nodes_arr[nidx, 2])
+                bc = FixedConstraint(
+                    location=(n_x, n_y, n_z),
+                    dofs=dofs_tuple,
+                    tolerance=selector_tol,
+                )
+                bc.name = f"BC_NODE_{target}"
+                bc.region_id = None
+            else:
+                continue
+            load_case.constraints.append(bc)
 
         # ------------------------------------------------------------------
-        # 6. Parse *CLOAD → PointLoads
+        # 9. Parse F commands → PointLoads
+        #    F, NodeOrComp, DOFname, Value
+        #    DOF names: FX / FY / FZ
         # ------------------------------------------------------------------
-        for line in raw_cload_lines:
-            parts = [p.strip() for p in line.split(",")]
-            if len(parts) < 3:
+        _force_dof_to_axis: Dict[str, str] = {"FX": "x", "FY": "y", "FZ": "z"}
+        f_accumulator: Dict[str, Dict[str, float]] = {}
+
+        for f_line in f_lines:
+            parts = [p.strip() for p in f_line.split(",")]
+            if len(parts) < 4:
                 continue
-            target = parts[0]
+            target = parts[1].strip()
+            dof_name = parts[2].strip().upper()
             try:
-                dof, mag = int(parts[1]), float(parts[2])
+                val = float(parts[3])
             except ValueError:
                 continue
+            axis = _force_dof_to_axis.get(dof_name)
+            if axis is None:
+                continue
+            if target not in f_accumulator:
+                f_accumulator[target] = {"x": 0.0, "y": 0.0, "z": 0.0}
+            f_accumulator[target][axis] += val
 
-            vec: Dict[str, float] = {"x": 0.0, "y": 0.0, "z": 0.0}
-            axis: Optional[str] = None
-            if dof == 1:
-                vec["x"] = mag
-                axis = "x" if mag >= 0 else "-x"
-            elif dof == 2:
-                vec["y"] = mag
-                axis = "y" if mag >= 0 else "-y"
-            elif dof == 3:
-                vec["z"] = mag
-                axis = "z" if mag >= 0 else "-z"
+        for load_idx, (target, vec) in enumerate(f_accumulator.items(), start=1):
+            fx = vec.get("x", 0.0)
+            fy = vec.get("y", 0.0)
+            fz = vec.get("z", 0.0)
+            mag = math.sqrt(fx**2 + fy**2 + fz**2)
 
-            # Determine if target maps to a NSET
-            matched_nset: Optional[str] = None
-            for k in point_sets:
-                if k == target or k.lower() == target.lower():
-                    matched_nset = k
-                    break
-            singleton_nset = (
-                matched_nset is not None and point_sets[matched_nset].size <= 1
-            )
+            # Determine dominant-axis direction string
+            if mag > 0:
+                abs_vals = [abs(fx), abs(fy), abs(fz)]
+                dom = int(np.argmax(abs_vals))
+                axis_str = ("+x", "+y", "+z")[dom] if [fx, fy, fz][dom] > 0 else ("-x", "-y", "-z")[dom]
+            else:
+                axis_str = None
 
             sel_id = _find_selector(target)
             if sel_id:
-                query = load_case.selectors[sel_id].query
-                cx = query.get(
-                    "x", (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2
-                )
-                cy = query.get(
-                    "y", (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2
-                )
-                cz = query.get(
-                    "z", (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2
-                )
-                rx = query.get(
-                    "rx",
-                    max(
-                        (query.get("x_max", cx) - query.get("x_min", cx)) / 2,
-                        min_radius,
-                    ),
-                )
-                ry = query.get(
-                    "ry",
-                    max(
-                        (query.get("y_max", cy) - query.get("y_min", cy)) / 2,
-                        min_radius,
-                    ),
-                )
-                rz = query.get(
-                    "rz",
-                    max(
-                        (query.get("z_max", cz) - query.get("z_min", cz)) / 2,
-                        min_radius,
-                    ),
-                )
-
+                sel = load_case.selectors[sel_id]
                 load = PointLoad(
-                    point=(cx, cy, cz),
-                    force=(vec["x"], vec["y"], vec["z"]),
+                    point=sel.query,
+                    force=(fx, fy, fz),
+                    direction=None,
+                    tolerance=selector_tol,
+                    search_radius=None,
+                )
+                load.name = f"LOAD_{target}_{load_idx}"
+                load.region_id = sel_id
+            elif target.isdigit():
+                nidx = node_id_to_idx.get(int(target))
+                if nidx is None:
+                    continue
+                n_x = float(nodes_arr[nidx, 0])
+                n_y = float(nodes_arr[nidx, 1])
+                n_z = float(nodes_arr[nidx, 2])
+                pt_id = f"FPOINT_{target}"
+                load_case.selectors.setdefault(
+                    pt_id,
+                    SpatialSelector(
+                        id=pt_id, type="point", query={"x": n_x, "y": n_y, "z": n_z}
+                    ),
+                )
+                load = PointLoad(
+                    point=(n_x, n_y, n_z),
+                    force=(fx, fy, fz),
                     direction=None,
                     tolerance=1,
-                    search_radius=None if singleton_nset else (rx, ry, rz),
+                    search_radius=None,
                 )
-                load.name = f"LOAD_{target}_{dof}"
-                load.region_id = sel_id
-                load.vector_newtons = vec
-                load.direction = axis
-                load.magnitude_newtons = abs(mag)
-                load_case.loads.append(load)
-
-            elif target.isdigit():
-                idx = node_id_to_idx.get(int(target))
-                if idx is not None:
-                    n_x, n_y, n_z = (
-                        float(nodes_arr[idx, 0]),
-                        float(nodes_arr[idx, 1]),
-                        float(nodes_arr[idx, 2]),
-                    )
-                    pt_id = f"POINT_{target}"
-                    load_case.selectors.setdefault(
-                        pt_id,
-                        SpatialSelector(
-                            id=pt_id,
-                            type="box_3d",
-                            query={"x": n_x, "y": n_y, "z": n_z},
-                        ),
-                    )
-                    load = PointLoad(
-                        point=(n_x, n_y, n_z),
-                        force=(vec["x"], vec["y"], vec["z"]),
-                        direction=None,
-                        tolerance=1,
-                        search_radius=None,
-                    )
-                    load.name = f"LOAD_NODE_{target}_{dof}"
-                    load.region_id = pt_id
-                    load.vector_newtons = vec
-                    load.direction = axis
-                    load.magnitude_newtons = abs(mag)
-                    load_case.loads.append(load)
+                load.name = f"LOAD_NODE_{target}_{load_idx}"
+                load.region_id = pt_id
+            else:
+                continue
+            load.vector_newtons = vec
+            load.direction = axis_str
+            load.magnitude_newtons = mag
+            load_case.loads.append(load)
 
         logger.info(
-            f"Parsed Abaqus INP (meshio): {len(nodes_arr)} nodes, "
+            f"Parsed ANSYS CDB (pyansys): {len(nodes_arr)} nodes, "
             f"{len(elems_arr)} {resolved_elem_type} elements, "
-            f"{len(point_sets)} NSETs, "
+            f"{len(point_sets)} CMBLOCKs, "
+            f"{len(load_case.boundary_conditions)} BCs, "
+            f"{len(load_case.loads)} loads"
+        )
+        return load_case
+
+
+    @staticmethod
+    def from_dat(filepath: str) -> "LoadCase":
+        """
+        Parse a Nastran BDF/DAT file and return a LoadCase.
+
+        Uses *pyNastran* (``pip install pyNastran``) to read all cards, then maps:
+
+        * ``GRID``            → mesh nodes
+        * ``CTETRA`` / ``CHEXA`` / ``CPENTA`` / ``CQUAD4`` / ``CTRIA3`` → elements
+        * ``MAT1``            → ``MaterialProperties``
+        * ``SPC`` / ``SPC1`` → ``FixedConstraint`` (DOF components 1-3)
+        * ``FORCE``           → ``PointLoad`` (basic coordinate system assumed)
+        * ``SET1`` / implicit SPC-node groups → spatial selectors
+
+        Args:
+            filepath: Path to the ``.dat``, ``.bdf``, ``.nas``, or ``.fem`` file.
+
+        Returns:
+            LoadCase with mesh, material, selectors, constraints and loads populated.
+
+        Raises:
+            ImportError: If *pyNastran* is not installed.
+            FileNotFoundError: If the file does not exist.
+        """
+        try:
+            from pyNastran.bdf.bdf import BDF
+        except ImportError as exc:
+            raise ImportError(
+                "pyNastran is required for from_dat(). "
+                "Install with: pip install pyNastran"
+            ) from exc
+
+        import math
+
+        path = Path(filepath)
+        if not path.exists():
+            raise FileNotFoundError(f"Nastran file not found: {filepath}")
+
+        bdf = BDF(debug=False)
+        try:
+            bdf.read_bdf(str(path), punch=False)
+        except Exception:
+            # Retry in punch mode for bulk-data-only files (no Executive/Case
+            # Control decks) – common for *.dat exports from meshing tools.
+            bdf = BDF(debug=False)
+            bdf.read_bdf(str(path), punch=True)
+
+        # ------------------------------------------------------------------
+        # 1. Nodes → nodes_arr, node_id_to_idx (0-based)
+        # ------------------------------------------------------------------
+        sorted_nids = sorted(bdf.nodes.keys())
+        nodes_arr = np.array(
+            [bdf.nodes[nid].xyz for nid in sorted_nids], dtype=np.float64
+        )
+        # Ensure 3-D coordinate array
+        if nodes_arr.ndim == 2 and nodes_arr.shape[1] == 2:
+            nodes_arr = np.hstack(
+                [nodes_arr, np.zeros((len(nodes_arr), 1), dtype=np.float64)]
+            )
+
+        node_id_to_idx: Dict[int, int] = {
+            nid: i for i, nid in enumerate(sorted_nids)
+        }
+
+        if len(nodes_arr) == 0:
+            raise ValueError("No GRID nodes found in Nastran file")
+
+        # ------------------------------------------------------------------
+        # 2. Elements → elems_arr, resolved_elem_type
+        #
+        # Pick the dominant 3-D element type (prefer higher-order if mixed).
+        # ------------------------------------------------------------------
+        _nastran_type_map: Dict[str, Tuple[str, int]] = {
+            # card_type: (internal_name, dim_rank)
+            "CTETRA": ("tet4",   3),   # 4-node; overridden to tet10 if nids==10
+            "CHEXA":  ("hex8",   3),   # 8-node; overridden to hex20 if nids==20
+            "CPENTA": ("wedge",  3),
+            "CPYRA":  ("pyra5",  3),
+            "CQUAD4": ("quad4",  2),
+            "CQUADR": ("quad4",  2),
+            "CQUAD8": ("quad8",  2),
+            "CTRIA3": ("tri3",   2),
+            "CTRIAR": ("tri3",   2),
+            "CTRIA6": ("tri6",   2),
+        }
+
+        # Group all element-node-ID lists by (internal_type, n_nodes_per_elem)
+        type_buckets: Dict[Tuple[str, int], List[List[int]]] = {}
+        for eid, elem in bdf.elements.items():
+            card_type = elem.type.upper()
+            nids_raw = elem.node_ids
+            n = len(nids_raw)
+
+            if card_type == "CTETRA":
+                itype = "tet4" if n == 4 else "tet10"
+            elif card_type == "CHEXA":
+                itype = "hex8" if n == 8 else "hex20"
+            elif card_type in _nastran_type_map:
+                itype, _ = _nastran_type_map[card_type]
+            else:
+                continue
+
+            key = (itype, n)
+            if key not in type_buckets:
+                type_buckets[key] = []
+
+            row = [node_id_to_idx.get(nid, -1) for nid in nids_raw]
+            if all(idx >= 0 for idx in row):
+                type_buckets[key].append(row)
+
+        # Choose dominant bucket: prefer 3-D, then most elements
+        _type_dim: Dict[str, int] = {
+            "tet4": 3, "tet10": 3, "hex8": 3, "hex20": 3, "wedge": 3, "pyra5": 3,
+            "quad4": 2, "quad8": 2, "tri3": 2, "tri6": 2,
+        }
+        best_key: Optional[Tuple[str, int]] = None
+        best_score = (-1, 0)
+        for key, rows in type_buckets.items():
+            dim = _type_dim.get(key[0], 1)
+            score = (dim, len(rows))
+            if score > best_score:
+                best_score = score
+                best_key = key
+
+        if best_key is not None and type_buckets[best_key]:
+            resolved_elem_type = best_key[0]
+            elems_arr = np.array(type_buckets[best_key], dtype=np.int64)
+        else:
+            resolved_elem_type = "tet4"
+            elems_arr = np.empty((0, 4), dtype=np.int64)
+
+        # ------------------------------------------------------------------
+        # 3. Material → MaterialProperties (first MAT1 wins)
+        # ------------------------------------------------------------------
+        mat_E, mat_nu, mat_density = 210000.0, 0.3, 7.85e-9
+        _mat_name = "Steel"
+        for mid, mat in bdf.materials.items():
+            if mat.type == "MAT1":
+                mat_E = float(mat.e or 210000.0)
+                mat_nu = float(mat.nu if mat.nu is not None else 0.3)
+                mat_density = float(mat.rho if mat.rho is not None else 7.85e-9)
+                if mat_E > 180000:
+                    _mat_name = "Steel"
+                elif mat_E > 100000:
+                    _mat_name = "Titanium"
+                else:
+                    _mat_name = "Aluminum"
+                break  # use first material found
+
+        # ------------------------------------------------------------------
+        # 4. Derive design-domain bounds
+        # ------------------------------------------------------------------
+        xs_a, ys_a, zs_a = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
+        bounds: Dict[str, float] = {
+            "x_min": float(xs_a.min()), "x_max": float(xs_a.max()),
+            "y_min": float(ys_a.min()), "y_max": float(ys_a.max()),
+            "z_min": float(zs_a.min()), "z_max": float(zs_a.max()),
+        }
+        positive_dims = [
+            d for d in (
+                bounds["x_max"] - bounds["x_min"],
+                bounds["y_max"] - bounds["y_min"],
+                bounds["z_max"] - bounds["z_min"],
+            ) if d > 0
+        ]
+        min_dim = min(positive_dims) if positive_dims else 1.0
+        selector_tol = max(min_dim * 0.01, 1e-4)
+        min_radius = max(min_dim * 0.02, 5e-5)
+
+        # ------------------------------------------------------------------
+        # 5. Build LoadCase skeleton
+        # ------------------------------------------------------------------
+        problem_id = path.stem.upper()
+        load_case = LoadCase(
+            problem_id=problem_id, description=f"Imported from {path.name}"
+        )
+        load_case.selectors = {}
+        load_case.bounds = bounds
+        load_case.domain = DesignDomain(shape_type="box", bounds=bounds, units="mm")
+        load_case.mesh_nodes = nodes_arr.astype(np.float32)
+        load_case.mesh_elements = elems_arr.astype(np.int32)
+        load_case.mesh_element_type = resolved_elem_type
+        load_case.material = MaterialProperties(
+            name=_mat_name, E=mat_E, nu=mat_nu, density=mat_density
+        )
+
+        # ------------------------------------------------------------------
+        # 6. Build spatial selectors from SPC node groups
+        #
+        # pyNastran's bdf.spcs is {conid: [SPC | SPC1, ...]}.  We collect the
+        # unique node set for every constraint-set ID so each gets a selector.
+        # ------------------------------------------------------------------
+        selector_map: Dict[str, str] = {}   # conid_str → selector_id
+        spc_node_sets: Dict[str, np.ndarray] = {}  # conid_str → 0-based idx array
+
+        def _register_selector(conid_str: str, idx_arr: np.ndarray) -> Optional[str]:
+            """Build a box-query selector for a node group and register it."""
+            if idx_arr.size == 0:
+                return None
+            coords = nodes_arr[idx_arr]
+            s_xs = coords[:, 0]; s_ys = coords[:, 1]; s_zs = coords[:, 2]
+            cx = float(s_xs.mean()); cy = float(s_ys.mean()); cz = float(s_zs.mean())
+            rx = max((float(s_xs.max()) - float(s_xs.min())) / 2.0, min_radius)
+            ry = max((float(s_ys.max()) - float(s_ys.min())) / 2.0, min_radius)
+            rz = max((float(s_zs.max()) - float(s_zs.min())) / 2.0, min_radius)
+            query = {
+                "x_min": max(float(s_xs.min()) - selector_tol, bounds["x_min"]),
+                "x_max": min(float(s_xs.max()) + selector_tol, bounds["x_max"]),
+                "y_min": max(float(s_ys.min()) - selector_tol, bounds["y_min"]),
+                "y_max": min(float(s_ys.max()) + selector_tol, bounds["y_max"]),
+                "z_min": max(float(s_zs.min()) - selector_tol, bounds["z_min"]),
+                "z_max": min(float(s_zs.max()) + selector_tol, bounds["z_max"]),
+                "x": cx, "y": cy, "z": cz,
+                "rx": rx, "ry": ry, "rz": rz,
+            }
+            sel_id = f"SELECTOR_SPC_{conid_str}"
+            load_case.selectors[sel_id] = SpatialSelector(
+                id=sel_id, type="box_3d", query=query
+            )
+            selector_map[conid_str] = sel_id
+            return sel_id
+
+        # Accumulate node indices per SPC constraint-set ID
+        spc_conid_nodes: Dict[str, List[int]] = {}
+        spc_conid_dofs: Dict[str, List[bool]] = {}
+
+        for conid, spc_cards in bdf.spcs.items():
+            conid_str = str(conid)
+            if conid_str not in spc_conid_nodes:
+                spc_conid_nodes[conid_str] = []
+                spc_conid_dofs[conid_str] = [False, False, False]
+            for card in spc_cards:
+                # Both SPC and SPC1 expose .nodes (list of node IDs)
+                nids = card.nodes if hasattr(card, "nodes") else []
+                # .components is a string of digit chars for SPC1, or list for SPC
+                if hasattr(card, "components"):
+                    comp = card.components
+                    # SPC1: single string applied to all nodes
+                    if isinstance(comp, (str, int)):
+                        comp_str = str(comp)
+                        for i, dof_char in enumerate(("1", "2", "3")):
+                            if dof_char in comp_str:
+                                spc_conid_dofs[conid_str][i] = True
+                    # SPC: list of per-node component strings
+                    elif isinstance(comp, (list, tuple)):
+                        for c in comp:
+                            for i, dof_char in enumerate(("1", "2", "3")):
+                                if dof_char in str(c):
+                                    spc_conid_dofs[conid_str][i] = True
+                for nid in nids:
+                    idx = node_id_to_idx.get(nid)
+                    if idx is not None:
+                        spc_conid_nodes[conid_str].append(idx)
+
+        for conid_str, nidxs in spc_conid_nodes.items():
+            if not nidxs:
+                continue
+            idx_arr = np.unique(np.array(nidxs, dtype=np.int64))
+            spc_node_sets[conid_str] = idx_arr
+            sel_id = _register_selector(conid_str, idx_arr)
+            if sel_id is None:
+                continue
+            dofs = tuple(spc_conid_dofs[conid_str])
+            if not any(dofs):
+                dofs = (True, True, True)  # full fix if no specific DOF info
+            load_case.boundary_conditions.append(
+                FixedConstraint(
+                    location=load_case.selectors[sel_id].query,
+                    dofs=dofs,
+                    tolerance=1,
+                )
+            )
+
+        # ------------------------------------------------------------------
+        # 7. Parse FORCE cards → PointLoads
+        #
+        # bdf.loads is {sid: [FORCE, MOMENT, PLOAD4, ...]}
+        # FORCE: .node (nid), .mag (scalar), .xyz (unit vector in coord .cid)
+        # Multiple FORCE cards for the same node are summed.
+        # ------------------------------------------------------------------
+        # node_id → accumulated force vector
+        force_by_node: Dict[int, np.ndarray] = {}
+
+        for sid, load_cards in bdf.loads.items():
+            for card in load_cards:
+                if card.type != "FORCE":
+                    continue
+                nid = card.node
+                mag = float(card.mag)
+                xyz = np.asarray(card.xyz, dtype=np.float64)
+                fvec = mag * xyz
+                if nid in force_by_node:
+                    force_by_node[nid] += fvec
+                else:
+                    force_by_node[nid] = fvec.copy()
+
+        for load_idx, (nid, fvec) in enumerate(force_by_node.items(), start=1):
+            nidx = node_id_to_idx.get(nid)
+            if nidx is None:
+                continue
+            fx, fy, fz = float(fvec[0]), float(fvec[1]), float(fvec[2])
+            abs_comps = [(abs(fx), "x", fx), (abs(fy), "y", fy), (abs(fz), "z", fz)]
+            dom_abs, dom_ax, dom_mag_v = max(abs_comps, key=lambda t: t[0])
+            axis: Optional[str] = (
+                (dom_ax if dom_mag_v >= 0 else f"-{dom_ax}") if dom_abs > 0 else None
+            )
+            n_x = float(nodes_arr[nidx, 0])
+            n_y = float(nodes_arr[nidx, 1])
+            n_z = float(nodes_arr[nidx, 2])
+            pt_id = f"FPOINT_{nid}"
+            load_case.selectors.setdefault(
+                pt_id,
+                SpatialSelector(
+                    id=pt_id, type="point", query={"x": n_x, "y": n_y, "z": n_z}
+                ),
+            )
+            vec: Dict[str, float] = {"x": fx, "y": fy, "z": fz}
+            load = PointLoad(
+                point=(n_x, n_y, n_z),
+                force=(fx, fy, fz),
+                direction=None,
+                tolerance=1,
+                search_radius=None,
+            )
+            load.name = f"LOAD_NODE_{nid}_{load_idx}"
+            load.region_id = pt_id
+            load.vector_newtons = vec
+            load.direction = axis
+            load.magnitude_newtons = math.sqrt(fx**2 + fy**2 + fz**2)
+            load_case.loads.append(load)
+
+        load_case.meta = {
+            "node_sets_count": len(spc_node_sets),
+            "node_sets": sorted(spc_node_sets.keys()),
+            "selectors": load_case.selectors,
+            "source_format": "dat",
+            "nastran_spc_ids": sorted(bdf.spcs.keys()),
+            "nastran_load_ids": sorted(bdf.loads.keys()),
+        }
+
+        logger.info(
+            f"Parsed Nastran DAT (pyNastran): {len(nodes_arr)} nodes, "
+            f"{len(elems_arr)} {resolved_elem_type} elements, "
+            f"{len(bdf.spcs)} SPC sets, "
             f"{len(load_case.boundary_conditions)} BCs, "
             f"{len(load_case.loads)} loads"
         )

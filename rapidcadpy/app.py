@@ -114,14 +114,6 @@ class App:
 
         # Configure PyVista for headless rendering when saving screenshot
         if screenshot is not None:
-            # Try to start virtual framebuffer for headless environments
-            try:
-                pv.start_xvfb()
-            except Exception:
-                # If Xvfb fails, try to use OSMesa or other available backend
-                pass
-
-            # Ensure off-screen mode is enabled
             pv.OFF_SCREEN = True
 
         # Create plotter - use off-screen mode if saving screenshot
@@ -319,10 +311,6 @@ class App:
 
         # Configure PyVista for headless rendering when saving screenshot
         if screenshot is not None:
-            try:
-                pv.start_xvfb()
-            except Exception:
-                pass
             pv.OFF_SCREEN = True
 
         # Create plotter with better rendering settings
