@@ -45,7 +45,17 @@ class LoadCaseFromFreeCadInp:
         # ------------------------------------------------------------------
         # 1. Parse mesh via meshio (nodes, elements, NSETs, ELSETs)
         # ------------------------------------------------------------------
-        mesh = meshio.read(str(path))
+        try:
+            mesh = meshio.read(str(path))
+        except (Exception, SystemExit) as _meshio_err:
+            logger.debug(
+                "meshio failed to parse %s (%s); falling back to native "
+                "Abaqus parser.",
+                path.name,
+                _meshio_err,
+            )
+            from .abaqus_inp_load_case import AbaqusInpLoadCase  # noqa: PLC0415
+            return AbaqusInpLoadCase.from_inp(filepath)
 
         nodes_arr = np.asarray(mesh.points, dtype=np.float64)
         # Ensure 3-D coordinate array even when meshio returns 2-D geometry
