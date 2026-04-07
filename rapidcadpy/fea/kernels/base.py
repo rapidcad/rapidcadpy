@@ -201,7 +201,7 @@ class FEAAnalyzer:
         mesh_size: float = 2.0,
         element_type: str = "tet4",
         device: str = "auto",
-        mesher: str = "netgen",
+        mesher: "Union[MesherBase, str]" = "netgen",
         load_case: Optional["LoadCase"] = None,
     ):
         """
@@ -418,17 +418,27 @@ class FEAAnalyzer:
             "n_total_nodes": 0,
         }
         try:
-            pv_mesh, nodes, constraint_mask, force_mask, _ = (
-                self.kernel.get_visualization_data(
+            if hasattr(self.kernel, "get_bc_node_masks"):
+                nodes, constraint_mask, force_mask = self.kernel.get_bc_node_masks(
                     shape=self.shape,
                     material=self.load_case.material,
                     loads=self.load_case.loads,
                     constraints=self.load_case.constraints,
                     mesh_size=self.mesh_size,
                     element_type=self.element_type,
-                    with_conditions=True,
                 )
-            )
+            else:
+                _pv_mesh, nodes, constraint_mask, force_mask, _ = (
+                    self.kernel.get_visualization_data(
+                        shape=self.shape,
+                        material=self.load_case.material,
+                        loads=self.load_case.loads,
+                        constraints=self.load_case.constraints,
+                        mesh_size=self.mesh_size,
+                        element_type=self.element_type,
+                        with_conditions=True,
+                    )
+                )
             n_total = int(nodes.shape[0])
             if n_total == 0:
                 return {**zero, "error": "Empty mesh"}

@@ -26,7 +26,15 @@ try:
         visualize_boundary_conditions,
     )
     from .results import FEAResults, OptimizationResult
-    from .kernels.torch_fem_kernel import TorchFEMKernel
+    
+    try:
+        from .kernels.torch_fem_kernel import TorchFEMKernel
+    except Exception as _torch_fem_err:
+        # TorchFEM import may fail due to CuPy/CUDA issues
+        # Make TorchFEMKernel available but warn if used
+        import warnings
+        warnings.warn(f"TorchFEMKernel not available due to: {_torch_fem_err}")
+        TorchFEMKernel = None
 
     __all__ = [
         "FEAKernel",

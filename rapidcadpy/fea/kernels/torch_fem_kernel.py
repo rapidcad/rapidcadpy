@@ -554,8 +554,8 @@ class TorchFEMKernel(FEAKernel):
                 f"Z[{bbox['zmin']:.2f}, {bbox['zmax']:.2f}]"
             )
 
-        total_constrained = 0
-        total_loaded = 0
+        selected_constrained = 0
+        selected_loaded = 0
 
         # Apply constraints
         for constraint in constraints:
@@ -563,7 +563,7 @@ class TorchFEMKernel(FEAKernel):
                 model, nodes, elements, geometry_info=geometry_info, mesh_size=mesh_size
             )
             if num_nodes is not None:
-                total_constrained += num_nodes
+                selected_constrained += num_nodes
             if os.getenv("RCADPY_VERBOSE") == "1":
                 print(
                     f"  ✓ Applied {constraint.__class__.__name__} ({num_nodes} nodes)"
@@ -575,27 +575,43 @@ class TorchFEMKernel(FEAKernel):
                 model, nodes, elements, geometry_info, mesh_size=mesh_size
             )
             if num_nodes is not None:
-                total_loaded += num_nodes
+                selected_loaded += num_nodes
             if os.getenv("RCADPY_VERBOSE") == "1":
                 print(f"  ✓ Applied {load.__class__.__name__} ({num_nodes} nodes)")
 
-        # Warn if no constraints or loads (geometry may be out of bounds)
-        if total_constrained == 0:
-            import warnings
+        # Validate the *effective* boundary conditions after forces/constraints are
+        # written to the model. This catches zero-magnitude loads, full overlap of
+        # load/support regions, and selector mismatches before the solve returns an
+        # opaque zero-stress field.
+        constraint_mask = model.constraints.any(dim=1).cpu().numpy()
+        force_mask = (model.forces.abs() > 1e-10).any(dim=1).cpu().numpy()
 
-            warnings.warn(
-                "No nodes were constrained — the geometry likely sits outside the "
-                "design domain or boundary-condition regions. FEA may produce "
-                "incorrect results with a singular (unconstrained) stiffness matrix.",
-                UserWarning,
-                stacklevel=2,
+        total_constrained = int(np.sum(constraint_mask))
+        total_loaded = int(np.sum(force_mask))
+        overlapping_nodes = int(np.sum(constraint_mask & force_mask))
+
+        if total_constrained == 0:
+            raise ValueError(
+                "No constrained nodes found — boundary conditions do not intersect the meshed geometry."
             )
         if total_loaded == 0:
+            if selected_loaded > 0:
+                raise ValueError(
+                    "No non-zero load nodes found — selected load region exists but the applied load magnitude is zero or numerically negligible."
+                )
+            raise ValueError(
+                "No non-zero load nodes found — the applied loads do not intersect the meshed geometry."
+            )
+
+        if overlapping_nodes == total_loaded:
+            raise ValueError(
+                "All loaded nodes are constrained — load and support regions fully overlap, producing a zero-response solve."
+            )
+        if overlapping_nodes > 0:
             import warnings
 
             warnings.warn(
-                "No load nodes found — the applied loads do not intersect the "
-                "meshed geometry. Check that the load regions overlap the part.",
+                f"{overlapping_nodes} loaded nodes are also constrained; the solve may under-respond or produce near-zero stresses.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -1215,3 +1231,41 @@ class TorchFEMKernel(FEAKernel):
         force_vectors = model.forces[force_mask].cpu().numpy()
 
         return pv_mesh, nodes_np, constraint_mask, force_mask, force_vectors
+
+    def get_bc_node_masks(
+        self,
+        shape: Union["Shape", str],
+        material: "MaterialProperties",
+        loads: List["Load"],
+        constraints: List["BoundaryCondition"],
+        mesh_size: float,
+        element_type: str,
+    ) -> Tuple[ndarray, ndarray, ndarray]:
+        """Return BC coverage masks without constructing any VTK/PyVista objects.
+
+        This is used by reward code that only needs node counts. Avoiding
+        ``pv.UnstructuredGrid`` creation reduces native-library pressure and has
+        proven more stable under multi-rank training.
+        """
+        nodes, elements, _step_path = self._prepare_nodes_elements(
+            shape, mesh_size, element_type
+        )
+        nodes = nodes.to(torch.float64)
+
+        from torchfem import Solid
+
+        model = Solid(
+            nodes,
+            elements,
+            IsotropicElasticity3D(E=210000.0, nu=0.3),
+        )
+
+        self._apply_boundary_conditions(
+            model, nodes, elements, loads, constraints, mesh_size=mesh_size
+        )
+
+        nodes_np = nodes.cpu().numpy()
+        constraint_mask = model.constraints.any(dim=1).cpu().numpy()
+        force_mask = (model.forces.abs() > 1e-10).any(dim=1).cpu().numpy()
+
+        return nodes_np, constraint_mask, force_mask

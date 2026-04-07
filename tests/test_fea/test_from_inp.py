@@ -6,7 +6,6 @@ import numpy as np
 from rapidcadpy.fea.load_case import LoadCase
 from rapidcadpy.fea.boundary_conditions import FixedConstraint, PointLoad
 
-
 INP_FILE = pathlib.Path(__file__).parent.parent / "test_files" / "00004968.inp"
 
 
@@ -225,4 +224,3 @@ class TestFromInp:
         lc = LoadCase.from_inp(str(minimal_inp))
         assert isinstance(lc.mesh_elements, np.ndarray)
         assert lc.mesh_elements.shape == (1, 4)
-
