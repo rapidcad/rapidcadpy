@@ -3,12 +3,14 @@ import pathlib
 import textwrap
 import numpy as np
 
-from ...rapidcadpy.fea.load_case.load_case import LoadCase
-from ...rapidcadpy.fea.boundary_conditions import FixedConstraint, PointLoad
+from rapidcadpy.fea.load_case.load_case import LoadCase
+from rapidcadpy.fea.load_case.abaqus_inp_load_case import AbaqusInpLoadCase
+from rapidcadpy.fea.load_case.freecad_inp_load_case import LoadCaseFromFreeCadInp
+from rapidcadpy.fea.boundary_conditions import FixedConstraint, PointLoad
 
 
 class TestFromInp:
-    @pytest.fixture(params=["fea_test_4"])
+    @pytest.fixture(params=["fea_test_4", "fea_test_1_abaqus"])
     def get_inp_file(self, request) -> dict:
         """Parametrized fixture: runs tests for both FEA input files."""
         inp_file = pathlib.Path(__file__).parent.parent / "test_files" / "fea"
@@ -77,14 +79,50 @@ class TestFromInp:
                 "mesh_elements_shape": (701, 10),
                 "mesh_element_type": "tet10",
             },
+            "fea_test_1_abaqus": {
+                "path": inp_file / "fea_test_1_abaqus.inp",
+                "problem_id": "FEA_TEST_1_ABAQUS",
+                "description_contains": "fea_test_1_abaqus.inp",
+                # Only 2 inline nodes (89999 at origin, 99999 at y=1).
+                # All structural nodes come from an external INPUT= file that
+                # is not present in the repo.
+                "bounds": {
+                    "x_min": 0.0,
+                    "x_max": 0.0,
+                    "y_min": 0.0,
+                    "y_max": 1.0,
+                    "z_min": 0.0,
+                    "z_max": 0.0,
+                },
+                # BCs and loads reference external-only node IDs so they
+                # cannot be resolved against the inline node table.
+                "bc_dofs": None,
+                "load_force": None,
+                "load_magnitude": None,
+                "node_sets_count_min": 18,
+                "abaqus_element_type": None,
+                # 480 C3D20R elements (two inline blocks) × 20 nodes each
+                "mesh_nodes_shape": (2, 3),
+                "mesh_elements_shape": (480, 20),
+                "mesh_element_type": "hex20",
+                # Flag: BCs/loads/selectors cannot be populated for this file
+                "external_nodes_only": True,
+            },
         }
 
         return cases[request.param]
     
     @pytest.fixture
     def load_case(self, get_inp_file) -> LoadCase:
-        """Parse the sample .inp file once and reuse across tests."""
-        return LoadCase.from_inp(str(get_inp_file["path"]))
+        """Parse the sample .inp file once and reuse across tests.
+
+        Routes to the native Abaqus parser when the problem_id contains
+        'abaqus' (case-insensitive), otherwise uses the FreeCAD/meshio path.
+        """
+        path = str(get_inp_file["path"])
+        if "abaqus" in get_inp_file["problem_id"].lower():
+            return AbaqusInpLoadCase.from_inp(path)
+        return LoadCaseFromFreeCadInp.from_inp(path)
 
     # ------------------------------------------------------------------
     # Basic return type / structure
@@ -125,14 +163,20 @@ class TestFromInp:
     # Boundary conditions
     # ------------------------------------------------------------------
 
-    def test_boundary_conditions_not_empty(self, load_case):
+    def test_boundary_conditions_not_empty(self, load_case, get_inp_file):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("BCs reference external-only node IDs, cannot be resolved")
         assert len(load_case.boundary_conditions) > 0
 
-    def test_boundary_condition_type_is_fixed_constraint(self, load_case):
+    def test_boundary_condition_type_is_fixed_constraint(self, load_case, get_inp_file):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("BCs reference external-only node IDs, cannot be resolved")
         for bc in load_case.boundary_conditions:
             assert isinstance(bc, FixedConstraint)
 
     def test_fixed_constraint_locks_all_three_dofs(self, load_case, get_inp_file):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("BCs reference external-only node IDs, cannot be resolved")
         bc = load_case.boundary_conditions[0]
         assert bc.dofs == get_inp_file["bc_dofs"]
 
@@ -140,14 +184,20 @@ class TestFromInp:
     # Loads
     # ------------------------------------------------------------------
 
-    def test_loads_not_empty(self, load_case):
+    def test_loads_not_empty(self, load_case, get_inp_file):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("CLOADs reference external-only node IDs, cannot be resolved")
         assert len(load_case.loads) > 0
 
-    def test_load_type_is_point_load(self, load_case):
+    def test_load_type_is_point_load(self, load_case, get_inp_file):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("CLOADs reference external-only node IDs, cannot be resolved")
         for load in load_case.loads:
             assert isinstance(load, PointLoad)
 
     def test_load_force_is_in_z_direction(self, load_case, get_inp_file):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("CLOADs reference external-only node IDs, cannot be resolved")
         load = load_case.loads[0]
         expected_fx, expected_fy, expected_fz = get_inp_file["load_force"]
         fx, fy, fz = load.force
@@ -156,6 +206,8 @@ class TestFromInp:
         assert fz == pytest.approx(expected_fz, abs=1e-5)
 
     def test_load_magnitude_newtons(self, load_case, get_inp_file):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("CLOADs reference external-only node IDs, cannot be resolved")
         assert load_case.loads[0].magnitude_newtons == pytest.approx(
             get_inp_file["load_magnitude"], abs=1e-5
         )
@@ -170,8 +222,10 @@ class TestFromInp:
     def test_meta_contains_node_sets_count(self, load_case, get_inp_file):
         assert load_case.meta["node_sets_count"] >= get_inp_file["node_sets_count_min"]
 
-    def test_selectors_populated(self, load_case):
+    def test_selectors_populated(self, load_case, get_inp_file):
         assert hasattr(load_case, "selectors")
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip("NSETs reference external-only node IDs, no selectors built")
         assert len(load_case.selectors) > 0
 
     def test_abaqus_element_type_detected(self, load_case, get_inp_file):
@@ -336,6 +390,11 @@ class TestToInpFromInp:
         assert round_trip_loc == original_loc
 
     def test_inp_to_inp_round_trip(self, get_inp_file, tmp_path):
+        if get_inp_file.get("external_nodes_only"):
+            pytest.skip(
+                "Round-trip test requires resolvable BCs/loads; "
+                "this file uses external-only nodes"
+            )
         original = LoadCase.from_inp(str(get_inp_file["path"]))
         out_path = tmp_path / "roundtrip.inp"
         original.to_inp(out_path)
