@@ -15,6 +15,7 @@ from .boundary_conditions import (
     DistributedLoad,
     FixedConstraint,
     Load,
+    PressureLoad,
     PointLoad,
 )
 from .materials import Material, MaterialProperties
@@ -124,22 +125,36 @@ class LoadCase:
                 "Cannot compute mesh size: design-space dimensions are non-positive."
             )
 
-        min_dim = min(positive_dims)
-
-        # Use full 3D volume estimate when all dimensions are positive.
-        if dx > 0.0 and dy > 0.0 and dz > 0.0:
-            volume = dx * dy * dz
-            h_est = (volume / float(num_nodes)) ** (1.0 / 3.0)
-        else:
-            # Degenerate fallback (effectively 2D/1D bounds): use minimum positive dim.
-            h_est = min_dim
-
-        # Clamp to practical range relative to geometry scale.
-        # - Don't exceed ~1/2 of smallest dimension.
-        # - Don't go below a tiny absolute floor.
-        h_max = 0.5 * min_dim
         h_min = 1e-3
-        h = max(h_min, min(h_est, h_max))
+
+        # Unified mesh-size estimate that is robust for all geometries
+        # (cubes, beams, thin plates, shells) without branching.
+        #
+        # Two competing estimates; take the larger:
+        #
+        #   h_3d = (V / N)^(1/3)   — 3D volumetric estimate
+        #   h_2d = sqrt(A_max / N) — 2D in-plane estimate for the largest face
+        #
+        # For chunky geometries the 3D term dominates.
+        # For thin-plate / shell geometries, GMSH enforces ≥1 element across
+        # the thin dimension anyway, so in-plane nodes ≈ A_max / h².
+        # The 2D term then dominates and matches the actual node count.
+        # The max() picks the correct regime automatically — no branching needed.
+        sorted_dims = sorted([dx, dy, dz], reverse=True)
+
+        if len(positive_dims) == 3:
+            volume = dx * dy * dz
+            h_3d = (volume / float(num_nodes)) ** (1.0 / 3.0)
+            a_max = sorted_dims[0] * sorted_dims[1]
+            h_2d = (a_max / float(num_nodes)) ** 0.5
+            h = max(h_min, max(h_3d, h_2d))
+        else:
+            # Degenerate 2D/1D domain: use largest positive dimension pair / single dim.
+            if len(positive_dims) >= 2:
+                a_max = sorted_dims[0] * sorted_dims[1]
+                h = max(h_min, (a_max / float(num_nodes)) ** 0.5)
+            else:
+                h = max(h_min, sorted_dims[0] / float(num_nodes))
 
         return float(h)
 
@@ -178,7 +193,7 @@ class LoadCase:
 
     def get_fea_analyzer(
         self,
-        mesher: str = "gmsh-subprocess",
+        mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
         mesh_size: float = 1,
         device: str = "auto",
     ) -> "FEAAnalyzer":
@@ -334,6 +349,8 @@ class LoadCase:
                 return _format_location(getattr(obj, "location", None))
             if hasattr(obj, "point"):
                 return _format_location(getattr(obj, "point", None))
+            if hasattr(obj, "center"):
+                return _format_location(getattr(obj, "center", None))
 
             # 2) Parser compatibility metadata: region_id + selectors
             region_id = getattr(obj, "region_id", None)
@@ -461,6 +478,19 @@ class LoadCase:
                     f"{load_type} total {force_mag:.0f} N{direction_str} over {location}"
                 )
                 total_force += force_mag
+
+            elif isinstance(load, PressureLoad):
+                pressure = float(getattr(load, "pressure", 0.0))
+                radius = float(getattr(load, "radius", 0.0))
+                center = _format_location(getattr(load, "center", None))
+                normal_axis = getattr(load, "normal_axis", "?")
+                direction = getattr(load, "direction", "?")
+                equivalent_force = abs(pressure) * math.pi * max(radius, 0.0) ** 2
+                load_descriptions.append(
+                    f"{load_type} {pressure:.3g} MPa ({direction}) on circular area "
+                    f"centered at {center}, radius {radius:.3g} mm, normal axis {normal_axis}"
+                )
+                total_force += equivalent_force
 
             else:
                 # Generic fallback for other Load subclasses and parser-compat objects
