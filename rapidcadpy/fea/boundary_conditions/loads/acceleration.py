@@ -129,12 +129,9 @@ class AccelerationLoad(Load):
         self.axis_direction = axis_direction
 
         # Validate per load type
-        if self.load_type in (self.GRAVITY, self.CENTRIFUGAL):
-            if self.density is None:
-                raise ValueError(
-                    f"'density' (t/mm³) is required for load_type={self.load_type!r}. "
-                    "Pass a MaterialProperties instance or a numeric density in t/mm³."
-                )
+        # NOTE: density is required at apply() time, not at construction, so that
+        # AccelerationLoad objects can be created from parsed INP files before
+        # material properties are assigned.
         if self.load_type in (self.GRAVITY, self.BODY_FORCE):
             if self.direction is None:
                 raise ValueError(
@@ -154,6 +151,7 @@ class AccelerationLoad(Load):
     def __repr__(self) -> str:
         if self.load_type == self.CENTRIFUGAL:
             import math as _math
+
             rpm = (_math.sqrt(self.magnitude) * 60.0) / (2.0 * _math.pi)
             extra = (
                 f", axis_point={self.axis_point!r}, "
@@ -197,6 +195,7 @@ class AccelerationLoad(Load):
         if self.load_type != self.CENTRIFUGAL:
             raise AttributeError("rpm is only defined for centrifugal loads.")
         import math as _math
+
         return (_math.sqrt(self.magnitude) * 60.0) / (2.0 * _math.pi)
 
     # ------------------------------------------------------------------
@@ -215,6 +214,7 @@ class AccelerationLoad(Load):
             Tensor (n_elements,) — volumes in mm³.
         """
         import torch
+
         v0 = nodes[elements[:, 0]]
         v1 = nodes[elements[:, 1]] - v0
         v2 = nodes[elements[:, 2]] - v0
@@ -234,6 +234,7 @@ class AccelerationLoad(Load):
             Tensor (n_elements,) — volumes in mm³.
         """
         import torch
+
         tet_splits = [
             [0, 1, 3, 4],
             [1, 2, 3, 6],
@@ -286,6 +287,7 @@ class AccelerationLoad(Load):
             Tensor (n_nodes,) — nodal masses in tonnes.
         """
         import torch
+
         n_nodes = nodes.shape[0]
         npe = elements.shape[1]
         volumes = self._element_volumes(nodes, elements)
@@ -307,6 +309,7 @@ class AccelerationLoad(Load):
             Tensor (n_nodes,) — tributary volumes in mm³.
         """
         import torch
+
         n_nodes = nodes.shape[0]
         npe = elements.shape[1]
         volumes = self._element_volumes(nodes, elements)
@@ -349,11 +352,18 @@ class AccelerationLoad(Load):
 
         n_nodes = nodes.shape[0]
 
+        if self.load_type in (self.GRAVITY, self.CENTRIFUGAL) and self.density is None:
+            raise ValueError(
+                f"'density' (t/mm³) is required to apply load_type={self.load_type!r}. "
+                "Pass a MaterialProperties instance or a numeric density in t/mm³."
+            )
+
         if self.load_type == self.GRAVITY:
             nodal_masses = self._lumped_nodal_masses(nodes, elements)
             accel = torch.tensor(
                 [self.magnitude * d for d in self.direction],
-                dtype=nodes.dtype, device=nodes.device,
+                dtype=nodes.dtype,
+                device=nodes.device,
             )
             forces = nodal_masses.unsqueeze(1) * accel.unsqueeze(0)
             model.forces += forces
@@ -362,7 +372,8 @@ class AccelerationLoad(Load):
             nodal_vols = self._lumped_nodal_volumes(nodes, elements)
             force_density = torch.tensor(
                 [self.magnitude * d for d in self.direction],
-                dtype=nodes.dtype, device=nodes.device,
+                dtype=nodes.dtype,
+                device=nodes.device,
             )
             forces = nodal_vols.unsqueeze(1) * force_density.unsqueeze(0)
             model.forces += forces
@@ -373,9 +384,7 @@ class AccelerationLoad(Load):
                 self.axis_direction, dtype=nodes.dtype, device=nodes.device
             )
             ax_norm = ax / (torch.norm(ax) + 1e-15)
-            pt = torch.tensor(
-                self.axis_point, dtype=nodes.dtype, device=nodes.device
-            )
+            pt = torch.tensor(self.axis_point, dtype=nodes.dtype, device=nodes.device)
             delta = nodes - pt.unsqueeze(0)
             proj = (delta * ax_norm.unsqueeze(0)).sum(dim=1, keepdim=True)
             radial = delta - proj * ax_norm.unsqueeze(0)

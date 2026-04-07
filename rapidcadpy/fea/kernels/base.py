@@ -949,6 +949,15 @@ class FEAAnalyzer:
         # framebuffer-only code path (set before Plotter construction).
         os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
 
+        # On headless Linux servers (no X display), start a virtual framebuffer
+        # so VTK can initialise its renderer without a real display.
+        # pv.start_xvfb() is a no-op if a display is already available.
+        if not interactive:
+            try:
+                pv.start_xvfb()
+            except Exception:
+                pass  # xvfb not installed or already running — carry on
+
         plotter = pv.Plotter(window_size=list(window_size), off_screen=True)
         logger.debug(
             f"Renderer {plotter.renderer.GetClassName()} initialized for visualization."
@@ -1169,4 +1178,3 @@ class FEAAnalyzer:
         except Exception as e:
             logger.warning(f"Bounding box calculation failed: {e}")
             return None
-

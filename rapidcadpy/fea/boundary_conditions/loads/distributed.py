@@ -81,37 +81,49 @@ class DistributedLoad(Load):
             loc = self.location.lower()
             if loc in ["top", "z_max"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, zmin=bbox["zmax"], zmax=bbox["zmax"],
+                    nodes,
+                    zmin=bbox["zmax"],
+                    zmax=bbox["zmax"],
                     tolerance=self.tolerance * mesh_size,
                 )
                 default_dir = "z"
             elif loc in ["bottom", "z_min"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, zmin=bbox["zmin"], zmax=bbox["zmin"],
+                    nodes,
+                    zmin=bbox["zmin"],
+                    zmax=bbox["zmin"],
                     tolerance=self.tolerance * mesh_size,
                 )
                 default_dir = "z"
             elif loc in ["x_min"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, xmin=bbox["xmin"], xmax=bbox["xmin"],
+                    nodes,
+                    xmin=bbox["xmin"],
+                    xmax=bbox["xmin"],
                     tolerance=self.tolerance * mesh_size,
                 )
                 default_dir = "x"
             elif loc in ["x_max"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, xmin=bbox["xmax"], xmax=bbox["xmax"],
+                    nodes,
+                    xmin=bbox["xmax"],
+                    xmax=bbox["xmax"],
                     tolerance=self.tolerance * mesh_size,
                 )
                 default_dir = "x"
             elif loc in ["y_min"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, ymin=bbox["ymin"], ymax=bbox["ymin"],
+                    nodes,
+                    ymin=bbox["ymin"],
+                    ymax=bbox["ymin"],
                     tolerance=self.tolerance * mesh_size,
                 )
                 default_dir = "y"
             elif loc in ["y_max"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, ymin=bbox["ymax"], ymax=bbox["ymax"],
+                    nodes,
+                    ymin=bbox["ymax"],
+                    ymax=bbox["ymax"],
                     tolerance=self.tolerance * mesh_size,
                 )
                 default_dir = "y"
@@ -127,9 +139,15 @@ class DistributedLoad(Load):
             direction = self.direction or default_dir
             force_per_node = self.force / len(load_nodes)
             dir_map = {
-                "x": 0, "y": 1, "z": 2,
-                "-x": 0, "-y": 1, "-z": 2,
-                "+x": 0, "+y": 1, "+z": 2,
+                "x": 0,
+                "y": 1,
+                "z": 2,
+                "-x": 0,
+                "-y": 1,
+                "-z": 2,
+                "+x": 0,
+                "+y": 1,
+                "+z": 2,
             }
             direction = direction.lower()
             if direction not in dir_map:

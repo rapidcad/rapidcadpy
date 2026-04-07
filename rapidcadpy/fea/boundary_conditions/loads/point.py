@@ -83,9 +83,12 @@ class PointLoad(Load):
             rx, ry, rz = [max(float(v), 1e-9) for v in self.search_radius]
             candidate_nodes = find_nodes_in_box(
                 nodes,
-                xmin=x - rx, xmax=x + rx,
-                ymin=y - ry, ymax=y + ry,
-                zmin=z - rz, zmax=z + rz,
+                xmin=x - rx,
+                xmax=x + rx,
+                ymin=y - ry,
+                ymax=y + ry,
+                zmin=z - rz,
+                zmax=z + rz,
                 tolerance=0,
             )
             load_nodes = candidate_nodes
@@ -94,9 +97,12 @@ class PointLoad(Load):
             if len(load_nodes) == 0:
                 load_nodes = find_nodes_in_box(
                     nodes,
-                    xmin=x, xmax=x,
-                    ymin=y, ymax=y,
-                    zmin=z, zmax=z,
+                    xmin=x,
+                    xmax=x,
+                    ymin=y,
+                    ymax=y,
+                    zmin=z,
+                    zmax=z,
                     tolerance=self.tolerance * mesh_size,
                 )
             # Fallback 2: nearest node
@@ -112,9 +118,12 @@ class PointLoad(Load):
         else:
             load_nodes = find_nodes_in_box(
                 nodes,
-                xmin=x, xmax=x,
-                ymin=y, ymax=y,
-                zmin=z, zmax=z,
+                xmin=x,
+                xmax=x,
+                ymin=y,
+                ymax=y,
+                zmin=z,
+                zmax=z,
                 tolerance=self.tolerance * mesh_size,
             )
 
@@ -125,9 +134,7 @@ class PointLoad(Load):
         force_array = (
             model.forces
             if hasattr(model, "forces")
-            else model.f_ext
-            if hasattr(model, "f_ext")
-            else None
+            else model.f_ext if hasattr(model, "f_ext") else None
         )
         if force_array is None:
             raise AttributeError("Model must expose either 'forces' or 'f_ext'")

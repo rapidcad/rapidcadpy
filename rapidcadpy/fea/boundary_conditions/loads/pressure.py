@@ -92,9 +92,7 @@ class PressureLoad(Load):
         load_nodes = candidate_nodes[within_radius]
 
         if len(load_nodes) == 0:
-            print(
-                f"Warning: No nodes within radius {self.radius} at {self.center}"
-            )
+            print(f"Warning: No nodes within radius {self.radius} at {self.center}")
             return 0
 
         load_positions = nodes[load_nodes]

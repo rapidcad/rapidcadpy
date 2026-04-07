@@ -76,39 +76,53 @@ class LinearDistributedLoad(Load):
             loc = self.location.lower()
             if loc in ["x_min", "face_left"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, xmin=bbox["xmin"], xmax=bbox["xmin"],
+                    nodes,
+                    xmin=bbox["xmin"],
+                    xmax=bbox["xmin"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["x_max", "face_right"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, xmin=bbox["xmax"], xmax=bbox["xmax"],
+                    nodes,
+                    xmin=bbox["xmax"],
+                    xmax=bbox["xmax"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["y_min"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, ymin=bbox["ymin"], ymax=bbox["ymin"],
+                    nodes,
+                    ymin=bbox["ymin"],
+                    ymax=bbox["ymin"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["face_front", "y_max"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, ymin=bbox["ymax"], ymax=bbox["ymax"],
+                    nodes,
+                    ymin=bbox["ymax"],
+                    ymax=bbox["ymax"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["z_min", "bottom"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, zmin=bbox["zmin"], zmax=bbox["zmin"],
+                    nodes,
+                    zmin=bbox["zmin"],
+                    zmax=bbox["zmin"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["z_max", "top"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, zmin=bbox["zmax"], zmax=bbox["zmax"],
+                    nodes,
+                    zmin=bbox["zmax"],
+                    zmax=bbox["zmax"],
                     tolerance=self.tolerance * mesh_size,
                 )
             else:
                 pass  # load_nodes stays None
 
         if load_nodes is None or len(load_nodes) == 0:
-            print(f"Warning: No nodes found for linear distributed load at: {self.location}")
+            print(
+                f"Warning: No nodes found for linear distributed load at: {self.location}"
+            )
             return 0
 
         selected_xyz = nodes[load_nodes]

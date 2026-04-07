@@ -50,32 +50,44 @@ class ConcentratedLoad(Load):
             loc = self.location.lower()
             if loc in ["x_min", "end_1"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, xmin=bbox["xmin"], xmax=bbox["xmin"],
+                    nodes,
+                    xmin=bbox["xmin"],
+                    xmax=bbox["xmin"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["x_max", "end_2"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, xmin=bbox["xmax"], xmax=bbox["xmax"],
+                    nodes,
+                    xmin=bbox["xmax"],
+                    xmax=bbox["xmax"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["y_min"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, ymin=bbox["ymin"], ymax=bbox["ymin"],
+                    nodes,
+                    ymin=bbox["ymin"],
+                    ymax=bbox["ymin"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["y_max"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, ymin=bbox["ymax"], ymax=bbox["ymax"],
+                    nodes,
+                    ymin=bbox["ymax"],
+                    ymax=bbox["ymax"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["z_min", "bottom"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, zmin=bbox["zmin"], zmax=bbox["zmin"],
+                    nodes,
+                    zmin=bbox["zmin"],
+                    zmax=bbox["zmin"],
                     tolerance=self.tolerance * mesh_size,
                 )
             elif loc in ["z_max", "top"]:
                 load_nodes = find_nodes_in_box(
-                    nodes, zmin=bbox["zmax"], zmax=bbox["zmax"],
+                    nodes,
+                    zmin=bbox["zmax"],
+                    zmax=bbox["zmax"],
                     tolerance=self.tolerance * mesh_size,
                 )
             else:
@@ -96,9 +108,12 @@ class ConcentratedLoad(Load):
             x, y, z = self.location
             load_nodes = find_nodes_in_box(
                 nodes,
-                xmin=x, xmax=x,
-                ymin=y, ymax=y,
-                zmin=z, zmax=z,
+                xmin=x,
+                xmax=x,
+                ymin=y,
+                ymax=y,
+                zmin=z,
+                zmax=z,
                 tolerance=self.tolerance,
             )
         else:
