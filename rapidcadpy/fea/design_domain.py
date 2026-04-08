@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 from typing import Any, Dict, List, Optional
 import logging
 
@@ -391,8 +392,8 @@ class DesignDomain:
             raise RuntimeError(
                 f"OCC STEP writer failed (status={status}) for {filepath}"
             )
-
-        logger.info(f"Exported design domain to {filepath} via OCC")
+        if os.environ.get("RCADPY_VERBOSE", False):
+            logger.info(f"Exported design domain to {filepath} via OCC")
         return filepath
 
     def export_step(self, filepath: str) -> str:
@@ -406,7 +407,8 @@ class DesignDomain:
 
             geometry = self.build_geometry()
             cq.exporters.export(geometry, filepath)
-            logger.info(f"Exported design domain to {filepath}")
+            if os.environ.get("RCADPY_VERBOSE", False):
+                logger.info(f"Exported design domain to {filepath}")
             return filepath
         except ImportError:
             logger.debug("cadquery unavailable, falling back to OCC STEP export")
