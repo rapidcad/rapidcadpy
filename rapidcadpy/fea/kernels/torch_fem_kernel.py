@@ -26,6 +26,19 @@ if TYPE_CHECKING:
     from ...shape import Shape
 
 
+# Maps nodes-per-cell → VTK element type code.
+# Covers all element families used by the Abaqus/FreeCAD parsers.
+_NNODES_TO_VTK: dict = {
+    3: 5,    # VTK_TRIANGLE
+    4: 10,   # VTK_TETRA
+    6: 13,   # VTK_WEDGE  (wed6; tri6 is also 6 nodes but we are always 3-D here)
+    8: 12,   # VTK_HEXAHEDRON
+    10: 24,  # VTK_QUADRATIC_TETRA
+    15: 26,  # VTK_QUADRATIC_WEDGE
+    20: 25,  # VTK_QUADRATIC_HEXAHEDRON
+}
+
+
 class TorchFEMKernel(FEAKernel):
     """
     torch-fem based FEA kernel.
@@ -1171,17 +1184,17 @@ class TorchFEMKernel(FEAKernel):
             nodes_np = nodes.cpu().numpy()
             elements_np = elements.cpu().numpy()
 
-            # Create VTK cell array for tetrahedra
+            # Create VTK cell array — type determined from actual element shape
             n_cells = elements_np.shape[0]
+            n_nodes_per_cell = elements_np.shape[1]
+            vtk_type = _NNODES_TO_VTK.get(n_nodes_per_cell, 10)
             cells = np.hstack(
                 [
-                    np.full((n_cells, 1), 4, dtype=np.int64),
+                    np.full((n_cells, 1), n_nodes_per_cell, dtype=np.int64),
                     elements_np,
-                ]  # 4 nodes per tet
+                ]
             ).ravel()
-
-            # Cell types: VTK_TETRA = 10
-            cell_types = np.full(n_cells, 10, dtype=np.uint8)
+            cell_types = np.full(n_cells, vtk_type, dtype=np.uint8)
 
             pv_mesh = pv.UnstructuredGrid(cells, cell_types, nodes_np)
 
@@ -1211,14 +1224,16 @@ class TorchFEMKernel(FEAKernel):
         nodes_np = nodes.cpu().numpy()
         elements_np = elements.cpu().numpy()
 
-        # Create VTK cell array for tetrahedra
+        # Create VTK cell array — type determined from actual element shape
         n_cells = elements_np.shape[0]
+        n_nodes_per_cell = elements_np.shape[1]
+        vtk_type = _NNODES_TO_VTK.get(n_nodes_per_cell, 10)
         cells = np.hstack(
-            [np.full((n_cells, 1), 4, dtype=np.int64), elements_np]  # 4 nodes per tet
+            [np.full((n_cells, 1), n_nodes_per_cell, dtype=np.int64), elements_np]
         ).ravel()
 
-        # Cell types: VTK_TETRA = 10
-        cell_types = np.full(n_cells, 10, dtype=np.uint8)
+        # Cell types: derived from element size
+        cell_types = np.full(n_cells, vtk_type, dtype=np.uint8)
 
         pv_mesh = pv.UnstructuredGrid(cells, cell_types, nodes_np)
 

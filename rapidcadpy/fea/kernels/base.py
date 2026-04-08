@@ -28,6 +28,158 @@ if TYPE_CHECKING:
     from ..results import FEAResults, OptimizationResult
 
 
+def _vtk_can_render_offscreen() -> bool:
+    """Return True when VTK has a working offscreen rendering backend.
+
+    On Windows, headless rendering requires ``osmesa.dll`` (Mesa OpenGL software
+    implementation).  Without it VTK's ``Render()`` raises a Windows SEH
+    access-violation that cannot be caught from Python.  In that case callers
+    should use an alternative renderer (e.g. matplotlib).
+
+    On Linux / macOS this returns True unconditionally — xvfb or a real display
+    is assumed to be present (the caller has already tried ``pv.start_xvfb()``).
+    """
+    if sys.platform != "win32":
+        return True
+    # Windows: osmesa.dll is the only reliable headless path.
+    import ctypes
+    try:
+        ctypes.CDLL("osmesa")
+        return True
+    except OSError:
+        pass
+    # Physical (non-RDP) desktop sessions may have hardware OpenGL.
+    session = os.environ.get("SESSIONNAME", "")
+    return bool(session) and "rdp" not in session.lower()
+
+
+def _render_conditions_matplotlib(
+    filename: str,
+    nodes_np: np.ndarray,
+    constraint_mask: np.ndarray,
+    force_mask: np.ndarray,
+    force_vectors: np.ndarray,
+    pv_mesh=None,
+) -> None:
+    """Render FEA boundary conditions to a PNG using matplotlib (VTK-free fallback).
+
+    Coordinates are normalised to [0, 1] on each axis so the geometry always
+    fills the plot, with real units shown in the axis labels.  Equal spatial
+    scale is preserved: set_box_aspect is set to the actual data spans so that
+    1 mm in X occupies the same number of pixels as 1 mm in Y or Z.
+
+    Uses Figure/FigureCanvasAgg directly (bypasses pyplot state) so that
+    PyVista's prior Plotter creation cannot corrupt the saved output.
+
+    When pv_mesh is supplied, pv_mesh.extract_surface() is called so that only
+    the outer skin nodes are scattered (typically 1-5 % of a volumetric mesh),
+    which is both faster and geometrically more meaningful than a random sample
+    of interior nodes.
+    """
+    import matplotlib.pyplot as plt
+    plt.switch_backend("agg")  # force Agg even if PyVista changed the backend
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 – registers '3d' projection
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    # ── figure: bypass pyplot state entirely to avoid PyVista side-effects ──
+    fig = Figure(figsize=(10, 8))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111, projection="3d")
+
+    # Background mesh — prefer surface nodes from PyVista; fall back to random sample
+    if pv_mesh is not None:
+        try:
+            surface_pts = pv_mesh.extract_surface().points
+            n_surf = len(surface_pts)
+            # sub-sample the surface if it's very large (>20 k points)
+            if n_surf > 20_000:
+                rng = np.random.default_rng(42)
+                surface_pts = surface_pts[rng.choice(n_surf, 20_000, replace=False)]
+            bg_pts = surface_pts
+        except Exception:
+            pv_mesh = None  # fall through to random sample
+    if pv_mesh is None:
+        n = len(nodes_np)
+        rng = np.random.default_rng(42)
+        idx = rng.choice(n, min(n, 8_000), replace=False) if n > 8_000 else np.arange(n)
+        bg_pts = nodes_np[idx]
+        
+    # Calculate geometric bounding box (ignoring stray reference nodes)
+    mn = bg_pts.min(axis=0)
+    mx = bg_pts.max(axis=0)
+    
+    # Optionally expand bounds to include loaded/fixed nodes if they aren't crazily far
+    # We allow the bounding box to expand by at most 50% to include BC nodes
+    core_spans = np.where((mx - mn) < 1e-9, 1.0, mx - mn)
+    
+    def _include_pts(pts):
+        nonlocal mn, mx
+        if not len(pts): return
+        pts_mn = pts.min(axis=0)
+        pts_mx = pts.max(axis=0)
+        # Only expand if it doesn't blow up the box size (e.g. > +50% in any direction)
+        if np.all((mn - pts_mn) < core_spans * 0.5): mn = np.minimum(mn, pts_mn)
+        if np.all((pts_mx - mx) < core_spans * 0.5): mx = np.maximum(mx, pts_mx)
+
+    # Fixed nodes
+    n_fixed = int(constraint_mask.sum())
+    fixed_pts = nodes_np[constraint_mask] if n_fixed else np.zeros((0, 3))
+    _include_pts(fixed_pts)
+
+    # Loaded nodes
+    n_loaded = int(force_mask.sum())
+    loaded_pts = nodes_np[force_mask] if n_loaded else np.zeros((0, 3))
+    _include_pts(loaded_pts)
+
+    # Final spans
+    spans = np.where((mx - mn) < 1e-9, 1.0, mx - mn)
+    max_span = spans.max()
+
+    # Render background
+    ax.scatter(*bg_pts.T, c="steelblue", s=1, alpha=0.2)
+
+    # Render Fixed nodes
+    if n_fixed:
+        ax.scatter(*fixed_pts.T, c="red", s=25, marker="D",
+                   label=f"Fixed nodes ({n_fixed})")
+
+    # Render Loaded nodes + force arrows
+    if n_loaded:
+        ax.scatter(*loaded_pts.T, c="limegreen", s=25, marker="^",
+                   label=f"Loaded nodes ({n_loaded})")
+        if force_vectors is not None and len(force_vectors):
+            norms = np.linalg.norm(force_vectors, axis=1, keepdims=True)
+            dirs = force_vectors / np.where(norms < 1e-12, 1.0, norms)
+            # Arrow length = 10% of the max span
+            dirs_scaled = dirs * (max_span * 0.1)
+            ax.quiver(*loaded_pts.T, *dirs_scaled.T, color="darkgreen",
+                      arrow_length_ratio=0.3, linewidth=1.5)
+
+    # ── axes: tightly fit the geometry with equal spatial scale ──────────────
+    # Expand slightly (5%) so points don't clip at edges
+    pad = spans * 0.05
+    ax.set_xlim(mn[0] - pad[0], mx[0] + pad[0])
+    ax.set_ylim(mn[1] - pad[1], mx[1] + pad[1])
+    ax.set_zlim(mn[2] - pad[2], mx[2] + pad[2])
+
+    ax.set_xlabel(f"X (span {spans[0]:.4g})", labelpad=10)
+    ax.set_ylabel(f"Y (span {spans[1]:.4g})", labelpad=10)
+    ax.set_zlabel(f"Z (span {spans[2]:.4g})", labelpad=10)
+
+    # Equal mm/pixel: box aspect proportional to real-world spans
+    ax.set_box_aspect(spans / spans.max())
+
+    ax.set_title("FEA Boundary Conditions")
+    if n_fixed or n_loaded:
+        ax.legend(loc="upper left", fontsize=8)
+
+    fig.savefig(filename, dpi=120, bbox_inches="tight")
+    logger.info("Saved matplotlib BC visualization to: %s", filename)
+    print(f"[OK] Saved boundary condition visualization (matplotlib) to: {filename}")
+
+
+
 class FEAKernel(ABC):
     """
     Abstract base class for FEA solver backends.
@@ -1078,13 +1230,47 @@ class FEAAnalyzer:
 
         # Show or save
         if filename:
-            # Save to file
-            logger.info(
-                f"Saving visualization to: {filename} using renderer {plotter.renderer.GetClassName()}"
-            )
-            plotter.screenshot(filename)
-            print(f"✓ Saved boundary condition visualization to: {filename}")
-            plotter.close()
+            if _vtk_can_render_offscreen():
+                # Normal path: VTK has a working offscreen renderer.
+                logger.info(
+                    f"Saving visualization to: {filename} using renderer "
+                    f"{plotter.renderer.GetClassName()}"
+                )
+                plotter.screenshot(filename)
+                print(f"✓ Saved boundary condition visualization to: {filename}")
+                plotter.close()
+            else:
+                # Fallback: VTK cannot render headlessly (Windows without osmesa.dll).
+                # Use a matplotlib 3-D scatter plot that needs no OpenGL / display.
+                try:
+                    plotter.close()
+                except Exception:
+                    pass
+                if nodes is not None:
+                    _render_conditions_matplotlib(
+                        filename=filename,
+                        nodes_np=nodes,
+                        constraint_mask=(
+                            constraint_mask
+                            if constraint_mask is not None
+                            else np.zeros(nodes.shape[0], dtype=bool)
+                        ),
+                        force_mask=(
+                            force_mask
+                            if force_mask is not None
+                            else np.zeros(nodes.shape[0], dtype=bool)
+                        ),
+                        force_vectors=(
+                            force_vectors
+                            if force_vectors is not None
+                            else np.zeros((0, 3))
+                        ),
+                        pv_mesh=pv_mesh,
+                    )
+                else:
+                    logger.warning(
+                        "No mesh data available; cannot produce matplotlib fallback render."
+                    )
         else:
             # Show interactively
             if interactive:

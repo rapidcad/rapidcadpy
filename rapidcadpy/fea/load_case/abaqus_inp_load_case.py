@@ -8,6 +8,9 @@ or other Abaqus-only constructs).
 Supported Abaqus keywords
 --------------------------
 *HEADING           – skipped (informational)
+*INCLUDE           – ``INPUT=file`` resolved relative to the including file;
+                     the included file's lines are spliced in-place
+                     (recursive, guarded against circular references)
 *NODE              – inline coordinates parsed; ``INPUT=file`` form skipped
 *NCOPY             – skipped
 *ELEMENT           – C3D20R / C3D8R / C3D4 / C3D10 inline elements parsed;
@@ -56,14 +59,33 @@ logger = logging.getLogger(__name__)
 
 # Abaqus element type → RapidCAD element type string, and nodes per element
 _ELEM_TYPE_MAP: Dict[str, Tuple[str, int]] = {
-    "C3D20R": ("hex20", 20),
-    "C3D20":  ("hex20", 20),
-    "C3D8R":  ("hex8",  8),
-    "C3D8":   ("hex8",  8),
-    "C3D10":  ("tet10", 10),
-    "C3D4":   ("tet4",  4),
-    "C3D6":   ("wed6",  6),
-    "C3D15":  ("wed15", 15),
+    # --- 20-node hex ---
+    "C3D20R":  ("hex20", 20),
+    "C3D20":   ("hex20", 20),
+    "C3D20H":  ("hex20", 20),
+    "C3D20RH": ("hex20", 20),
+    # --- 8-node hex ---
+    "C3D8R":   ("hex8",  8),
+    "C3D8":    ("hex8",  8),
+    "C3D8H":   ("hex8",  8),
+    "C3D8I":   ("hex8",  8),
+    "C3D8RH":  ("hex8",  8),
+    # --- 10-node tet (all hybrid/modified variants) ---
+    "C3D10":   ("tet10", 10),
+    "C3D10H":  ("tet10", 10),
+    "C3D10HS": ("tet10", 10),  # hybrid + enhanced hourglass
+    "C3D10I":  ("tet10", 10),
+    "C3D10M":  ("tet10", 10),
+    "C3D10MH": ("tet10", 10),
+    # --- 4-node tet ---
+    "C3D4":    ("tet4",  4),
+    "C3D4H":   ("tet4",  4),
+    # --- 15-node wedge ---
+    "C3D15":   ("wed15", 15),
+    "C3D15H":  ("wed15", 15),
+    # --- 6-node wedge ---
+    "C3D6":    ("wed6",  6),
+    "C3D6H":   ("wed6",  6),
 }
 
 # Keywords whose data lines are consumed but whose content is ignored
@@ -132,9 +154,208 @@ def _expand_generate(start: int, stop: int, step: int) -> List[int]:
     return list(range(start, stop - 1, step))  # descending – rare
 
 
+def _expand_includes(
+    lines: List[str],
+    base_dir: Path,
+    _seen: Optional[Set[Path]] = None,
+) -> List[str]:
+    """
+    Recursively expand ``*INCLUDE, INPUT=<file>`` directives.
+
+    Each matching line is replaced by the contents of the referenced file
+    (resolved relative to *base_dir*).  Included files are themselves
+    expanded, so nested ``*INCLUDE`` chains are handled automatically.
+
+    A *_seen* set of absolute resolved paths is threaded through to detect
+    and break circular references (a warning is logged and the include is
+    left as-is).
+
+    Parameters
+    ----------
+    lines:
+        Raw text lines from the current file (as returned by
+        ``file.readlines()``).
+    base_dir:
+        Directory of the file that owns *lines* – used to resolve relative
+        include paths.
+    _seen:
+        Internal set of already-visited absolute paths used to guard
+        against circular includes.  Callers should leave this as ``None``.
+
+    Returns
+    -------
+    List[str]
+        Flat list of lines with all ``*INCLUDE`` directives replaced.
+    """
+    if _seen is None:
+        _seen = set()
+
+    result: List[str] = []
+    for raw in lines:
+        stripped = raw.strip()
+        # Fast-path: only bother parsing keyword lines
+        if not stripped.startswith("*") or stripped.startswith("**"):
+            result.append(raw)
+            continue
+
+        keyword, params = _parse_keyword_line(stripped)
+        if keyword != "INCLUDE":
+            result.append(raw)
+            continue
+
+        # Resolve the included file path
+        inc_path_raw = params.get("INPUT", "").strip()
+        if not inc_path_raw:
+            logger.warning("*INCLUDE line has no INPUT= parameter: %s", stripped)
+            result.append(raw)
+            continue
+
+        inc_path = Path(inc_path_raw)
+        if not inc_path.is_absolute():
+            inc_path = base_dir / inc_path
+        inc_path = inc_path.resolve()
+
+        if inc_path in _seen:
+            logger.warning(
+                "Circular *INCLUDE detected for '%s' – skipping.", inc_path
+            )
+            result.append(raw)
+            continue
+
+        if not inc_path.exists():
+            logger.warning(
+                "*INCLUDE file not found: '%s' (referenced from '%s') – skipping.",
+                inc_path,
+                base_dir,
+            )
+            result.append(raw)
+            continue
+
+        logger.info("Expanding *INCLUDE: %s", inc_path)
+        _seen.add(inc_path)
+        with open(inc_path, "r", errors="replace") as fh:
+            inc_lines = fh.readlines()
+        expanded = _expand_includes(inc_lines, inc_path.parent, _seen)
+        result.extend(expanded)
+
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Main parser class
 # ---------------------------------------------------------------------------
+
+
+# Meshio element-type name → RapidCAD element-type string
+_MESHIO_TYPE_MAP: Dict[str, Tuple[str, int]] = {
+    "tetra":          ("tet4",  4),
+    "tetra10":        ("tet10", 10),
+    "hexahedron":     ("hex8",  8),
+    "hexahedron20":   ("hex20", 20),
+    "wedge":          ("wed6",  6),
+    "wedge15":        ("wed15", 15),
+    "quad":           ("quad4", 4),
+    "quad8":          ("quad8", 8),
+    "triangle":       ("tri3",  3),
+    "triangle6":      ("tri6",  6),
+}
+
+
+def _load_included_meshes_via_meshio(
+    original_lines: List[str],
+    base_dir: Path,
+) -> Tuple[
+    Dict[int, Tuple[float, float, float]],
+    Dict[str, List[Tuple[int, ...]]],
+]:
+    """
+    Fallback mesh loader used when the text-level parse finds no inline nodes.
+
+    Scans *original_lines* (the raw lines **before** ``_expand_includes`` was
+    called) for ``*INCLUDE, INPUT=<file>`` directives.  For each referenced
+    file that exists on disk, meshio's Abaqus reader is invoked to extract
+    mesh points and cells.  The first include file that yields a non-empty
+    mesh is returned; subsequent ones are ignored.
+
+    Returns
+    -------
+    nodes:
+        ``{1-based_node_id: (x, y, z)}`` – same format expected by the rest
+        of :py:meth:`AbaqusInpLoadCase.from_inp`.
+    elements:
+        ``{elem_type_str: [(n1, n2, …), …]}`` with 1-based node IDs.
+    """
+    try:
+        import meshio  # noqa: PLC0415
+    except ImportError:
+        logger.debug("meshio not available; skipping *INCLUDE mesh fallback")
+        return {}, {}
+
+    nodes: Dict[int, Tuple[float, float, float]] = {}
+    elements: Dict[str, List[Tuple[int, ...]]] = {}
+
+    for raw in original_lines:
+        stripped = raw.strip()
+        if not stripped.startswith("*") or stripped.startswith("**"):
+            continue
+        keyword, params = _parse_keyword_line(stripped)
+        if keyword != "INCLUDE":
+            continue
+
+        inc_name = params.get("INPUT", "").strip()
+        if not inc_name:
+            continue
+        inc_path = Path(inc_name)
+        if not inc_path.is_absolute():
+            inc_path = base_dir / inc_name
+        if not inc_path.exists():
+            logger.debug("*INCLUDE mesh fallback: file not found: %s", inc_path)
+            continue
+
+        try:
+            mesh = meshio.read(str(inc_path))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "*INCLUDE mesh fallback: meshio failed to read '%s': %s",
+                inc_path,
+                exc,
+            )
+            continue
+
+        if mesh.points is None or len(mesh.points) == 0:
+            logger.debug(
+                "*INCLUDE mesh fallback: no points in '%s'", inc_path
+            )
+            continue
+
+        # Convert meshio 0-based points → 1-based node dict
+        for i, coord in enumerate(mesh.points):
+            nodes[i + 1] = (float(coord[0]), float(coord[1]), float(coord[2]))
+
+        # Convert meshio cell blocks → elements dict with 1-based IDs
+        for block in mesh.cells:
+            mapping = _MESHIO_TYPE_MAP.get(block.type)
+            if mapping is None:
+                logger.debug(
+                    "*INCLUDE mesh fallback: unsupported meshio type '%s' – skipped",
+                    block.type,
+                )
+                continue
+            our_type, _ = mapping
+            for conn in block.data:
+                elements.setdefault(our_type, []).append(
+                    tuple(int(n) + 1 for n in conn)
+                )
+
+        logger.info(
+            "Loaded mesh from *INCLUDE file '%s' via meshio: %d nodes, %s",
+            inc_path.name,
+            len(nodes),
+            {k: len(v) for k, v in elements.items()},
+        )
+        break  # use first successfully loaded include file
+
+    return nodes, elements
 
 class AbaqusInpLoadCase:
     """
@@ -169,6 +390,15 @@ class AbaqusInpLoadCase:
 
         with open(path, "r", errors="replace") as fh:
             raw_lines = fh.readlines()
+
+        # Keep a reference to the original lines so the meshio mesh-loading
+        # fallback (below) can find *INCLUDE directives even after expansion.
+        original_raw_lines = raw_lines
+
+        # Expand *INCLUDE, INPUT=<file> directives recursively before parsing.
+        # Lines from included files are spliced in-place; the rest of the
+        # parser then sees a single flat stream with no *INCLUDE keywords.
+        raw_lines = _expand_includes(raw_lines, path.parent)
 
         # ------------------------------------------------------------------
         # Single-pass line parser
@@ -372,19 +602,44 @@ class AbaqusInpLoadCase:
         # Build numpy arrays
         # ------------------------------------------------------------------
         if not nodes:
-            raise ValueError(
-                f"No inline nodes found in {filepath}. "
-                "The file may rely entirely on external INPUT= node files."
+            # The text-level parse found no inline nodes.  This happens when
+            # the mesh lives entirely in an *INCLUDE'd file whose content
+            # either couldn't be text-inlined or uses constructs our parser
+            # doesn't handle.  Fall back to meshio, which has a more complete
+            # Abaqus reader and can load the mesh directly.
+            logger.info(
+                "No inline nodes after text parse of %s – trying *INCLUDE "
+                "mesh fallback via meshio.",
+                filepath,
             )
+            nodes, elements = _load_included_meshes_via_meshio(
+                original_raw_lines, path.parent
+            )
+            if not nodes:
+                logger.warning(
+                    "No mesh found in '%s' or its *INCLUDE'd files. "
+                    "The file may reference external node data that is not "
+                    "available on disk.",
+                    filepath,
+                )
+                node_id_to_idx: Dict[int, int] = {}
+                nodes_arr = np.empty((0, 3), dtype=np.float64)
+            else:
+                sorted_ids = sorted(nodes.keys())
+                node_id_to_idx = {nid: i for i, nid in enumerate(sorted_ids)}
+                nodes_arr = np.array(
+                    [(nodes[nid][0], nodes[nid][1], nodes[nid][2]) for nid in sorted_ids],
+                    dtype=np.float64,
+                )
+        else:
+            # Sort nodes by ID and build 0-based index map
+            sorted_ids = sorted(nodes.keys())
+            node_id_to_idx = {nid: i for i, nid in enumerate(sorted_ids)}
 
-        # Sort nodes by ID and build 0-based index map
-        sorted_ids = sorted(nodes.keys())
-        node_id_to_idx: Dict[int, int] = {nid: i for i, nid in enumerate(sorted_ids)}
-
-        nodes_arr = np.array(
-            [(nodes[nid][0], nodes[nid][1], nodes[nid][2]) for nid in sorted_ids],
-            dtype=np.float64,
-        )
+            nodes_arr = np.array(
+                [(nodes[nid][0], nodes[nid][1], nodes[nid][2]) for nid in sorted_ids],
+                dtype=np.float64,
+            )
 
         # Choose element block: prefer 3D, then by count
         _dim_rank = {
@@ -425,15 +680,22 @@ class AbaqusInpLoadCase:
         # ------------------------------------------------------------------
         # Bounds
         # ------------------------------------------------------------------
-        xs, ys, zs = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
-        bounds = {
-            "x_min": float(xs.min()),
-            "x_max": float(xs.max()),
-            "y_min": float(ys.min()),
-            "y_max": float(ys.max()),
-            "z_min": float(zs.min()),
-            "z_max": float(zs.max()),
-        }
+        if len(nodes_arr) > 0:
+            xs, ys, zs = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
+            bounds = {
+                "x_min": float(xs.min()),
+                "x_max": float(xs.max()),
+                "y_min": float(ys.min()),
+                "y_max": float(ys.max()),
+                "z_min": float(zs.min()),
+                "z_max": float(zs.max()),
+            }
+        else:
+            bounds = {
+                "x_min": 0.0, "x_max": 0.0,
+                "y_min": 0.0, "y_max": 0.0,
+                "z_min": 0.0, "z_max": 0.0,
+            }
 
         positive_dims = [
             d
