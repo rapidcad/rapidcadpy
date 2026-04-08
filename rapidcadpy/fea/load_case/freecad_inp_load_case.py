@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 import meshio
 import numpy as np
 
-from ..boundary_conditions import FixedConstraint, PointLoad
+from ..boundary_conditions import AccelerationLoad, FixedConstraint, PointLoad
 from ..design_domain import DesignDomain
 from ..spatial_selector import SpatialSelector
 
@@ -16,6 +16,7 @@ if TYPE_CHECKING:
     from .load_case import LoadCase
 
 logger = logging.getLogger(__name__)
+
 
 class LoadCaseFromFreeCadInp:
 
@@ -128,6 +129,7 @@ class LoadCaseFromFreeCadInp:
         node_id_to_idx: Dict[int, int] = {}
         raw_bc_lines: List[str] = []
         raw_cload_lines: List[str] = []
+        raw_dload_lines: List[str] = []
 
         with open(path, "r") as _f:
             raw_lines = _f.readlines()
@@ -145,7 +147,7 @@ class LoadCaseFromFreeCadInp:
                     section = None
                     continue
                 kw = m.group(1).upper().strip()
-                section = kw if kw in {"NODE", "BOUNDARY", "CLOAD"} else None
+                section = kw if kw in {"NODE", "BOUNDARY", "CLOAD", "DLOAD"} else None
                 continue
 
             if section == "NODE":
@@ -157,6 +159,8 @@ class LoadCaseFromFreeCadInp:
                 raw_bc_lines.append(line)
             elif section == "CLOAD":
                 raw_cload_lines.append(line)
+            elif section == "DLOAD":
+                raw_dload_lines.append(line)
 
         # ------------------------------------------------------------------
         # 3. Derive design-domain bounds from node coordinates
@@ -497,14 +501,18 @@ class LoadCaseFromFreeCadInp:
                     id=agg_pt_id,
                     type="box_3d",
                     query={
-                        "x": cx, "y": cy, "z": cz,
+                        "x": cx,
+                        "y": cy,
+                        "z": cz,
                         "x_min": float(coords[:, 0].min()),
                         "x_max": float(coords[:, 0].max()),
                         "y_min": float(coords[:, 1].min()),
                         "y_max": float(coords[:, 1].max()),
                         "z_min": float(coords[:, 2].min()),
                         "z_max": float(coords[:, 2].max()),
-                        "rx": rx, "ry": ry, "rz": rz,
+                        "rx": rx,
+                        "ry": ry,
+                        "rz": rz,
                     },
                 ),
             )
@@ -521,6 +529,77 @@ class LoadCaseFromFreeCadInp:
             load.direction = axis_agg
             load.magnitude_newtons = abs(total_mag)
             load_case.loads.append(load)
+
+        # ------------------------------------------------------------------
+        # 7. Parse *DLOAD → AccelerationLoads
+        #
+        # Supported sub-types:
+        #   GRAV   → gravity:    elset, GRAV, magnitude, dx, dy, dz
+        #   CENTRIF → centrifugal: elset, CENTRIF, ω², px,py,pz, ax,ay,az
+        #   BX/BY/BZ → body force per unit volume in a single direction
+        #
+        # Density is NOT available in the INP file's *DLOAD section; it lives
+        # in *MATERIAL.  AccelerationLoad objects are therefore created without
+        # density (density=None) and can have it assigned later.
+        # ------------------------------------------------------------------
+        for line in raw_dload_lines:
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 3:
+                continue
+            elset = parts[0].strip() or "EALL"
+            sub_type = parts[1].strip().upper()
+
+            try:
+                if sub_type == "GRAV" and len(parts) >= 6:
+                    # elset, GRAV, magnitude, dx, dy, dz
+                    magnitude = float(parts[2])
+                    dx, dy, dz = float(parts[3]), float(parts[4]), float(parts[5])
+                    grav_load = AccelerationLoad(
+                        load_type="gravity",
+                        magnitude=magnitude,
+                        density=None,  # not in INP; assign from *MATERIAL later
+                        direction=(dx, dy, dz),
+                        element_set=elset,
+                    )
+                    grav_load.name = f"DLOAD_GRAV_{elset}"
+                    load_case.loads.append(grav_load)
+
+                elif sub_type == "CENTRIF" and len(parts) >= 9:
+                    # elset, CENTRIF, ω², px, py, pz, ax, ay, az
+                    omega_sq = float(parts[2])
+                    px, py, pz = float(parts[3]), float(parts[4]), float(parts[5])
+                    ax, ay, az = float(parts[6]), float(parts[7]), float(parts[8])
+                    centrif_load = AccelerationLoad(
+                        load_type="centrifugal",
+                        magnitude=omega_sq,
+                        density=None,  # not in INP
+                        axis_point=(px, py, pz),
+                        axis_direction=(ax, ay, az),
+                        element_set=elset,
+                    )
+                    centrif_load.name = f"DLOAD_CENTRIF_{elset}"
+                    load_case.loads.append(centrif_load)
+
+                elif sub_type in ("BX", "BY", "BZ") and len(parts) >= 3:
+                    # elset, BX|BY|BZ, magnitude
+                    magnitude = float(parts[2])
+                    direction = {
+                        "BX": (1.0, 0.0, 0.0),
+                        "BY": (0.0, 1.0, 0.0),
+                        "BZ": (0.0, 0.0, 1.0),
+                    }[sub_type]
+                    bf_load = AccelerationLoad(
+                        load_type="body_force",
+                        magnitude=magnitude,
+                        direction=direction,
+                        element_set=elset,
+                    )
+                    bf_load.name = f"DLOAD_{sub_type}_{elset}"
+                    load_case.loads.append(bf_load)
+
+            except (ValueError, IndexError):
+                logger.warning(f"Could not parse *DLOAD line: {line!r}")
+                continue
 
         logger.info(
             f"Parsed Abaqus INP (meshio): {len(nodes_arr)} nodes, "

@@ -11,10 +11,12 @@ from ..spatial_selector import SpatialSelector
 from ..design_domain import DesignDomain
 
 from ..boundary_conditions import (
+    AccelerationLoad,
     BoundaryCondition,
     DistributedLoad,
     FixedConstraint,
     Load,
+    PressureLoad,
     PointLoad,
 )
 from ..materials import Material, MaterialProperties
@@ -47,6 +49,12 @@ class LoadCase(LoadCaseFromFreeCadInp):
     mesh_nodes: Optional[np.ndarray] = None
     mesh_elements: Optional[np.ndarray] = None
     mesh_element_type: Optional[str] = None
+
+    # Maximum possible loaded / constrained node counts, computed once during
+    # dataset creation by meshing a full design-domain box with this load case.
+    # Used to normalise get_bc_node_coverage() raw counts into [0, 1] ratios.
+    max_n_loaded_nodes: Optional[int] = None
+    max_n_constraint_nodes: Optional[int] = None
 
     @property
     def boundary_conditions(self) -> List[BoundaryCondition]:
@@ -119,22 +127,36 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 "Cannot compute mesh size: design-space dimensions are non-positive."
             )
 
-        min_dim = min(positive_dims)
-
-        # Use full 3D volume estimate when all dimensions are positive.
-        if dx > 0.0 and dy > 0.0 and dz > 0.0:
-            volume = dx * dy * dz
-            h_est = (volume / float(num_nodes)) ** (1.0 / 3.0)
-        else:
-            # Degenerate fallback (effectively 2D/1D bounds): use minimum positive dim.
-            h_est = min_dim
-
-        # Clamp to practical range relative to geometry scale.
-        # - Don't exceed ~1/2 of smallest dimension.
-        # - Don't go below a tiny absolute floor.
-        h_max = 0.5 * min_dim
         h_min = 1e-3
-        h = max(h_min, min(h_est, h_max))
+
+        # Unified mesh-size estimate that is robust for all geometries
+        # (cubes, beams, thin plates, shells) without branching.
+        #
+        # Two competing estimates; take the larger:
+        #
+        #   h_3d = (V / N)^(1/3)   — 3D volumetric estimate
+        #   h_2d = sqrt(A_max / N) — 2D in-plane estimate for the largest face
+        #
+        # For chunky geometries the 3D term dominates.
+        # For thin-plate / shell geometries, GMSH enforces ≥1 element across
+        # the thin dimension anyway, so in-plane nodes ≈ A_max / h².
+        # The 2D term then dominates and matches the actual node count.
+        # The max() picks the correct regime automatically — no branching needed.
+        sorted_dims = sorted([dx, dy, dz], reverse=True)
+
+        if len(positive_dims) == 3:
+            volume = dx * dy * dz
+            h_3d = (volume / float(num_nodes)) ** (1.0 / 3.0)
+            a_max = sorted_dims[0] * sorted_dims[1]
+            h_2d = (a_max / float(num_nodes)) ** 0.5
+            h = max(h_min, max(h_3d, h_2d))
+        else:
+            # Degenerate 2D/1D domain: use largest positive dimension pair / single dim.
+            if len(positive_dims) >= 2:
+                a_max = sorted_dims[0] * sorted_dims[1]
+                h = max(h_min, (a_max / float(num_nodes)) ** 0.5)
+            else:
+                h = max(h_min, sorted_dims[0] / float(num_nodes))
 
         return float(h)
 
@@ -172,7 +194,10 @@ class LoadCase(LoadCaseFromFreeCadInp):
         )
 
     def get_fea_analyzer(
-        self, mesher: str = "gmsh-subprocess", mesh_size: float = 1
+        self,
+        mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
+        mesh_size: float = 1,
+        device: str = "auto",
     ) -> "FEAAnalyzer":
         from ..kernels.base import FEAAnalyzer
 
@@ -243,6 +268,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
             mesher=mesher,
             load_case=self,
             mesh_size=mesh_size,
+            device=device,
         )
         return fea
 
@@ -253,6 +279,43 @@ class LoadCase(LoadCaseFromFreeCadInp):
         This bridges the structured JSON specification with the LLM-based design agent.
         """
         import math
+
+        def _fmt_num(value: Any, max_decimals: int = 4) -> str:
+            """Format numeric values compactly for prompt readability.
+
+            - Removes floating-point noise (e.g. 100.0000002 -> 100)
+            - Trims trailing zeros
+            - Keeps non-numeric sentinels (e.g. "?") as-is
+            """
+            if value is None:
+                return "?"
+
+            if isinstance(value, (int, np.integer)):
+                return str(int(value))
+
+            if isinstance(value, (float, np.floating)):
+                v = float(value)
+                if math.isfinite(v):
+                    v = round(v, max_decimals)
+                    # Avoid negative zero in string output
+                    if abs(v) < 10 ** (-max_decimals):
+                        v = 0.0
+                    s = f"{v:.{max_decimals}f}".rstrip("0").rstrip(".")
+                    return s if s else "0"
+                return str(v)
+
+            # Numeric strings and other values
+            try:
+                v = float(value)
+                if math.isfinite(v):
+                    v = round(v, max_decimals)
+                    if abs(v) < 10 ** (-max_decimals):
+                        v = 0.0
+                    s = f"{v:.{max_decimals}f}".rstrip("0").rstrip(".")
+                    return s if s else "0"
+                return str(value)
+            except (TypeError, ValueError):
+                return str(value)
 
         def _format_location(location) -> str:
             if location is None:
@@ -266,18 +329,19 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 if any(k in location for k in keys):
                     return (
                         "box "
-                        f"X[{location.get('x_min', '?')}, {location.get('x_max', '?')}], "
-                        f"Y[{location.get('y_min', '?')}, {location.get('y_max', '?')}], "
-                        f"Z[{location.get('z_min', '?')}, {location.get('z_max', '?')}]"
+                        f"X[{_fmt_num(location.get('x_min', '?'))}, {_fmt_num(location.get('x_max', '?'))}], "
+                        f"Y[{_fmt_num(location.get('y_min', '?'))}, {_fmt_num(location.get('y_max', '?'))}], "
+                        f"Z[{_fmt_num(location.get('z_min', '?'))}, {_fmt_num(location.get('z_max', '?'))}]"
                     )
                 if all(k in location for k in ("x", "y", "z")):
-                    return f"point ({location['x']:.3g}, {location['y']:.3g}, {location['z']:.3g})"
+                    return (
+                        f"point ({_fmt_num(location['x'])}, "
+                        f"{_fmt_num(location['y'])}, {_fmt_num(location['z'])})"
+                    )
                 return str(location)
 
             if isinstance(location, (tuple, list)) and len(location) >= 3:
-                return (
-                    f"point ({location[0]:.3g}, {location[1]:.3g}, {location[2]:.3g})"
-                )
+                return f"point ({_fmt_num(location[0])}, {_fmt_num(location[1])}, {_fmt_num(location[2])})"
 
             return str(location)
 
@@ -287,6 +351,8 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 return _format_location(getattr(obj, "location", None))
             if hasattr(obj, "point"):
                 return _format_location(getattr(obj, "point", None))
+            if hasattr(obj, "center"):
+                return _format_location(getattr(obj, "center", None))
 
             # 2) Parser compatibility metadata: region_id + selectors
             region_id = getattr(obj, "region_id", None)
@@ -415,6 +481,19 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 )
                 total_force += force_mag
 
+            elif isinstance(load, PressureLoad):
+                pressure = float(getattr(load, "pressure", 0.0))
+                radius = float(getattr(load, "radius", 0.0))
+                center = _format_location(getattr(load, "center", None))
+                normal_axis = getattr(load, "normal_axis", "?")
+                direction = getattr(load, "direction", "?")
+                equivalent_force = abs(pressure) * math.pi * max(radius, 0.0) ** 2
+                load_descriptions.append(
+                    f"{load_type} {pressure:.3g} MPa ({direction}) on circular area "
+                    f"centered at {center}, radius {radius:.3g} mm, normal axis {normal_axis}"
+                )
+                total_force += equivalent_force
+
             else:
                 # Generic fallback for other Load subclasses and parser-compat objects
                 vector_newtons = getattr(load, "vector_newtons", None)
@@ -452,10 +531,10 @@ class LoadCase(LoadCaseFromFreeCadInp):
         Design a structural component based on the following load case specification:
         
         GEOMETRY:
-        - Length (X): {length} {self.units}
-        - Beam (Y): {height} {self.units}
-        - Height (Z): {thickness} {self.units}
-        - Design domain: X=[{x_min}, {x_max}], Y=[{y_min}, {y_max}], Z=[{z_min}, {z_max}]
+        - Length (X): {_fmt_num(length)} {self.units}
+        - Beam (Y): {_fmt_num(height)} {self.units}
+        - Height (Z): {_fmt_num(thickness)} {self.units}
+        - Design domain: X=[{_fmt_num(x_min)}, {_fmt_num(x_max)}], Y=[{_fmt_num(y_min)}, {_fmt_num(y_max)}], Z=[{_fmt_num(z_min)}, {_fmt_num(z_max)}]
 
         MATERIAL:
         - Nominal material: {material_name}
@@ -478,6 +557,33 @@ class LoadCase(LoadCaseFromFreeCadInp):
         - Lattice or honeycomb patterns for lightweight designs
         - Material placement where stress is highest (top/bottom for bending)
         - Smooth transitions to avoid stress concentrations
+        
+        CADQUERY API REFERENCE (use exactly as shown):
+        
+        # box(xLen, yLen, zLen) — always 3 positional args; centered=True/False optional
+        cq.Workplane("XY").box(10, 20, 5)                  # box centered at origin
+        cq.Workplane("XY").box(10, 20, 5, centered=False)  # box with corner at origin
+        
+        # translate((x, y, z)) — move the result solid
+        cq.Workplane("XY").box(L, W, t).translate((L/2, W/2, t/2))
+        
+        # center(x, y) — 2D only, moves the 2D workplane origin (NOT for 3D positioning)
+        cq.Workplane("XY").center(cx, cy).box(10, 20, 5)   # only x and y args
+        
+        # union / cut / intersect — boolean ops between Workplane objects
+        result = solid_a.union(solid_b)
+        result = solid_a.cut(solid_b)
+        
+        # export
+        cq.exporters.export(result, "output.step")
+        
+        COMMON MISTAKES TO AVOID:
+        - WRONG: .box(xLen, yLen)              # missing height arg
+        - WRONG: .center(x, y, z)              # center() is 2D only
+        - WRONG: .translate([x, y, z])         # must be a tuple, not a list
+        - RIGHT: .box(xLen, yLen, zLen)
+        - RIGHT: .center(x, y)
+        - RIGHT: .translate((x, y, z))
         """
 
         return requirement
@@ -723,6 +829,8 @@ class LoadCase(LoadCaseFromFreeCadInp):
             constraint_sets.append((set_name, np.unique(node_idx), dofs))
 
         load_sets: List[Tuple[str, np.ndarray, Dict[str, float]]] = []
+        # (elset_name, dload_keyword, magnitude, extra_tuple_or_None)
+        dload_blocks: List[Tuple[str, str, float, Any]] = []
         for idx, load in enumerate(self.loads, start=1):
             if isinstance(load, PointLoad):
                 loc = getattr(load, "point", None)
@@ -813,6 +921,39 @@ class LoadCase(LoadCaseFromFreeCadInp):
                         {"x": fx, "y": fy, "z": fz},
                     )
                 )
+
+            elif isinstance(load, AccelerationLoad):
+                # Write as *DLOAD — no node set needed, uses element set directly.
+                # If the load references a specific element set use it; otherwise
+                # fall back to the ALL_ELEMENTS set that to_inp() always defines.
+                raw_elset = getattr(load, "element_set", None) or ""
+                elset = (
+                    "ALL_ELEMENTS"
+                    if raw_elset.upper() in ("", "EALL", "ALL", "ALL_ELEMENTS")
+                    else raw_elset
+                )
+                accel_type = getattr(load, "load_type", AccelerationLoad.GRAVITY)
+                magnitude = float(getattr(load, "magnitude", 0.0))
+
+                if accel_type == AccelerationLoad.GRAVITY:
+                    direction = getattr(load, "direction", None) or (0.0, 0.0, -1.0)
+                    dx, dy, dz = float(direction[0]), float(direction[1]), float(direction[2])
+                    dload_blocks.append((elset, "GRAV", magnitude, (dx, dy, dz)))
+
+                elif accel_type == AccelerationLoad.CENTRIFUGAL:
+                    axis = getattr(load, "axis", None) or (0.0, 0.0, 1.0)
+                    origin = getattr(load, "origin", None) or (0.0, 0.0, 0.0)
+                    dload_blocks.append(
+                        (elset, "CENTRIF", magnitude, (*origin, *axis))
+                    )
+
+                elif accel_type == AccelerationLoad.BODY_FORCE:
+                    direction = getattr(load, "direction", None) or (0.0, 0.0, -1.0)
+                    dx, dy, dz = float(direction[0]), float(direction[1]), float(direction[2])
+                    # Map to independent BX / BY / BZ body-load components
+                    for kw, component in (("BX", dx), ("BY", dy), ("BZ", dz)):
+                        if abs(component) > 1e-12:
+                            dload_blocks.append((elset, kw, magnitude * component, None))
 
         mat_name = _sanitize_set_name(
             getattr(self.material, "name", "MATERIAL"), "MATERIAL"
@@ -910,6 +1051,24 @@ class LoadCase(LoadCaseFromFreeCadInp):
                     f.write("*CLOAD\n")
                     f.write(f"{set_name}, {dof}, {value:.6f}\n\n")
 
+            for elset, dload_type, magnitude, extra in dload_blocks:
+                f.write("*DLOAD\n")
+                if dload_type == "GRAV":
+                    dx, dy, dz = extra
+                    f.write(
+                        f"{elset}, GRAV, {magnitude:.6g},"
+                        f" {dx:.6g}, {dy:.6g}, {dz:.6g}\n\n"
+                    )
+                elif dload_type in ("BX", "BY", "BZ"):
+                    f.write(f"{elset}, {dload_type}, {magnitude:.6g}\n\n")
+                elif dload_type == "CENTRIF":
+                    ox, oy, oz, nx, ny, nz = extra
+                    f.write(
+                        f"{elset}, CENTRIF, {magnitude:.6g},"
+                        f" {ox:.6g}, {oy:.6g}, {oz:.6g},"
+                        f" {nx:.6g}, {ny:.6g}, {nz:.6g}\n\n"
+                    )
+
             f.write("*NODE FILE\n")
             f.write("U, RF\n")
             f.write("*EL FILE\n")
@@ -975,12 +1134,22 @@ class LoadCase(LoadCaseFromFreeCadInp):
         # Filter out zero padding (midside-node slots unused in linear elements).
         # ------------------------------------------------------------------
         _ncount_to_type: Dict[int, str] = {
-            4: "tet4", 8: "hex8", 10: "tet10", 20: "hex20",
-            6: "wedge6", 15: "wedge15",
+            4: "tet4",
+            8: "hex8",
+            10: "tet10",
+            20: "hex20",
+            6: "wedge6",
+            15: "wedge15",
         }
         _type_dim: Dict[str, int] = {
-            "tet4": 3, "tet10": 3, "hex8": 3, "hex20": 3,
-            "wedge6": 3, "wedge15": 3, "quad4": 2, "tri3": 2,
+            "tet4": 3,
+            "tet10": 3,
+            "hex8": 3,
+            "hex20": 3,
+            "wedge6": 3,
+            "wedge15": 3,
+            "quad4": 2,
+            "tri3": 2,
         }
 
         # Group elements by (type_str, n_nodes_per_elem)
@@ -1021,16 +1190,21 @@ class LoadCase(LoadCaseFromFreeCadInp):
         # ------------------------------------------------------------------
         xs_a, ys_a, zs_a = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
         bounds: Dict[str, float] = {
-            "x_min": float(xs_a.min()), "x_max": float(xs_a.max()),
-            "y_min": float(ys_a.min()), "y_max": float(ys_a.max()),
-            "z_min": float(zs_a.min()), "z_max": float(zs_a.max()),
+            "x_min": float(xs_a.min()),
+            "x_max": float(xs_a.max()),
+            "y_min": float(ys_a.min()),
+            "y_max": float(ys_a.max()),
+            "z_min": float(zs_a.min()),
+            "z_max": float(zs_a.max()),
         }
         positive_dims = [
-            d for d in (
+            d
+            for d in (
                 bounds["x_max"] - bounds["x_min"],
                 bounds["y_max"] - bounds["y_min"],
                 bounds["z_max"] - bounds["z_min"],
-            ) if d > 0
+            )
+            if d > 0
         ]
         min_dim = min(positive_dims) if positive_dims else 1.0
         selector_tol = max(min_dim * 0.01, 1e-4)
@@ -1060,7 +1234,11 @@ class LoadCase(LoadCaseFromFreeCadInp):
         for cm_name, ansys_nids in archive.node_components.items():
             name = cm_name.strip()
             idx_arr = np.array(
-                [node_id_to_idx[int(n)] for n in ansys_nids if int(n) in node_id_to_idx],
+                [
+                    node_id_to_idx[int(n)]
+                    for n in ansys_nids
+                    if int(n) in node_id_to_idx
+                ],
                 dtype=np.int64,
             )
             if idx_arr.size == 0:
@@ -1081,8 +1259,12 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 "y_max": min(float(s_ys.max()) + selector_tol, bounds["y_max"]),
                 "z_min": max(float(s_zs.min()) - selector_tol, bounds["z_min"]),
                 "z_max": min(float(s_zs.max()) + selector_tol, bounds["z_max"]),
-                "x": cx, "y": cy, "z": cz,
-                "rx": rx, "ry": ry, "rz": rz,
+                "x": cx,
+                "y": cy,
+                "z": cz,
+                "rx": rx,
+                "ry": ry,
+                "rz": rz,
             }
             sel_id = f"SELECTOR_{name}"
             load_case.selectors[sel_id] = SpatialSelector(
@@ -1249,7 +1431,11 @@ class LoadCase(LoadCaseFromFreeCadInp):
             if mag > 0:
                 abs_vals = [abs(fx), abs(fy), abs(fz)]
                 dom = int(np.argmax(abs_vals))
-                axis_str = ("+x", "+y", "+z")[dom] if [fx, fy, fz][dom] > 0 else ("-x", "-y", "-z")[dom]
+                axis_str = (
+                    ("+x", "+y", "+z")[dom]
+                    if [fx, fy, fz][dom] > 0
+                    else ("-x", "-y", "-z")[dom]
+                )
             else:
                 axis_str = None
 
@@ -1303,7 +1489,6 @@ class LoadCase(LoadCaseFromFreeCadInp):
             f"{len(load_case.loads)} loads"
         )
         return load_case
-
 
     @staticmethod
     def from_dat(filepath: str) -> "LoadCase":
@@ -1365,9 +1550,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 [nodes_arr, np.zeros((len(nodes_arr), 1), dtype=np.float64)]
             )
 
-        node_id_to_idx: Dict[int, int] = {
-            nid: i for i, nid in enumerate(sorted_nids)
-        }
+        node_id_to_idx: Dict[int, int] = {nid: i for i, nid in enumerate(sorted_nids)}
 
         if len(nodes_arr) == 0:
             raise ValueError("No GRID nodes found in Nastran file")
@@ -1379,16 +1562,16 @@ class LoadCase(LoadCaseFromFreeCadInp):
         # ------------------------------------------------------------------
         _nastran_type_map: Dict[str, Tuple[str, int]] = {
             # card_type: (internal_name, dim_rank)
-            "CTETRA": ("tet4",   3),   # 4-node; overridden to tet10 if nids==10
-            "CHEXA":  ("hex8",   3),   # 8-node; overridden to hex20 if nids==20
-            "CPENTA": ("wedge",  3),
-            "CPYRA":  ("pyra5",  3),
-            "CQUAD4": ("quad4",  2),
-            "CQUADR": ("quad4",  2),
-            "CQUAD8": ("quad8",  2),
-            "CTRIA3": ("tri3",   2),
-            "CTRIAR": ("tri3",   2),
-            "CTRIA6": ("tri6",   2),
+            "CTETRA": ("tet4", 3),  # 4-node; overridden to tet10 if nids==10
+            "CHEXA": ("hex8", 3),  # 8-node; overridden to hex20 if nids==20
+            "CPENTA": ("wedge", 3),
+            "CPYRA": ("pyra5", 3),
+            "CQUAD4": ("quad4", 2),
+            "CQUADR": ("quad4", 2),
+            "CQUAD8": ("quad8", 2),
+            "CTRIA3": ("tri3", 2),
+            "CTRIAR": ("tri3", 2),
+            "CTRIA6": ("tri6", 2),
         }
 
         # Group all element-node-ID lists by (internal_type, n_nodes_per_elem)
@@ -1417,8 +1600,16 @@ class LoadCase(LoadCaseFromFreeCadInp):
 
         # Choose dominant bucket: prefer 3-D, then most elements
         _type_dim: Dict[str, int] = {
-            "tet4": 3, "tet10": 3, "hex8": 3, "hex20": 3, "wedge": 3, "pyra5": 3,
-            "quad4": 2, "quad8": 2, "tri3": 2, "tri6": 2,
+            "tet4": 3,
+            "tet10": 3,
+            "hex8": 3,
+            "hex20": 3,
+            "wedge": 3,
+            "pyra5": 3,
+            "quad4": 2,
+            "quad8": 2,
+            "tri3": 2,
+            "tri6": 2,
         }
         best_key: Optional[Tuple[str, int]] = None
         best_score = (-1, 0)
@@ -1459,16 +1650,21 @@ class LoadCase(LoadCaseFromFreeCadInp):
         # ------------------------------------------------------------------
         xs_a, ys_a, zs_a = nodes_arr[:, 0], nodes_arr[:, 1], nodes_arr[:, 2]
         bounds: Dict[str, float] = {
-            "x_min": float(xs_a.min()), "x_max": float(xs_a.max()),
-            "y_min": float(ys_a.min()), "y_max": float(ys_a.max()),
-            "z_min": float(zs_a.min()), "z_max": float(zs_a.max()),
+            "x_min": float(xs_a.min()),
+            "x_max": float(xs_a.max()),
+            "y_min": float(ys_a.min()),
+            "y_max": float(ys_a.max()),
+            "z_min": float(zs_a.min()),
+            "z_max": float(zs_a.max()),
         }
         positive_dims = [
-            d for d in (
+            d
+            for d in (
                 bounds["x_max"] - bounds["x_min"],
                 bounds["y_max"] - bounds["y_min"],
                 bounds["z_max"] - bounds["z_min"],
-            ) if d > 0
+            )
+            if d > 0
         ]
         min_dim = min(positive_dims) if positive_dims else 1.0
         selector_tol = max(min_dim * 0.01, 1e-4)
@@ -1497,7 +1693,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
         # pyNastran's bdf.spcs is {conid: [SPC | SPC1, ...]}.  We collect the
         # unique node set for every constraint-set ID so each gets a selector.
         # ------------------------------------------------------------------
-        selector_map: Dict[str, str] = {}   # conid_str → selector_id
+        selector_map: Dict[str, str] = {}  # conid_str → selector_id
         spc_node_sets: Dict[str, np.ndarray] = {}  # conid_str → 0-based idx array
 
         def _register_selector(conid_str: str, idx_arr: np.ndarray) -> Optional[str]:
@@ -1505,8 +1701,12 @@ class LoadCase(LoadCaseFromFreeCadInp):
             if idx_arr.size == 0:
                 return None
             coords = nodes_arr[idx_arr]
-            s_xs = coords[:, 0]; s_ys = coords[:, 1]; s_zs = coords[:, 2]
-            cx = float(s_xs.mean()); cy = float(s_ys.mean()); cz = float(s_zs.mean())
+            s_xs = coords[:, 0]
+            s_ys = coords[:, 1]
+            s_zs = coords[:, 2]
+            cx = float(s_xs.mean())
+            cy = float(s_ys.mean())
+            cz = float(s_zs.mean())
             rx = max((float(s_xs.max()) - float(s_xs.min())) / 2.0, min_radius)
             ry = max((float(s_ys.max()) - float(s_ys.min())) / 2.0, min_radius)
             rz = max((float(s_zs.max()) - float(s_zs.min())) / 2.0, min_radius)
@@ -1517,8 +1717,12 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 "y_max": min(float(s_ys.max()) + selector_tol, bounds["y_max"]),
                 "z_min": max(float(s_zs.min()) - selector_tol, bounds["z_min"]),
                 "z_max": min(float(s_zs.max()) + selector_tol, bounds["z_max"]),
-                "x": cx, "y": cy, "z": cz,
-                "rx": rx, "ry": ry, "rz": rz,
+                "x": cx,
+                "y": cy,
+                "z": cz,
+                "rx": rx,
+                "ry": ry,
+                "rz": rz,
             }
             sel_id = f"SELECTOR_SPC_{conid_str}"
             load_case.selectors[sel_id] = SpatialSelector(

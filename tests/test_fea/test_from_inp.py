@@ -6,7 +6,7 @@ import numpy as np
 from rapidcadpy.fea.load_case.load_case import LoadCase
 from rapidcadpy.fea.load_case.abaqus_inp_load_case import AbaqusInpLoadCase
 from rapidcadpy.fea.load_case.freecad_inp_load_case import LoadCaseFromFreeCadInp
-from rapidcadpy.fea.boundary_conditions import FixedConstraint, PointLoad
+from rapidcadpy.fea.boundary_conditions import AccelerationLoad, FixedConstraint, PointLoad
 
 
 class TestFromInp:
@@ -111,7 +111,7 @@ class TestFromInp:
         }
 
         return cases[request.param]
-    
+
     @pytest.fixture
     def load_case(self, get_inp_file) -> LoadCase:
         """Parse the sample .inp file once and reuse across tests.
@@ -229,7 +229,10 @@ class TestFromInp:
         assert len(load_case.selectors) > 0
 
     def test_abaqus_element_type_detected(self, load_case, get_inp_file):
-        assert load_case.meta.get("abaqus_element_type") == get_inp_file["abaqus_element_type"]
+        assert (
+            load_case.meta.get("abaqus_element_type")
+            == get_inp_file["abaqus_element_type"]
+        )
 
     # ------------------------------------------------------------------
     # Mesh data
@@ -264,7 +267,6 @@ class TestFromInp:
     def test_plot_fea(self, load_case):
         fea = load_case.get_fea_analyzer()
         fea.show("conditions", filename="test_plot_fea_conditions.png")
-
 
 
 class TestFromInpWithFea:
@@ -489,3 +491,161 @@ class TestToInpFromInp:
                 )
 
         np.testing.assert_allclose(total_force_rt, total_force_orig, atol=1e-6)
+
+
+class TestGravityLoadFromInp:
+    """
+    Tests for parsing a direct Abaqus export that contains a *DLOAD, GRAV
+    body-force gravity load and *BOUNDARY displacement constraints.
+
+    Source file: tests/test_files/fea/fea_test_abaqus_gravity_load.inp
+    """
+
+    INP_FILENAME = "fea_test_abaqus_gravity_load.inp"
+
+    # Expected values derived from a verified parse run
+    EXPECTED = {
+        "problem_id": "FEA_TEST_ABAQUS_GRAVITY_LOAD",
+        "mesh_nodes_shape": (237, 3),
+        "mesh_elements_shape": (688, 4),
+        "mesh_element_type": "tet4",
+        "bounds": {
+            "x_min": -9.55653095,
+            "x_max": 0.0,
+            "y_min": 0.0,
+            "y_max": 25.3999996,
+            "z_min": -9.52053547,
+            "z_max": 0.0,
+        },
+        "n_boundary_conditions": 4,
+        "n_loads": 1,
+        # Gravity load specifics — taken directly from the *DLOAD section
+        "gravity_magnitude": 9.71,
+        "gravity_direction": (0.0, 0.0, -1.0),
+        "gravity_element_set": "EALL",
+    }
+
+    @pytest.fixture
+    def inp_path(self):
+        return (
+            pathlib.Path(__file__).parent.parent
+            / "test_files"
+            / "fea"
+            / self.INP_FILENAME
+        )
+
+    @pytest.fixture
+    def load_case(self, inp_path):
+        return LoadCase.from_inp(str(inp_path))
+
+    @pytest.fixture
+    def gravity_load(self, load_case):
+        """Return the first AccelerationLoad in the load case."""
+        for load in load_case.loads:
+            if isinstance(load, AccelerationLoad):
+                return load
+        pytest.fail("No AccelerationLoad found in parsed load case")
+
+    # ------------------------------------------------------------------
+    # Basic structure
+    # ------------------------------------------------------------------
+
+    def test_returns_load_case_instance(self, load_case):
+        assert isinstance(load_case, LoadCase)
+
+    def test_problem_id(self, load_case):
+        assert load_case.problem_id == self.EXPECTED["problem_id"]
+
+    def test_description_contains_filename(self, load_case):
+        assert self.INP_FILENAME in load_case.description
+
+    # ------------------------------------------------------------------
+    # Mesh
+    # ------------------------------------------------------------------
+
+    def test_mesh_nodes_shape(self, load_case):
+        assert load_case.mesh_nodes.shape == self.EXPECTED["mesh_nodes_shape"]
+
+    def test_mesh_elements_shape(self, load_case):
+        assert load_case.mesh_elements.shape == self.EXPECTED["mesh_elements_shape"]
+
+    def test_mesh_element_type(self, load_case):
+        assert load_case.mesh_element_type == self.EXPECTED["mesh_element_type"]
+
+    # ------------------------------------------------------------------
+    # Bounds
+    # ------------------------------------------------------------------
+
+    def test_bounds_populated(self, load_case):
+        assert load_case.bounds is not None
+
+    def test_bounds_values(self, load_case):
+        b = load_case.bounds
+        exp = self.EXPECTED["bounds"]
+        for key in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max"):
+            assert b[key] == pytest.approx(exp[key], abs=1e-5)
+
+    # ------------------------------------------------------------------
+    # Boundary conditions
+    # ------------------------------------------------------------------
+
+    def test_boundary_conditions_not_empty(self, load_case):
+        assert len(load_case.boundary_conditions) > 0
+
+    def test_boundary_condition_count(self, load_case):
+        assert len(load_case.boundary_conditions) == self.EXPECTED["n_boundary_conditions"]
+
+    def test_all_bcs_are_fixed_constraints(self, load_case):
+        for bc in load_case.boundary_conditions:
+            assert isinstance(bc, FixedConstraint)
+
+    def test_fixed_constraints_lock_all_dofs(self, load_case):
+        for bc in load_case.boundary_conditions:
+            assert bc.dofs == (True, True, True)
+
+    # ------------------------------------------------------------------
+    # Loads — presence
+    # ------------------------------------------------------------------
+
+    def test_exactly_one_load(self, load_case):
+        assert len(load_case.loads) == self.EXPECTED["n_loads"]
+
+    def test_load_is_acceleration_load(self, gravity_load):
+        assert isinstance(gravity_load, AccelerationLoad)
+
+    # ------------------------------------------------------------------
+    # Gravity load attributes
+    # ------------------------------------------------------------------
+
+    def test_gravity_load_type(self, gravity_load):
+        assert gravity_load.load_type == AccelerationLoad.GRAVITY
+
+    def test_gravity_magnitude(self, gravity_load):
+        assert gravity_load.magnitude == pytest.approx(
+            self.EXPECTED["gravity_magnitude"], abs=1e-6
+        )
+
+    def test_gravity_direction_z_down(self, gravity_load):
+        dx, dy, dz = gravity_load.direction
+        assert dx == pytest.approx(self.EXPECTED["gravity_direction"][0], abs=1e-6)
+        assert dy == pytest.approx(self.EXPECTED["gravity_direction"][1], abs=1e-6)
+        assert dz == pytest.approx(self.EXPECTED["gravity_direction"][2], abs=1e-6)
+
+    def test_gravity_element_set(self, gravity_load):
+        assert gravity_load.element_set == self.EXPECTED["gravity_element_set"]
+
+    def test_gravity_density_is_none_when_not_in_inp(self, gravity_load):
+        """Density is not defined in *DLOAD; must be supplied before apply()."""
+        assert gravity_load.density is None
+
+    def test_gravity_vector_property(self, gravity_load):
+        """gravity_vector should equal magnitude * direction."""
+        gv = gravity_load.gravity_vector
+        magnitude = self.EXPECTED["gravity_magnitude"]
+        expected = tuple(magnitude * d for d in self.EXPECTED["gravity_direction"])
+        for a, b in zip(gv, expected):
+            assert a == pytest.approx(b, abs=1e-6)
+
+    def test_gravity_load_name(self, gravity_load):
+        assert gravity_load.name == "DLOAD_GRAV_EALL"
+

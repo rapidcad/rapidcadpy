@@ -201,7 +201,7 @@ class FEAAnalyzer:
         mesh_size: float = 2.0,
         element_type: str = "tet4",
         device: str = "auto",
-        mesher: str = "netgen",
+        mesher: "Union[MesherBase, str]" = "netgen",
         load_case: Optional["LoadCase"] = None,
     ):
         """
@@ -392,6 +392,157 @@ class FEAAnalyzer:
         """
         return self.kernel.get_solver_name()
 
+    def get_bc_node_coverage(self) -> dict:
+        """
+        Return raw mesh-node counts for loaded and constrained zones.
+
+        These raw counts should be normalised by the maximum possible counts
+        (obtainable via :meth:`compute_max_bc_node_counts`, called once at
+        dataset-creation time and stored in ``load_case.max_n_loaded_nodes`` /
+        ``load_case.max_n_constraint_nodes``).  A ratio of 1.0 means the
+        generated geometry fully covers the intended load / support area.
+
+        Returns:
+            Dict with keys:
+                n_loaded_nodes     (int) – nodes in all load zones combined
+                n_constraint_nodes (int) – nodes in all constraint zones combined
+                n_total_nodes      (int) – total FE mesh nodes (for reference)
+
+        Notes:
+            - Returns all-zero dict with ``error`` key when meshing fails.
+            - Requires the kernel to support ``get_visualization_data()``.
+        """
+        zero = {
+            "n_loaded_nodes": 0,
+            "n_constraint_nodes": 0,
+            "n_total_nodes": 0,
+        }
+        try:
+            if hasattr(self.kernel, "get_bc_node_masks"):
+                nodes, constraint_mask, force_mask = self.kernel.get_bc_node_masks(
+                    shape=self.shape,
+                    material=self.load_case.material,
+                    loads=self.load_case.loads,
+                    constraints=self.load_case.constraints,
+                    mesh_size=self.mesh_size,
+                    element_type=self.element_type,
+                )
+            else:
+                _pv_mesh, nodes, constraint_mask, force_mask, _ = (
+                    self.kernel.get_visualization_data(
+                        shape=self.shape,
+                        material=self.load_case.material,
+                        loads=self.load_case.loads,
+                        constraints=self.load_case.constraints,
+                        mesh_size=self.mesh_size,
+                        element_type=self.element_type,
+                        with_conditions=True,
+                    )
+                )
+            n_total = int(nodes.shape[0])
+            if n_total == 0:
+                return {**zero, "error": "Empty mesh"}
+
+            return {
+                "n_loaded_nodes": int(np.sum(force_mask)),
+                "n_constraint_nodes": int(np.sum(constraint_mask)),
+                "n_total_nodes": n_total,
+            }
+        except Exception as e:
+            return {**zero, "error": str(e)}
+
+    def compute_max_bc_node_counts(self) -> dict:
+        """
+        Compute the theoretical maximum loaded/constrained node counts.
+
+        Meshes a solid box that fills the entire design domain (from
+        ``load_case.bounds``) and counts how many nodes fall in each BC zone.
+        This represents coverage = 1.0 — achievable only when the generated
+        part completely fills every load and constraint region.
+
+        Call this **once per load case at dataset-creation time** and store
+        the results::
+
+            counts = fea.compute_max_bc_node_counts()
+            load_case.max_n_loaded_nodes     = counts["max_n_loaded_nodes"]
+            load_case.max_n_constraint_nodes = counts["max_n_constraint_nodes"]
+
+        Returns:
+            Dict with keys:
+                max_n_loaded_nodes     (int)
+                max_n_constraint_nodes (int)
+            Plus ``error`` key when the computation fails.
+        """
+        import os
+        import tempfile
+
+        try:
+            import cadquery as cq
+        except ImportError:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": "cadquery not available",
+            }
+
+        bounds = self.load_case.bounds
+        if not bounds:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": "No bounds in load_case",
+            }
+
+        try:
+            x_min = bounds.get("x_min", 0.0)
+            x_max = bounds.get("x_max", 100.0)
+            y_min = bounds.get("y_min", 0.0)
+            y_max = bounds.get("y_max", 100.0)
+            z_min = bounds.get("z_min", 0.0)
+            z_max = bounds.get("z_max", 100.0)
+            dx = max(x_max - x_min, 1e-6)
+            dy = max(y_max - y_min, 1e-6)
+            dz = max(z_max - z_min, 1e-6)
+
+            box_shape = (
+                cq.Workplane("XY")
+                .box(dx, dy, dz, centered=False)
+                .translate((x_min, y_min, z_min))
+            )
+
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
+            os.close(tmp_fd)
+            try:
+                cq.exporters.export(box_shape, tmp_path)
+
+                _, nodes, constraint_mask, force_mask, _ = (
+                    self.kernel.get_visualization_data(
+                        shape=tmp_path,
+                        material=self.load_case.material,
+                        loads=self.load_case.loads,
+                        constraints=self.load_case.constraints,
+                        mesh_size=self.mesh_size,
+                        element_type=self.element_type,
+                        with_conditions=True,
+                    )
+                )
+                return {
+                    "max_n_loaded_nodes": int(np.sum(force_mask)),
+                    "max_n_constraint_nodes": int(np.sum(constraint_mask)),
+                }
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        except Exception as e:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": str(e),
+            }
+
     def validate_connectivity(self) -> bool:
         """
         Check if loaded and constrained nodes are connected via the mesh.
@@ -485,6 +636,7 @@ class FEAAnalyzer:
         window_size: Tuple[int, int] = (1400, 700),
         filename: Optional[str] = None,
         show_legend: bool = True,
+        show_grid: bool = True,
         display: str = "conditions",
         camera_position: str = "iso",
     ) -> None:
@@ -590,6 +742,11 @@ class FEAAnalyzer:
                 PointLoad,
                 DistributedLoad,
             )
+            from ..boundary_conditions import (
+                FixedConstraint,
+                PointLoad,
+                DistributedLoad,
+            )
 
             load_case = self.load_case
 
@@ -600,6 +757,12 @@ class FEAAnalyzer:
                 geometry_bounds = FEAAnalyzer._get_geometry_bounds(self.shape)
             if not geometry_bounds:
                 geometry_bounds = {
+                    "x_min": 0,
+                    "x_max": 1,
+                    "y_min": 0,
+                    "y_max": 1,
+                    "z_min": 0,
+                    "z_max": 1,
                     "x_min": 0,
                     "x_max": 1,
                     "y_min": 0,
@@ -673,6 +836,14 @@ class FEAAnalyzer:
                         s=100,
                         label=label if i == 0 else None,
                     )
+                    ax.scatter(
+                        cx_b,
+                        cy_b,
+                        cz_b,
+                        color="tab:red",
+                        s=100,
+                        label=label if i == 0 else None,
+                    )
 
             # ── Loads in green + force arrows ─────────────────────────────────
             for i, ld in enumerate(load_case.loads):
@@ -688,6 +859,14 @@ class FEAAnalyzer:
                     elif isinstance(pt, (tuple, list)) and len(pt) == 3:
                         lx, ly, lz = float(pt[0]), float(pt[1]), float(pt[2])
                     if lx is not None:
+                        ax.scatter(
+                            lx,
+                            ly,
+                            lz,
+                            color="tab:green",
+                            s=100,
+                            label=label if i == 0 else None,
+                        )
                         ax.scatter(
                             lx,
                             ly,
@@ -716,6 +895,12 @@ class FEAAnalyzer:
                             "-y": (0, -1, 0),
                             "z": (0, 0, 1),
                             "-z": (0, 0, -1),
+                            "x": (1, 0, 0),
+                            "-x": (-1, 0, 0),
+                            "y": (0, 1, 0),
+                            "-y": (0, -1, 0),
+                            "z": (0, 0, 1),
+                            "-z": (0, 0, -1),
                         }
                         vx, vy, vz = _axis_map.get(direction, (0, 0, 1))
                     else:
@@ -725,12 +910,19 @@ class FEAAnalyzer:
                     ax.quiver(
                         lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen"
                     )
+                    ax.quiver(
+                        lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen"
+                    )
 
             ax.set_title("FEA Debug: Design domain + BC/Load Regions")
             ax.set_xlabel("X")
             ax.set_ylabel("Y")
             ax.set_zlabel("Z")
-            ax.legend(fontsize=8, loc="upper right")
+            if not show_grid:
+                ax.grid(False)
+                ax.set_axis_off()
+            if show_legend:
+                ax.legend(fontsize=8, loc="upper right")
             plt.tight_layout()
 
             if filename:
@@ -756,6 +948,15 @@ class FEAAnalyzer:
         # NSWindow even when off_screen=True.  Ensure VTK uses its true
         # framebuffer-only code path (set before Plotter construction).
         os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
+
+        # On headless Linux servers (no X display), start a virtual framebuffer
+        # so VTK can initialise its renderer without a real display.
+        # pv.start_xvfb() is a no-op if a display is already available.
+        if not interactive:
+            try:
+                pv.start_xvfb()
+            except Exception:
+                pass  # xvfb not installed or already running — carry on
 
         plotter = pv.Plotter(window_size=list(window_size), off_screen=True)
         logger.debug(
@@ -858,25 +1059,6 @@ class FEAAnalyzer:
                     position="lower_left",
                     font_size=10,
                 )
-        elif display == "mesh":
-            # Display mode is 'mesh'
-            if has_design_space:
-                plotter.add_text(
-                    "Mesh + Design Space", position="upper_edge", font_size=12
-                )
-            else:
-                plotter.add_text(
-                    "Mesh Visualization", position="upper_edge", font_size=12
-                )
-        elif display == "design space":
-            if pv_mesh is not None:
-                plotter.add_text(
-                    "Design Space + Mesh", position="upper_edge", font_size=12
-                )
-            else:
-                plotter.add_text(
-                    "Design Space (bounds only)", position="upper_edge", font_size=12
-                )
 
         plotter.add_axes()
 
@@ -903,8 +1085,12 @@ class FEAAnalyzer:
             plotter.screenshot(filename)
             print(f"✓ Saved boundary condition visualization to: {filename}")
             plotter.close()
-        elif interactive:
-            plotter.show()
+        else:
+            # Show interactively
+            if interactive:
+                plotter.show()
+            else:
+                plotter.show(jupyter_backend="static")
 
     def export_gltf(
         self,
