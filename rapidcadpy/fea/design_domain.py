@@ -67,352 +67,163 @@ class DesignDomain:
 
         return "\n".join(desc)
 
-    def build_geometry(self) -> "cq.Workplane":
+    def build_geometry(self, app=None) -> "Shape":
         """
-        Build the design domain geometry using CadQuery.
+        Build the design domain geometry using rapidcadpy.
 
         Returns:
-            CadQuery Workplane with the design domain solid
+            rapidcadpy Shape with the design domain solid
         """
-        import cadquery as cq
+        if app is None:
+            from rapidcadpy.integrations.ocp.app import OpenCascadeOcpApp
+            app = OpenCascadeOcpApp()
 
         if self.shape_type == "box":
-            return self._build_box(cq)
+            return self._build_box(app)
         elif self.shape_type == "cylinder":
-            return self._build_cylinder(cq)
+            return self._build_cylinder(app)
         elif self.shape_type == "sphere":
-            return self._build_sphere(cq)
+            return self._build_sphere(app)
         elif self.shape_type == "l_shape":
-            return self._build_l_shape(cq)
+            return self._build_l_shape(app)
         elif self.shape_type == "t_shape":
-            return self._build_t_shape(cq)
+            return self._build_t_shape(app)
         elif self.shape_type == "plus":
-            return self._build_plus(cq)
+            return self._build_plus(app)
         elif self.shape_type == "csg":
-            return self._build_csg(cq)
+            return self._build_csg(app)
         else:
-            logger.warning(
-                f"Unknown shape type '{self.shape_type}', falling back to box"
-            )
-            return self._build_box(cq)
+            return self._build_box(app)
 
-    def _build_box(self, cq) -> "cq.Workplane":
-        """Build a box from bounds."""
+    def _build_box(self, app) -> "Shape":
         if not self.bounds:
             raise ValueError("Box shape requires 'bounds' with x_min, x_max, etc.")
-
         x_min = self.bounds.get("x_min", 0)
         x_max = self.bounds.get("x_max", 100)
         y_min = self.bounds.get("y_min", 0)
         y_max = self.bounds.get("y_max", 100)
         z_min = self.bounds.get("z_min", 0)
         z_max = self.bounds.get("z_max", 100)
+        wp = app.work_plane("XY", offset=z_min)
+        wp.move_to(x_min, y_min).rect(x_max - x_min, y_max - y_min, centered=False)
+        return wp.extrude(z_max - z_min)
 
-        dx = x_max - x_min
-        dy = y_max - y_min
-        dz = z_max - z_min
-
-        return (
-            cq.Workplane("XY")
-            .box(dx, dy, dz, centered=False)
-            .translate((x_min, y_min, z_min))
-        )
-
-    def _build_cylinder(self, cq) -> "cq.Workplane":
-        """
-        Build a cylinder from params.
-
-        Params:
-            radius: Cylinder radius
-            height: Cylinder height
-            center: (x, y, z) center of base
-            axis: 'x', 'y', or 'z' (default 'z')
-        """
+    def _build_cylinder(self, app) -> "Shape":
         p = self.params or {}
         radius = p.get("radius", 50)
         height = p.get("height", 100)
-        center = p.get("center", [0, 0, 0])
+        cx, cy, cz = p.get("center", [0, 0, 0])
         axis = p.get("axis", "z").lower()
-
-        # Build cylinder along Z, then rotate if needed
-        cyl = cq.Workplane("XY").cylinder(height, radius, centered=(True, True, False))
-
         if axis == "x":
-            cyl = cyl.rotate((0, 0, 0), (0, 1, 0), 90)
+            wp = app.work_plane("YZ", offset=cx)
+            wp.move_to(cy, cz).circle(radius)
         elif axis == "y":
-            cyl = cyl.rotate((0, 0, 0), (1, 0, 0), -90)
-        # axis == 'z' is default, no rotation needed
+            wp = app.work_plane("XZ", offset=cy)
+            wp.move_to(cx, cz).circle(radius)
+        else:
+            wp = app.work_plane("XY", offset=cz)
+            wp.move_to(cx, cy).circle(radius)
+        return wp.extrude(height)
 
-        return cyl.translate(tuple(center))
-
-    def _build_sphere(self, cq) -> "cq.Workplane":
-        """
-        Build a sphere from params.
-
-        Params:
-            radius: Sphere radius
-            center: (x, y, z) center
-        """
+    def _build_sphere(self, app) -> "Shape":
         p = self.params or {}
         radius = p.get("radius", 50)
-        center = p.get("center", [0, 0, 0])
+        cx, cy, cz = p.get("center", [0, 0, 0])
+        wp = app.work_plane("XY", offset=cz)
+        wp.move_to(cx, cy - radius).line_to(cx, cy + radius)
+        wp.three_point_arc((cx + radius, cy), (cx, cy - radius))
+        return wp.close().revolve(360, axis="Y")
 
-        return cq.Workplane("XY").sphere(radius).translate(tuple(center))
-
-    def _build_l_shape(self, cq) -> "cq.Workplane":
-        """
-        Build an L-shaped design domain.
-
-        Params:
-            width: Overall width (x dimension)
-            height: Overall height (z dimension)
-            depth: Depth (y dimension)
-            leg_width: Width of the vertical leg
-            base_height: Height of the horizontal base
-        """
+    def _build_l_shape(self, app) -> "Shape":
         p = self.params or {}
         width = p.get("width", 200)
         height = p.get("height", 200)
         depth = p.get("depth", 100)
         leg_width = p.get("leg_width", width * 0.4)
         base_height = p.get("base_height", height * 0.3)
+        wp = app.work_plane("XY")
+        wp.move_to(0, 0).rect(width, depth, centered=False)
+        base = wp.extrude(base_height)
+        wp2 = app.work_plane("XY", offset=base_height)
+        wp2.move_to(0, 0).rect(leg_width, depth, centered=False)
+        return base.union(wp2.extrude(height - base_height))
 
-        # Horizontal base
-        base = cq.Workplane("XY").box(width, depth, base_height, centered=False)
-
-        # Vertical leg on the left
-        leg = cq.Workplane("XY").box(leg_width, depth, height, centered=False)
-
-        return base.union(leg)
-
-    def _build_t_shape(self, cq) -> "cq.Workplane":
-        """
-        Build a T-shaped design domain.
-
-        Params:
-            width: Overall width (x dimension)
-            height: Overall height (z dimension)
-            depth: Depth (y dimension)
-            stem_width: Width of the vertical stem
-            cap_height: Height of the horizontal cap
-        """
+    def _build_t_shape(self, app) -> "Shape":
         p = self.params or {}
         width = p.get("width", 200)
         height = p.get("height", 200)
         depth = p.get("depth", 100)
-        stem_width = p.get("stem_width", width * 0.4)
-        cap_height = p.get("cap_height", height * 0.3)
+        stem_w = p.get("stem_width", width * 0.4)
+        cap_h = p.get("cap_height", height * 0.3)
+        stem_h = height - cap_h
+        stem_x = (width - stem_w) / 2
+        wp = app.work_plane("XY")
+        wp.move_to(stem_x, 0).rect(stem_w, depth, centered=False)
+        stem = wp.extrude(stem_h)
+        wp2 = app.work_plane("XY", offset=stem_h)
+        wp2.move_to(0, 0).rect(width, depth, centered=False)
+        return stem.union(wp2.extrude(cap_h))
 
-        stem_height = height - cap_height
-        stem_x = (width - stem_width) / 2
-
-        # Vertical stem
-        stem = (
-            cq.Workplane("XY")
-            .box(stem_width, depth, stem_height, centered=False)
-            .translate((stem_x, 0, 0))
-        )
-
-        # Horizontal cap at top
-        cap = (
-            cq.Workplane("XY")
-            .box(width, depth, cap_height, centered=False)
-            .translate((0, 0, stem_height))
-        )
-
-        return stem.union(cap)
-
-    def _build_plus(self, cq) -> "cq.Workplane":
-        """
-        Build a plus/cross-shaped design domain.
-
-        Params:
-            width: Overall width (x dimension)
-            height: Overall height (z dimension)
-            depth: Depth (y dimension)
-            arm_width: Width of each arm
-        """
+    def _build_plus(self, app) -> "Shape":
         p = self.params or {}
-        width = p.get("width", 200)
-        height = p.get("height", 200)
-        depth = p.get("depth", 100)
-        arm_width = p.get("arm_width", width * 0.4)
+        w = p.get("width", 200)
+        h = p.get("height", 200)
+        d = p.get("depth", 100)
+        arm_w = p.get("arm_width", w * 0.4)
+        wp = app.work_plane("XY", offset=(h - arm_w) / 2)
+        wp.move_to(0, 0).rect(w, d, centered=False)
+        h_bar = wp.extrude(arm_w)
+        wp2 = app.work_plane("XY")
+        wp2.move_to((w - arm_w) / 2, 0).rect(arm_w, d, centered=False)
+        return h_bar.union(wp2.extrude(h))
 
-        # Horizontal bar
-        h_bar = (
-            cq.Workplane("XY")
-            .box(width, depth, arm_width, centered=False)
-            .translate((0, 0, (height - arm_width) / 2))
-        )
-
-        # Vertical bar
-        v_bar = (
-            cq.Workplane("XY")
-            .box(arm_width, depth, height, centered=False)
-            .translate(((width - arm_width) / 2, 0, 0))
-        )
-
-        return h_bar.union(v_bar)
-
-    def _build_csg(self, cq) -> "cq.Workplane":
-        """
-        Build geometry using CSG operations.
-
-        Operations is a list of dicts with:
-            - type: 'box', 'cylinder', 'sphere'
-            - operation: 'add' (union), 'subtract', 'intersect'
-            - params: shape-specific parameters
-        """
-        if not self.operations:
-            raise ValueError("CSG shape requires 'operations' list")
-
+    def _build_csg(self, app) -> "Shape":
         result = None
-
-        for i, op in enumerate(self.operations):
+        for op in self.operations:
             op_type = op.get("type", "box")
-            operation = op.get("operation", "add")
+            oper = op.get("operation", "add")
             params = op.get("params", {})
-
-            # Build the primitive
+            shape = None
             if op_type == "box":
-                x = params.get("x", 0)
-                y = params.get("y", 0)
-                z = params.get("z", 0)
-                dx = params.get("dx", 100)
-                dy = params.get("dy", 100)
-                dz = params.get("dz", 100)
-                shape = (
-                    cq.Workplane("XY")
-                    .box(dx, dy, dz, centered=False)
-                    .translate((x, y, z))
-                )
+                wp = app.work_plane("XY", offset=params.get("z", 0))
+                wp.move_to(params.get("x", 0), params.get("y", 0)).rect(params.get("dx", 100), params.get("dy", 100), centered=False)
+                shape = wp.extrude(params.get("dz", 100))
             elif op_type == "cylinder":
-                cx = params.get("cx", 0)
-                cy = params.get("cy", 0)
-                cz = params.get("cz", 0)
-                radius = params.get("radius", 50)
-                height = params.get("height", 100)
-                axis = params.get("axis", "z")
-                shape = cq.Workplane("XY").cylinder(
-                    height, radius, centered=(True, True, False)
-                )
+                cx, cy, cz = params.get("cx", 0), params.get("cy", 0), params.get("cz", 0)
+                axis = params.get("axis", "z").lower()
+                r, ht = params.get("radius", 50), params.get("height", 100)
                 if axis == "x":
-                    shape = shape.rotate((0, 0, 0), (0, 1, 0), 90)
+                    wp = app.work_plane("YZ", offset=cx)
+                    wp.move_to(cy, cz).circle(r)
                 elif axis == "y":
-                    shape = shape.rotate((0, 0, 0), (1, 0, 0), -90)
-                shape = shape.translate((cx, cy, cz))
-            elif op_type == "sphere":
-                cx = params.get("cx", 0)
-                cy = params.get("cy", 0)
-                cz = params.get("cz", 0)
-                radius = params.get("radius", 50)
-                shape = cq.Workplane("XY").sphere(radius).translate((cx, cy, cz))
-            else:
-                logger.warning(f"Unknown CSG primitive type '{op_type}', skipping")
-                continue
-
-            # Apply operation
-            if result is None or operation == "add":
-                if result is None:
-                    result = shape
+                    wp = app.work_plane("XZ", offset=cy)
+                    wp.move_to(cx, cz).circle(r)
                 else:
-                    result = result.union(shape)
-            elif operation == "subtract":
-                result = result.cut(shape)
-            elif operation == "intersect":
-                result = result.intersect(shape)
-
-        if result is None:
-            raise ValueError("No valid CSG operations produced geometry")
-
+                    wp = app.work_plane("XY", offset=cz)
+                    wp.move_to(cx, cy).circle(r)
+                shape = wp.extrude(ht)
+            elif op_type == "sphere":
+                cx, cy, cz = params.get("cx", 0), params.get("cy", 0), params.get("cz", 0)
+                r = params.get("radius", 50)
+                wp = app.work_plane("XY", offset=cz)
+                wp.move_to(cx, cy - r).line_to(cx, cy + r).three_point_arc((cx + r, cy), (cx, cy - r))
+                shape = wp.close().revolve(360, axis="Y")
+            if shape:
+                if result is None or oper == "add":
+                    result = shape if result is None else result.union(shape)
+                elif oper == "subtract":
+                    result = result.cut(shape)
+                elif oper == "intersect":
+                    if hasattr(result, "intersect"): result = result.intersect(shape)
+        if result is None: raise ValueError("No geometry")
         return result
 
-    def _export_step_occ(self, filepath: str) -> str:
-        """
-        Export using pythonOCC (OCC.Core) when cadquery is not available.
-
-        Supports box, cylinder and sphere analytically.  Other shapes fall back
-        to building the full geometry via CadQuery (which may still fail if
-        cadquery is absent).
-        """
-        from OCC.Core.STEPControl import STEPControl_AsIs, STEPControl_Writer
-        from OCC.Core.IFSelect import IFSelect_RetDone
-
-        p = self.params or {}
-        shape = None
-
-        if self.shape_type == "box":
-            from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeBox
-            from OCC.Core.gp import gp_Pnt
-
-            b = self.bounds or {}
-            x_min = float(b.get("x_min", 0))
-            y_min = float(b.get("y_min", 0))
-            z_min = float(b.get("z_min", 0))
-            dx = float(b.get("x_max", 100)) - x_min
-            dy = float(b.get("y_max", 100)) - y_min
-            dz = float(b.get("z_max", 100)) - z_min
-            shape = BRepPrimAPI_MakeBox(gp_Pnt(x_min, y_min, z_min), dx, dy, dz).Shape()
-
-        elif self.shape_type == "cylinder":
-            from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeCylinder
-            from OCC.Core.gp import gp_Ax2, gp_Dir, gp_Pnt
-
-            radius = float(p.get("radius", 50))
-            height = float(p.get("height", 100))
-            center = list(p.get("center", [0, 0, 0]))
-            cx, cy, cz = float(center[0]), float(center[1]), float(center[2])
-            axis_str = str(p.get("axis", "z")).lower()
-            axis_dir = {"z": (0, 0, 1), "x": (1, 0, 0), "y": (0, 1, 0)}.get(
-                axis_str, (0, 0, 1)
-            )
-            ax2 = gp_Ax2(gp_Pnt(cx, cy, cz), gp_Dir(*axis_dir))
-            shape = BRepPrimAPI_MakeCylinder(ax2, radius, height).Shape()
-
-        elif self.shape_type == "sphere":
-            from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakeSphere
-            from OCC.Core.gp import gp_Pnt
-
-            radius = float(p.get("radius", 50))
-            center = list(p.get("center", [0, 0, 0]))
-            shape = BRepPrimAPI_MakeSphere(
-                gp_Pnt(float(center[0]), float(center[1]), float(center[2])), radius
-            ).Shape()
-
-        if shape is None:
-            raise ValueError(
-                f"OCC export not implemented for shape_type='{self.shape_type}'. "
-                "Install cadquery for full shape support."
-            )
-
-        writer = STEPControl_Writer()
-        writer.Transfer(shape, STEPControl_AsIs)
-        status = writer.Write(filepath)
-        if status != IFSelect_RetDone:
-            raise RuntimeError(
-                f"OCC STEP writer failed (status={status}) for {filepath}"
-            )
-        if os.environ.get("RCADPY_VERBOSE", False):
-            logger.info(f"Exported design domain to {filepath} via OCC")
-        return filepath
-
     def export_step(self, filepath: str) -> str:
-        """Export the design domain to a STEP file.
-
-        Tries cadquery first; falls back to pythonOCC for primitive shapes when
-        cadquery is not installed.
-        """
-        try:
-            import cadquery as cq
-
-            geometry = self.build_geometry()
-            cq.exporters.export(geometry, filepath)
-            if os.environ.get("RCADPY_VERBOSE", False):
-                logger.info(f"Exported design domain to {filepath}")
-            return filepath
-        except ImportError:
-            logger.debug("cadquery unavailable, falling back to OCC STEP export")
-            return self._export_step_occ(filepath)
+        """Export the design domain to a STEP file."""
+        geometry = self.build_geometry()
+        geometry.to_step(filepath)
+        logger.info(f"Exported design domain to {filepath}")
+        return filepath
 
     def get_bounding_box(self) -> Dict[str, float]:
         """
@@ -523,13 +334,17 @@ class DesignDomain:
 
         # For CSG and unknown shapes fall back to building the geometry
         geometry = self.build_geometry()
-        bb = geometry.val().BoundingBox()
-
-        return {
-            "x_min": bb.xmin,
-            "x_max": bb.xmax,
-            "y_min": bb.ymin,
-            "y_max": bb.ymax,
-            "z_min": bb.zmin,
-            "z_max": bb.zmax,
-        }
+        
+        try:
+            from OCP.Bnd import Bnd_Box
+            from OCP.BRepBndLib import BRepBndLib
+            bnd_box = Bnd_Box()
+            BRepBndLib.Add_s(geometry.obj, bnd_box)
+            xmin, ymin, zmin, xmax, ymax, zmax = bnd_box.Get()
+            return {
+                "x_min": xmin, "x_max": xmax,
+                "y_min": ymin, "y_max": ymax,
+                "z_min": zmin, "z_max": zmax
+            }
+        except Exception:
+            return {"x_min": 0, "x_max": 0, "y_min": 0, "y_max": 0, "z_min": 0, "z_max": 0}

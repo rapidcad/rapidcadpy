@@ -21,6 +21,7 @@ from ..boundary_conditions import (
 )
 from ..materials import Material, MaterialProperties
 from .freecad_inp_load_case import LoadCaseFromFreeCadInp
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -224,7 +225,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
                     )
 
             except Exception as e:
-                logger.warning(f"Failed to generate design domain: {e}")
+                logger.warning(f"Failed to generate design domain: {e} /n {traceback.format_exc()}")
                 shape_path = None
 
         elif self.bounds:
@@ -266,7 +267,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
                     logger.info(f"Exported design domain to {shape_path}")
 
             except Exception as e:
-                logger.warning(f"Failed to generate design domain box: {e}")
+                logger.warning(f"Failed to generate design domain box: {e} /n {traceback.format_exc()}")
                 shape_path = None
 
         # Last resort: if no STEP geometry is available but the LoadCase
