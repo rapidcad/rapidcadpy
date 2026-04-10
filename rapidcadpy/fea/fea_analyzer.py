@@ -1,11 +1,3 @@
-"""
-FEA base classes with dependency injection architecture.
-
-This module provides:
-- FEAKernel: Abstract base class for FEA solver backends
-- FEAAnalyzer: Non-abstract analyzer that uses a FEAKernel via dependency injection
-"""
-
 from abc import ABC, abstractmethod
 import os
 import sys
@@ -15,8 +7,9 @@ from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING, Union
 import numpy as np
 import pyvista as pv
 
-from ..boundary_conditions import FixedConstraint, PointLoad  #
+from .boundary_conditions import FixedConstraint, PointLoad
 import logging
+from .kernels.empty_kernel import EmptyKernel
 
 logger = logging.getLogger(__name__)
 
@@ -27,315 +20,6 @@ if TYPE_CHECKING:
     from ..materials import MaterialProperties
     from ..boundary_conditions import Load, BoundaryCondition
     from ..results import FEAResults, OptimizationResult
-
-
-def _vtk_can_render_offscreen() -> bool:
-    """Return True when VTK has a working offscreen rendering backend.
-
-    On Windows, headless rendering requires ``osmesa.dll`` (Mesa OpenGL software
-    implementation).  Without it VTK's ``Render()`` raises a Windows SEH
-    access-violation that cannot be caught from Python.  In that case callers
-    should use an alternative renderer (e.g. matplotlib).
-
-    On Linux / macOS this returns True unconditionally — xvfb or a real display
-    is assumed to be present (the caller has already tried ``pv.start_xvfb()``).
-    """
-    if sys.platform != "win32":
-        return True
-    # Windows: osmesa.dll is the only reliable headless path.
-    import ctypes
-    try:
-        ctypes.CDLL("osmesa")
-        return True
-    except OSError:
-        pass
-    # Physical (non-RDP) desktop sessions may have hardware OpenGL.
-    session = os.environ.get("SESSIONNAME", "")
-    return bool(session) and "rdp" not in session.lower()
-
-
-def _render_conditions_matplotlib(
-    filename: str,
-    nodes_np: np.ndarray,
-    constraint_mask: np.ndarray,
-    force_mask: np.ndarray,
-    force_vectors: np.ndarray,
-    pv_mesh=None,
-) -> None:
-    """Render FEA boundary conditions to a PNG using matplotlib (VTK-free fallback).
-
-    Coordinates are normalised to [0, 1] on each axis so the geometry always
-    fills the plot, with real units shown in the axis labels.  Equal spatial
-    scale is preserved: set_box_aspect is set to the actual data spans so that
-    1 mm in X occupies the same number of pixels as 1 mm in Y or Z.
-
-    Uses Figure/FigureCanvasAgg directly (bypasses pyplot state) so that
-    PyVista's prior Plotter creation cannot corrupt the saved output.
-
-    When pv_mesh is supplied, pv_mesh.extract_surface() is called so that only
-    the outer skin nodes are scattered (typically 1-5 % of a volumetric mesh),
-    which is both faster and geometrically more meaningful than a random sample
-    of interior nodes.
-    """
-    import matplotlib.pyplot as plt
-    plt.switch_backend("agg")  # force Agg even if PyVista changed the backend
-    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 – registers '3d' projection
-    from matplotlib.figure import Figure
-    from matplotlib.backends.backend_agg import FigureCanvasAgg
-
-    # ── figure: bypass pyplot state entirely to avoid PyVista side-effects ──
-    fig = Figure(figsize=(10, 8))
-    FigureCanvasAgg(fig)
-    ax = fig.add_subplot(111, projection="3d")
-
-    # Background mesh — prefer surface nodes from PyVista; fall back to random sample
-    if pv_mesh is not None:
-        try:
-            surface_pts = pv_mesh.extract_surface().points
-            n_surf = len(surface_pts)
-            # sub-sample the surface if it's very large (>20 k points)
-            if n_surf > 20_000:
-                rng = np.random.default_rng(42)
-                surface_pts = surface_pts[rng.choice(n_surf, 20_000, replace=False)]
-            bg_pts = surface_pts
-        except Exception:
-            pv_mesh = None  # fall through to random sample
-    if pv_mesh is None:
-        n = len(nodes_np)
-        rng = np.random.default_rng(42)
-        idx = rng.choice(n, min(n, 8_000), replace=False) if n > 8_000 else np.arange(n)
-        bg_pts = nodes_np[idx]
-        
-    # Calculate geometric bounding box (ignoring stray reference nodes)
-    mn = bg_pts.min(axis=0)
-    mx = bg_pts.max(axis=0)
-    
-    # Optionally expand bounds to include loaded/fixed nodes if they aren't crazily far
-    # We allow the bounding box to expand by at most 50% to include BC nodes
-    core_spans = np.where((mx - mn) < 1e-9, 1.0, mx - mn)
-    
-    def _include_pts(pts):
-        nonlocal mn, mx
-        if not len(pts): return
-        pts_mn = pts.min(axis=0)
-        pts_mx = pts.max(axis=0)
-        # Only expand if it doesn't blow up the box size (e.g. > +50% in any direction)
-        if np.all((mn - pts_mn) < core_spans * 0.5): mn = np.minimum(mn, pts_mn)
-        if np.all((pts_mx - mx) < core_spans * 0.5): mx = np.maximum(mx, pts_mx)
-
-    # Fixed nodes
-    n_fixed = int(constraint_mask.sum())
-    fixed_pts = nodes_np[constraint_mask] if n_fixed else np.zeros((0, 3))
-    _include_pts(fixed_pts)
-
-    # Loaded nodes
-    n_loaded = int(force_mask.sum())
-    loaded_pts = nodes_np[force_mask] if n_loaded else np.zeros((0, 3))
-    _include_pts(loaded_pts)
-
-    # Final spans
-    spans = np.where((mx - mn) < 1e-9, 1.0, mx - mn)
-    max_span = spans.max()
-
-    # Render background
-    ax.scatter(*bg_pts.T, c="steelblue", s=1, alpha=0.2)
-
-    # Render Fixed nodes
-    if n_fixed:
-        ax.scatter(*fixed_pts.T, c="red", s=25, marker="D",
-                   label=f"Fixed nodes ({n_fixed})")
-
-    # Render Loaded nodes + force arrows
-    if n_loaded:
-        ax.scatter(*loaded_pts.T, c="limegreen", s=25, marker="^",
-                   label=f"Loaded nodes ({n_loaded})")
-        if force_vectors is not None and len(force_vectors):
-            norms = np.linalg.norm(force_vectors, axis=1, keepdims=True)
-            dirs = force_vectors / np.where(norms < 1e-12, 1.0, norms)
-            # Arrow length = 10% of the max span
-            dirs_scaled = dirs * (max_span * 0.1)
-            ax.quiver(*loaded_pts.T, *dirs_scaled.T, color="darkgreen",
-                      arrow_length_ratio=0.3, linewidth=1.5)
-
-    # ── axes: tightly fit the geometry with equal spatial scale ──────────────
-    # Expand slightly (5%) so points don't clip at edges
-    pad = spans * 0.05
-    ax.set_xlim(mn[0] - pad[0], mx[0] + pad[0])
-    ax.set_ylim(mn[1] - pad[1], mx[1] + pad[1])
-    ax.set_zlim(mn[2] - pad[2], mx[2] + pad[2])
-
-    ax.set_xlabel(f"X (span {spans[0]:.4g})", labelpad=10)
-    ax.set_ylabel(f"Y (span {spans[1]:.4g})", labelpad=10)
-    ax.set_zlabel(f"Z (span {spans[2]:.4g})", labelpad=10)
-
-    # Equal mm/pixel: box aspect proportional to real-world spans
-    ax.set_box_aspect(spans / spans.max())
-
-    ax.set_title("FEA Boundary Conditions")
-    if n_fixed or n_loaded:
-        ax.legend(loc="upper left", fontsize=8)
-
-    fig.savefig(filename, dpi=120, bbox_inches="tight")
-    logger.info("Saved matplotlib BC visualization to: %s", filename)
-    print(f"[OK] Saved boundary condition visualization (matplotlib) to: {filename}")
-
-
-
-class FEAKernel(ABC):
-    """
-    Abstract base class for FEA solver backends.
-
-    Concrete implementations (e.g., TorchFEMKernel) provide specific
-    FEA solver backends. The kernel handles meshing, solving, and
-    result extraction for a specific solver.
-    """
-
-    def __str__(self) -> str:
-        """String representation of the FEA kernel."""
-        solver_name = self.get_solver_name()
-        available = "✓ available" if self.is_available() else "✗ not available"
-        return f"FEAKernel({solver_name}, {available})"
-
-    @classmethod
-    @abstractmethod
-    def is_available(cls) -> bool:
-        """
-        Check if this kernel's dependencies are available.
-
-        Returns:
-            True if the kernel can be used, False otherwise
-        """
-        pass
-
-    @classmethod
-    @abstractmethod
-    def get_solver_name(cls) -> str:
-        """
-        Get the name of the FEA solver backend.
-
-        Returns:
-            Name of the solver (e.g., "torch-fem", "CalculiX")
-        """
-        pass
-
-    @abstractmethod
-    def solve(
-        self,
-        shape: "Shape",
-        material: "MaterialProperties",
-        loads: List["Load"],
-        constraints: List["BoundaryCondition"],
-        mesh_size: float,
-        element_type: str,
-        verbose: bool = False,
-    ) -> "FEAResults":
-        """
-        Run FEA analysis and return results.
-
-        Args:
-            shape: Shape to analyze
-            material: Material properties
-            loads: List of loads to apply
-            constraints: List of boundary conditions to apply
-            mesh_size: Target mesh element size (mm)
-            element_type: Element type (solver-dependent)
-            verbose: Print detailed progress information
-
-        Returns:
-            FEAResults object containing analysis results
-        """
-        pass
-
-    def optimize(
-        self,
-        shape: "Shape",
-        material: "MaterialProperties",
-        loads: List["Load"],
-        constraints: List["BoundaryCondition"],
-        mesh_size: float,
-        element_type: str,
-        volume_fraction: float = 0.5,
-        num_iterations: int = 100,
-        penalization: float = 3.0,
-        filter_radius: float = 0.0,
-        move_limit: float = 0.2,
-        rho_min: float = 1e-3,
-        use_autograd: bool = False,
-        verbose: bool = False,
-    ) -> "OptimizationResult":
-        """
-        Run topology optimization using SIMP method.
-
-        This is an optional method that kernels can implement for topology optimization.
-        Not all kernels support optimization.
-
-        Args:
-            shape: Shape to optimize
-            material: Material properties
-            loads: List of loads to apply
-            constraints: List of boundary conditions to apply
-            mesh_size: Target mesh element size (mm)
-            element_type: Element type (solver-dependent)
-            volume_fraction: Target volume fraction (0 < v < 1)
-            num_iterations: Number of optimization iterations
-            penalization: SIMP penalization factor (p)
-            filter_radius: Sensitivity filter radius (0 = no filtering)
-            move_limit: Maximum change in density per iteration
-            rho_min: Minimum density to avoid singularity
-            use_autograd: Use automatic differentiation for sensitivities
-            verbose: Print detailed progress information
-
-        Returns:
-            OptimizationResult object containing optimization results
-
-        Raises:
-            NotImplementedError: If the kernel does not support optimization
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support topology optimization"
-        )
-        pass
-
-    def get_visualization_data(
-        self,
-        shape: Union["Shape", str],
-        material: "MaterialProperties",
-        loads: List["Load"],
-        constraints: List["BoundaryCondition"],
-        mesh_size: float,
-        element_type: str,
-        **kwargs,
-    ) -> Tuple[pv.UnstructuredGrid, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Get mesh and boundary condition data for visualization.
-
-        This method prepares the mesh and applies boundary conditions without solving,
-        returning data needed for visualization of constraints and loads.
-
-        Args:
-            shape: Shape to visualize or path to STEP file
-            material: Material properties
-            loads: List of loads to apply
-            constraints: List of boundary conditions to apply
-            mesh_size: Target mesh element size (mm)
-            element_type: Element type (solver-dependent)
-            **kwargs: Additional keyword arguments for kernel-specific options
-
-        Returns:
-            Tuple containing:
-            - pv_mesh: PyVista mesh for visualization
-            - nodes: Node coordinates as numpy array (N, 3)
-            - constraint_mask: Boolean mask for constrained nodes (N,)
-            - force_mask: Boolean mask for loaded nodes (N,)
-            - force_vectors: Force vectors for loaded nodes (M, 3) where M is number of loaded nodes
-
-        Raises:
-            NotImplementedError: If the kernel does not support visualization
-        """
-        raise NotImplementedError(
-            f"{self.__class__.__name__} does not support visualization. "
-            "Consider using solve() followed by results.show() instead."
-        )
 
 
 class FEAAnalyzer:
@@ -372,8 +56,8 @@ class FEAAnalyzer:
         """
         self.shape = shape
         if load_case is None:
-            from ..load_case.load_case import LoadCase
-            from ..materials import Material
+            from .load_case.load_case import LoadCase
+            from .materials import Material
 
             self.load_case = LoadCase(
                 material=material if material is not None else Material.STEEL,
@@ -382,10 +66,16 @@ class FEAAnalyzer:
             )
         else:
             self.load_case = load_case
+        self.device = device
+        self.mesher = mesher
         if kernel == "torch-fem":
-            from .torch_fem_kernel import TorchFEMKernel
+            from .kernels.torch_fem_kernel import TorchFEMKernel
 
             self.kernel = TorchFEMKernel(device=device, mesher=mesher)
+        else:
+            from .kernels.empty_kernel import EmptyKernel
+
+            self.kernel = EmptyKernel()
         self.mesh_size = mesh_size
         self.element_type = element_type
 
@@ -418,7 +108,7 @@ class FEAAnalyzer:
 
     def __str__(self) -> str:
         """String representation of the FEA analyzer."""
-        solver = self.kernel.get_solver_name()
+        solver = self.get_solver_name()
         num_loads = len(self.load_case.loads)
         num_constraints = len(self.load_case.constraints)
         return (
@@ -471,6 +161,11 @@ class FEAAnalyzer:
         Returns:
             FEAResults object containing analysis results
         """
+        if self.kernel is None:
+            raise ImportError(
+                "No FEA solver kernel is available. Rendering can work without "
+                "torchfem, but solving requires an installed solver backend."
+            )
         try:
             return self.kernel.solve(
                 shape=self.shape,
@@ -514,6 +209,11 @@ class FEAAnalyzer:
         Returns:
             OptimizationResult object containing optimization results
         """
+        if self.kernel is None:
+            raise ImportError(
+                "No FEA solver kernel is available. Topology optimization requires "
+                "an installed solver backend."
+            )
         try:
             return self.kernel.optimize(
                 shape=self.shape,
@@ -543,7 +243,315 @@ class FEAAnalyzer:
         Returns:
             Name of the solver (e.g., "torch-fem", "CalculiX")
         """
-        return self.kernel.get_solver_name()
+        if self.kernel is not None:
+            return self.kernel.get_solver_name()
+        return "visualization-only"
+
+    @staticmethod
+    def _is_meshio_mesh(obj) -> bool:
+        """Duck-type check for meshio.Mesh without a hard import."""
+        return (
+            hasattr(obj, "points")
+            and hasattr(obj, "cells")
+            and hasattr(obj, "point_sets")
+            and not hasattr(obj, "to_step")
+        )
+
+    def _meshio_to_tensors(self, mesh):
+        """Convert a meshio.Mesh to ``(nodes, elements)`` torch tensors."""
+        import torch
+
+        points = np.asarray(mesh.points, dtype=np.float64)
+        if points.ndim == 2 and points.shape[1] == 2:
+            points = np.hstack([points, np.zeros((len(points), 1), dtype=np.float64)])
+
+        dim_rank = {
+            "tetra": 3,
+            "tetra10": 3,
+            "hexahedron": 3,
+            "hexahedron20": 3,
+            "wedge": 3,
+            "pyramid": 3,
+            "quad": 2,
+            "triangle": 2,
+            "quad8": 2,
+            "triangle6": 2,
+            "line": 1,
+            "vertex": 0,
+        }
+        if not mesh.cells:
+            raise ValueError("meshio.Mesh contains no cell blocks")
+
+        best_block = max(
+            mesh.cells, key=lambda cb: (dim_rank.get(cb.type, 1), len(cb.data))
+        )
+        elems = np.asarray(best_block.data, dtype=np.int64)
+        return (
+            torch.tensor(points, dtype=torch.float64),
+            torch.tensor(elems, dtype=torch.int64),
+        )
+
+    def _get_mesher_instance(self):
+        """Resolve the configured mesher without depending on torchfem."""
+        if self.kernel is not None and getattr(self.kernel, "mesher", None) is not None:
+            return self.kernel.mesher
+
+        if hasattr(self, "_visualization_mesher"):
+            return self._visualization_mesher
+
+        from .mesher import (
+            GmshMesher,
+            GmshSubprocessMesher,
+            IsolatedGmshMesher,
+            MesherBase,
+            NetgenMesher,
+            NetgenSubprocessMesher,
+        )
+
+        if isinstance(self.mesher, MesherBase):
+            self._visualization_mesher = self.mesher
+            return self._visualization_mesher
+
+        if self.mesher is None or self.mesher == "netgen":
+            self._visualization_mesher = NetgenMesher()
+        elif self.mesher == "gmsh":
+            self._visualization_mesher = GmshMesher()
+        elif self.mesher == "gmsh-subprocess":
+            self._visualization_mesher = GmshSubprocessMesher()
+        elif self.mesher == "netgen-subprocess":
+            self._visualization_mesher = NetgenSubprocessMesher()
+        elif self.mesher == "gmsh-isolated":
+            self._visualization_mesher = IsolatedGmshMesher()
+        else:
+            raise ValueError(f"Unknown mesher: {self.mesher}")
+
+        return self._visualization_mesher
+
+    def _prepare_visualization_nodes_elements(
+        self,
+        shape: Union["Shape", str, Any],
+        mesh_size: float,
+        element_type: str = "tet4",
+    ):
+        """Resolve a shape into meshed ``(nodes, elements, step_path)`` tensors."""
+        import tempfile
+        import torch
+
+        if self._is_meshio_mesh(shape):
+            nodes, elements = self._meshio_to_tensors(shape)
+            return nodes.to(torch.float64), elements, None
+
+        if isinstance(shape, str):
+            step_path = shape
+        elif hasattr(shape, "to_step"):
+            with tempfile.NamedTemporaryFile(suffix=".step", delete=False) as tmp:
+                step_path = tmp.name
+            shape.to_step(step_path)
+        else:
+            raise TypeError(
+                f"Unsupported shape type {type(shape).__name__!r}. "
+                "Expected a STEP path (str), meshio.Mesh, or a Shape with to_step()."
+            )
+
+        mesher = self._get_mesher_instance()
+        nodes, elements = mesher.generate_mesh(
+            step_path,
+            mesh_size=mesh_size,
+            element_type="tet4",
+            dim=3,
+        )
+        return nodes.to(torch.float64), elements, step_path
+
+    def _apply_visualization_boundary_conditions(
+        self,
+        nodes,
+        elements,
+        loads: List["Load"],
+        constraints: List["BoundaryCondition"],
+        mesh_size: float,
+    ) -> EmptyKernel:
+        """Apply BCs/loads to a lightweight model without invoking torchfem."""
+        import warnings
+
+        from .utils import get_geometry_info
+
+        model = self.kernel
+        geometry_info = get_geometry_info(nodes)
+
+        selected_loaded = 0
+        for constraint in constraints:
+            constraint.apply(
+                model, nodes, elements, geometry_info=geometry_info, mesh_size=mesh_size
+            )
+
+        for load in loads:
+            num_nodes = load.apply(
+                model, nodes, elements, geometry_info, mesh_size=mesh_size
+            )
+            if num_nodes is not None:
+                selected_loaded += int(num_nodes)
+
+        constraint_mask = model.constraints.any(dim=1).cpu().numpy()
+        force_mask = (model.forces.abs() > 1e-10).any(dim=1).cpu().numpy()
+
+        total_constrained = int(np.sum(constraint_mask))
+        total_loaded = int(np.sum(force_mask))
+        overlapping_nodes = int(np.sum(constraint_mask & force_mask))
+
+        if total_constrained == 0:
+            raise ValueError(
+                "No constrained nodes found — boundary conditions do not intersect the meshed geometry."
+            )
+        if total_loaded == 0:
+            if selected_loaded > 0:
+                raise ValueError(
+                    "No non-zero load nodes found — selected load region exists but the applied load magnitude is zero or numerically negligible."
+                )
+            raise ValueError(
+                "No non-zero load nodes found — the applied loads do not intersect the meshed geometry."
+            )
+        if overlapping_nodes == total_loaded:
+            raise ValueError(
+                "All loaded nodes are constrained — load and support regions fully overlap, producing a zero-response solve."
+            )
+        if overlapping_nodes > 0:
+            warnings.warn(
+                f"{overlapping_nodes} loaded nodes are also constrained; the solve may under-respond or produce near-zero stresses.",
+                UserWarning,
+                stacklevel=2,
+            )
+
+        return model
+
+    def _build_pyvista_unstructured_grid(self, nodes, elements) -> pv.UnstructuredGrid:
+        """Convert node/element tensors to a PyVista unstructured grid."""
+        nodes_np = nodes.cpu().numpy()
+        elements_np = elements.cpu().numpy()
+        if elements_np.ndim != 2:
+            raise ValueError("Expected elements to be a 2D array")
+
+        n_cells = elements_np.shape[0]
+        nodes_per_cell = elements_np.shape[1]
+        vtk_cell_type = {
+            4: 10,  # VTK_TETRA
+            10: 24,  # VTK_QUADRATIC_TETRA
+        }.get(nodes_per_cell)
+        if vtk_cell_type is None:
+            raise ValueError(
+                f"Unsupported visualization element with {nodes_per_cell} nodes"
+            )
+
+        cells = np.hstack(
+            [np.full((n_cells, 1), nodes_per_cell, dtype=np.int64), elements_np]
+        ).ravel()
+        cell_types = np.full(n_cells, vtk_cell_type, dtype=np.uint8)
+        return pv.UnstructuredGrid(cells, cell_types, nodes_np)
+
+    def _get_visualization_data_without_solver(
+        self,
+        shape: Union["Shape", str, Any],
+        material: "MaterialProperties",
+        loads: List["Load"],
+        constraints: List["BoundaryCondition"],
+        mesh_size: float,
+        element_type: str,
+        with_conditions: bool = True,
+    ) -> Tuple[pv.UnstructuredGrid, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Mesh and apply BCs without depending on a solver backend."""
+        nodes, elements, _step_path = self._prepare_visualization_nodes_elements(
+            shape, mesh_size, element_type
+        )
+        pv_mesh = self._build_pyvista_unstructured_grid(nodes, elements)
+        nodes_np = nodes.cpu().numpy()
+
+        if not with_conditions:
+            n_nodes = nodes_np.shape[0]
+            return (
+                pv_mesh,
+                nodes_np,
+                np.zeros(n_nodes, dtype=bool),
+                np.zeros(n_nodes, dtype=bool),
+                np.zeros((0, 3)),
+            )
+
+        model = self._apply_visualization_boundary_conditions(
+            nodes, elements, loads, constraints, mesh_size=mesh_size
+        )
+        constraint_mask = model.constraints.any(dim=1).cpu().numpy()
+        force_mask = (model.forces.abs() > 1e-10).any(dim=1).cpu().numpy()
+        force_vectors = model.forces[force_mask].cpu().numpy()
+
+        return pv_mesh, nodes_np, constraint_mask, force_mask, force_vectors
+
+    def get_visualization_data(
+        self,
+        shape: Union["Shape", str, Any],
+        material: "MaterialProperties",
+        loads: List["Load"],
+        constraints: List["BoundaryCondition"],
+        mesh_size: float,
+        element_type: str,
+        with_conditions: bool = True,
+    ) -> Tuple[pv.UnstructuredGrid, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """Return visualization data using the solver kernel when available."""
+        if self.kernel is not None and hasattr(self.kernel, "get_visualization_data"):
+            try:
+                return self.kernel.get_visualization_data(
+                    shape=shape,
+                    material=material,
+                    loads=loads,
+                    constraints=constraints,
+                    mesh_size=mesh_size,
+                    element_type=element_type,
+                    with_conditions=with_conditions,
+                )
+            except NotImplementedError:
+                pass
+        return self._get_visualization_data_without_solver(
+            shape=shape,
+            material=material,
+            loads=loads,
+            constraints=constraints,
+            mesh_size=mesh_size,
+            element_type=element_type,
+            with_conditions=with_conditions,
+        )
+
+    def get_bc_node_masks(
+        self,
+        shape: Union["Shape", str, Any],
+        material: "MaterialProperties",
+        loads: List["Load"],
+        constraints: List["BoundaryCondition"],
+        mesh_size: float,
+        element_type: str,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Return node coordinates and BC masks without requiring torchfem."""
+        if self.kernel is not None and hasattr(self.kernel, "get_bc_node_masks"):
+            try:
+                return self.kernel.get_bc_node_masks(
+                    shape=shape,
+                    material=material,
+                    loads=loads,
+                    constraints=constraints,
+                    mesh_size=mesh_size,
+                    element_type=element_type,
+                )
+            except NotImplementedError:
+                pass
+
+        _pv_mesh, nodes, constraint_mask, force_mask, _force_vectors = (
+            self._get_visualization_data_without_solver(
+                shape=shape,
+                material=material,
+                loads=loads,
+                constraints=constraints,
+                mesh_size=mesh_size,
+                element_type=element_type,
+                with_conditions=True,
+            )
+        )
+        return nodes, constraint_mask, force_mask
 
     def get_bc_node_coverage(self) -> dict:
         """
@@ -571,27 +579,14 @@ class FEAAnalyzer:
             "n_total_nodes": 0,
         }
         try:
-            if hasattr(self.kernel, "get_bc_node_masks"):
-                nodes, constraint_mask, force_mask = self.kernel.get_bc_node_masks(
-                    shape=self.shape,
-                    material=self.load_case.material,
-                    loads=self.load_case.loads,
-                    constraints=self.load_case.constraints,
-                    mesh_size=self.mesh_size,
-                    element_type=self.element_type,
-                )
-            else:
-                _pv_mesh, nodes, constraint_mask, force_mask, _ = (
-                    self.kernel.get_visualization_data(
-                        shape=self.shape,
-                        material=self.load_case.material,
-                        loads=self.load_case.loads,
-                        constraints=self.load_case.constraints,
-                        mesh_size=self.mesh_size,
-                        element_type=self.element_type,
-                        with_conditions=True,
-                    )
-                )
+            nodes, constraint_mask, force_mask = self.get_bc_node_masks(
+                shape=self.shape,
+                material=self.load_case.material,
+                loads=self.load_case.loads,
+                constraints=self.load_case.constraints,
+                mesh_size=self.mesh_size,
+                element_type=self.element_type,
+            )
             n_total = int(nodes.shape[0])
             if n_total == 0:
                 return {**zero, "error": "Empty mesh"}
@@ -603,6 +598,59 @@ class FEAAnalyzer:
             }
         except Exception as e:
             return {**zero, "error": str(e)}
+
+    def _inspect_bc_node_sets_for_shape(self, shape: Union["Shape", str, Any]) -> dict:
+        """
+        Return exact loaded / constrained node indices and their overlap.
+
+        This is a robust alternative to inferring overlap from solver warnings.
+        It uses the kernel's BC masks directly, so callers can inspect whether
+        load/support regions partially or fully coincide on the meshed geometry.
+        """
+        zero = {
+            "n_loaded_nodes": 0,
+            "n_constraint_nodes": 0,
+            "n_overlap_nodes": 0,
+            "n_total_nodes": 0,
+            "loaded_node_indices": [],
+            "constraint_node_indices": [],
+            "overlap_node_indices": [],
+        }
+        try:
+            nodes, constraint_mask, force_mask = self.get_bc_node_masks(
+                shape=shape,
+                material=self.load_case.material,
+                loads=self.load_case.loads,
+                constraints=self.load_case.constraints,
+                mesh_size=self.mesh_size,
+                element_type=self.element_type,
+            )
+
+            n_total = int(nodes.shape[0])
+            if n_total == 0:
+                return {**zero, "error": "Empty mesh"}
+
+            loaded_node_indices = np.flatnonzero(force_mask).astype(int)
+            constraint_node_indices = np.flatnonzero(constraint_mask).astype(int)
+            overlap_node_indices = np.flatnonzero(force_mask & constraint_mask).astype(
+                int
+            )
+
+            return {
+                "n_loaded_nodes": int(loaded_node_indices.size),
+                "n_constraint_nodes": int(constraint_node_indices.size),
+                "n_overlap_nodes": int(overlap_node_indices.size),
+                "n_total_nodes": n_total,
+                "loaded_node_indices": loaded_node_indices.tolist(),
+                "constraint_node_indices": constraint_node_indices.tolist(),
+                "overlap_node_indices": overlap_node_indices.tolist(),
+            }
+        except Exception as e:
+            return {**zero, "error": str(e)}
+
+    def inspect_bc_node_sets(self) -> dict:
+        """Return exact loaded / constrained node indices for ``self.shape``."""
+        return self._inspect_bc_node_sets_for_shape(self.shape)
 
     def compute_max_bc_node_counts(self) -> dict:
         """
@@ -668,20 +716,20 @@ class FEAAnalyzer:
             try:
                 cq.exporters.export(box_shape, tmp_path)
 
-                _, nodes, constraint_mask, force_mask, _ = (
-                    self.kernel.get_visualization_data(
-                        shape=tmp_path,
-                        material=self.load_case.material,
-                        loads=self.load_case.loads,
-                        constraints=self.load_case.constraints,
-                        mesh_size=self.mesh_size,
-                        element_type=self.element_type,
-                        with_conditions=True,
-                    )
-                )
+                node_stats = self._inspect_bc_node_sets_for_shape(tmp_path)
+                if "error" in node_stats:
+                    return {
+                        "max_n_loaded_nodes": 0,
+                        "max_n_constraint_nodes": 0,
+                        "n_overlap_nodes": 0,
+                        "overlap_node_indices": [],
+                        "error": node_stats["error"],
+                    }
                 return {
-                    "max_n_loaded_nodes": int(np.sum(force_mask)),
-                    "max_n_constraint_nodes": int(np.sum(constraint_mask)),
+                    "max_n_loaded_nodes": int(node_stats["n_loaded_nodes"]),
+                    "max_n_constraint_nodes": int(node_stats["n_constraint_nodes"]),
+                    "n_overlap_nodes": int(node_stats["n_overlap_nodes"]),
+                    "overlap_node_indices": node_stats["overlap_node_indices"],
                 }
             finally:
                 try:
@@ -722,7 +770,7 @@ class FEAAnalyzer:
         try:
             # Get mesh and boundary condition data
             pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
-                self.kernel.get_visualization_data(
+                self.get_visualization_data(
                     shape=self.shape,
                     material=self.load_case.material,
                     loads=self.load_case.loads,
@@ -780,7 +828,6 @@ class FEAAnalyzer:
 
         except Exception as e:
             # If we can't check connectivity, assume it's invalid
-            print(f"⚠ Warning: Could not validate connectivity: {e}")
             return False
 
     def show(
@@ -890,12 +937,12 @@ class FEAAnalyzer:
 
             import matplotlib.pyplot as plt
             from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
-            from ..boundary_conditions import (
+            from .boundary_conditions import (
                 FixedConstraint,
                 PointLoad,
                 DistributedLoad,
             )
-            from ..boundary_conditions import (
+            from .boundary_conditions import (
                 FixedConstraint,
                 PointLoad,
                 DistributedLoad,
@@ -1080,12 +1127,6 @@ class FEAAnalyzer:
 
             if filename:
                 fig.savefig(filename, dpi=150)
-                print(f"✓ Saved debug visualization to: {filename}")
-            elif use_non_gui_backend:
-                print(
-                    "⚠ Debug visualization running in non-GUI mode "
-                    "(headless/non-main thread); skipping plt.show()."
-                )
             else:
                 plt.show()
             plt.close(fig)
@@ -1102,19 +1143,12 @@ class FEAAnalyzer:
         # framebuffer-only code path (set before Plotter construction).
         os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
 
-        # On headless Linux servers (no X display), start a virtual framebuffer
-        # so VTK can initialise its renderer without a real display.
-        # pv.start_xvfb() is a no-op if a display is already available.
-        if not interactive:
-            try:
-                pv.start_xvfb()
-            except Exception:
-                pass  # xvfb not installed or already running — carry on
+        # Older PyVista versions recommended pv.start_xvfb() here for
+        # headless Linux rendering, but that helper is deprecated. Rely on
+        # VTK's off-screen render path instead and let the runtime provide an
+        # appropriate backend (for example OSMesa on headless systems).
 
         plotter = pv.Plotter(window_size=list(window_size), off_screen=True)
-        logger.debug(
-            f"Renderer {plotter.renderer.GetClassName()} initialized for visualization."
-        )
 
         # Add design-space box (wireframe) if bounds are available
         has_design_space = _add_design_space_box(plotter, self.load_case.bounds)
@@ -1128,7 +1162,7 @@ class FEAAnalyzer:
         if display in ["conditions", "mesh", "design space"]:
             try:
                 pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
-                    self.kernel.get_visualization_data(
+                    self.get_visualization_data(
                         shape=self.shape,
                         material=self.load_case.material,
                         loads=self.load_case.loads,
@@ -1201,18 +1235,6 @@ class FEAAnalyzer:
                 )
                 has_legend_entries = True
 
-            # Add legend and labels
-            if show_legend and has_legend_entries:
-                plotter.add_legend()
-                plotter.add_text(
-                    "Boundary Conditions", position="upper_edge", font_size=12
-                )
-                plotter.add_text(
-                    "Red = Fixed (Constraints)\nGreen = Loaded (Forces)",
-                    position="lower_left",
-                    font_size=10,
-                )
-
         plotter.add_axes()
 
         # Set camera position
@@ -1231,47 +1253,12 @@ class FEAAnalyzer:
 
         # Show or save
         if filename:
-            if _vtk_can_render_offscreen():
-                # Normal path: VTK has a working offscreen renderer.
+            if os.environ.get("RAPIDCADPY_DEBUG", False):
                 logger.info(
-                    f"Saving visualization to: {filename} using renderer "
-                    f"{plotter.renderer.GetClassName()}"
+                    f"Saving visualization to: {filename} using renderer {plotter.renderer.GetClassName()}"
                 )
-                plotter.screenshot(filename)
-                print(f"✓ Saved boundary condition visualization to: {filename}")
-                plotter.close()
-            else:
-                # Fallback: VTK cannot render headlessly (Windows without osmesa.dll).
-                # Use a matplotlib 3-D scatter plot that needs no OpenGL / display.
-                try:
-                    plotter.close()
-                except Exception:
-                    pass
-                if nodes is not None:
-                    _render_conditions_matplotlib(
-                        filename=filename,
-                        nodes_np=nodes,
-                        constraint_mask=(
-                            constraint_mask
-                            if constraint_mask is not None
-                            else np.zeros(nodes.shape[0], dtype=bool)
-                        ),
-                        force_mask=(
-                            force_mask
-                            if force_mask is not None
-                            else np.zeros(nodes.shape[0], dtype=bool)
-                        ),
-                        force_vectors=(
-                            force_vectors
-                            if force_vectors is not None
-                            else np.zeros((0, 3))
-                        ),
-                        pv_mesh=pv_mesh,
-                    )
-                else:
-                    logger.warning(
-                        "No mesh data available; cannot produce matplotlib fallback render."
-                    )
+            plotter.screenshot(filename)
+            plotter.close()
         else:
             # Show interactively
             if interactive:
@@ -1302,7 +1289,7 @@ class FEAAnalyzer:
 
         # Get visualization data from kernel
         pv_mesh, nodes, constraint_mask, force_mask, force_vectors = (
-            self.kernel.get_visualization_data(
+            self.get_visualization_data(
                 shape=self.shape,
                 material=self.load_case.material,
                 loads=self.load_case.loads,

@@ -3,7 +3,7 @@ from ast import Load
 from typing import TYPE_CHECKING, List, Optional, Union
 
 from .fea.boundary_conditions import BoundaryCondition
-from .fea.kernels.base import FEAAnalyzer
+from .fea.fea_analyzer import FEAAnalyzer
 from .fea.materials import Material, MaterialProperties
 from .fea.results import FEAResults
 

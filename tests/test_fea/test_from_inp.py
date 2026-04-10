@@ -6,7 +6,11 @@ import numpy as np
 from rapidcadpy.fea.load_case.load_case import LoadCase
 from rapidcadpy.fea.load_case.abaqus_inp_load_case import AbaqusInpLoadCase
 from rapidcadpy.fea.load_case.freecad_inp_load_case import LoadCaseFromFreeCadInp
-from rapidcadpy.fea.boundary_conditions import AccelerationLoad, FixedConstraint, PointLoad
+from rapidcadpy.fea.boundary_conditions import (
+    AccelerationLoad,
+    FixedConstraint,
+    PointLoad,
+)
 
 
 def _has_opengl() -> bool:
@@ -683,7 +687,9 @@ class TestGravityLoadFromInp:
         assert len(load_case.boundary_conditions) > 0
 
     def test_boundary_condition_count(self, load_case):
-        assert len(load_case.boundary_conditions) == self.EXPECTED["n_boundary_conditions"]
+        assert (
+            len(load_case.boundary_conditions) == self.EXPECTED["n_boundary_conditions"]
+        )
 
     def test_all_bcs_are_fixed_constraints(self, load_case):
         for bc in load_case.boundary_conditions:
@@ -738,4 +744,3 @@ class TestGravityLoadFromInp:
 
     def test_gravity_load_name(self, gravity_load):
         assert gravity_load.name == "DLOAD_GRAV_EALL"
-

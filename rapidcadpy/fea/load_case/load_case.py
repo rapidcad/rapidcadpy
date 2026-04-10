@@ -1,8 +1,8 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
-from venv import logger
 
 import numpy as np
 
@@ -22,6 +22,8 @@ from ..boundary_conditions import (
 from ..materials import Material, MaterialProperties
 from .freecad_inp_load_case import LoadCaseFromFreeCadInp
 import traceback
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -199,8 +201,10 @@ class LoadCase(LoadCaseFromFreeCadInp):
         mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
         mesh_size: float = 1,
         device: str = "auto",
+        kernel: str = "torch-fem",
+        log_exports: bool = True,
     ) -> "FEAAnalyzer":
-        from ..kernels.base import FEAAnalyzer
+        from ..fea_analyzer import FEAAnalyzer
 
         # Create design space geometry and export to STEP
         shape_path = None
@@ -215,9 +219,10 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 os.close(fd)
 
                 self.domain.export_step(shape_path)
-                logger.info(
-                    f"Exported design domain ({self.domain.shape_type}) to {shape_path}"
-                )
+                if os.environ.get("RCADPY_VERBOSE", False):
+                    logger.info(
+                        f"Exported design domain ({self.domain.shape_type}) to {shape_path}"
+                    )
 
             except Exception as e:
                 logger.warning(f"Failed to generate design domain: {e} /n {traceback.format_exc()}")
@@ -243,7 +248,8 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 dy = y_max - y_min
                 dz = z_max - z_min
 
-                logger.info(f"Generating design domain box: {dx}x{dy}x{dz}")
+                if os.environ.get("RCADPY_VERBOSE", False):
+                    logger.info(f"Generating design domain box: {dx}x{dy}x{dz}")
 
                 # Create box using CadQuery
                 box = (
@@ -257,7 +263,8 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 os.close(fd)
 
                 cq.exporters.export(box, shape_path)
-                logger.info(f"Exported design domain to {shape_path}")
+                if os.environ.get("RCADPY_VERBOSE", False):
+                    logger.info(f"Exported design domain to {shape_path}")
 
             except Exception as e:
                 logger.warning(f"Failed to generate design domain box: {e} /n {traceback.format_exc()}")
@@ -300,13 +307,29 @@ class LoadCase(LoadCaseFromFreeCadInp):
 
         fea = FEAAnalyzer(
             shape=shape_path,
-            kernel="torch-fem",
+            kernel=kernel,
             mesher=mesher,
             load_case=self,
             mesh_size=mesh_size,
             device=device,
         )
         return fea
+
+    def inspect_boundary_condition_nodes(
+        self,
+        mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
+        mesh_size: float = 1,
+        device: str = "auto",
+        log_exports: bool = False,
+    ) -> Dict[str, Any]:
+        """Return loaded/constrained node sets and their overlap."""
+        fea = self.get_fea_analyzer(
+            mesher=mesher,
+            mesh_size=mesh_size,
+            device=device,
+            log_exports=log_exports,
+        )
+        return fea.inspect_bc_node_sets()
 
     def load_case_to_requirement(self) -> str:
         """
@@ -973,23 +996,31 @@ class LoadCase(LoadCaseFromFreeCadInp):
 
                 if accel_type == AccelerationLoad.GRAVITY:
                     direction = getattr(load, "direction", None) or (0.0, 0.0, -1.0)
-                    dx, dy, dz = float(direction[0]), float(direction[1]), float(direction[2])
+                    dx, dy, dz = (
+                        float(direction[0]),
+                        float(direction[1]),
+                        float(direction[2]),
+                    )
                     dload_blocks.append((elset, "GRAV", magnitude, (dx, dy, dz)))
 
                 elif accel_type == AccelerationLoad.CENTRIFUGAL:
                     axis = getattr(load, "axis", None) or (0.0, 0.0, 1.0)
                     origin = getattr(load, "origin", None) or (0.0, 0.0, 0.0)
-                    dload_blocks.append(
-                        (elset, "CENTRIF", magnitude, (*origin, *axis))
-                    )
+                    dload_blocks.append((elset, "CENTRIF", magnitude, (*origin, *axis)))
 
                 elif accel_type == AccelerationLoad.BODY_FORCE:
                     direction = getattr(load, "direction", None) or (0.0, 0.0, -1.0)
-                    dx, dy, dz = float(direction[0]), float(direction[1]), float(direction[2])
+                    dx, dy, dz = (
+                        float(direction[0]),
+                        float(direction[1]),
+                        float(direction[2]),
+                    )
                     # Map to independent BX / BY / BZ body-load components
                     for kw, component in (("BX", dx), ("BY", dy), ("BZ", dz)):
                         if abs(component) > 1e-12:
-                            dload_blocks.append((elset, kw, magnitude * component, None))
+                            dload_blocks.append(
+                                (elset, kw, magnitude * component, None)
+                            )
 
         mat_name = _sanitize_set_name(
             getattr(self.material, "name", "MATERIAL"), "MATERIAL"
