@@ -2,8 +2,6 @@ import tempfile
 import math
 from typing import TYPE_CHECKING, Optional, List, Union, Tuple, Dict
 
-from trimesh import tol
-
 from ...app import App
 
 if TYPE_CHECKING:
