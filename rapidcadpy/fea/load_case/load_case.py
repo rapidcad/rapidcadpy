@@ -269,6 +269,41 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 logger.warning(f"Failed to generate design domain box: {e}")
                 shape_path = None
 
+        # Last resort: if no STEP geometry is available but the LoadCase
+        # already carries a pre-loaded mesh (e.g. imported from .inp), wrap
+        # it as a meshio.Mesh so that get_visualization_data() can use it
+        # directly without re-meshing.
+        if shape_path is None and self.mesh_nodes is not None and self.mesh_elements is not None:
+            try:
+                import meshio
+
+                _RAPIDCAD_TO_MESHIO: Dict[str, str] = {
+                    "tet4": "tetra",
+                    "tet10": "tetra10",
+                    "hex8": "hexahedron",
+                    "hex20": "hexahedron20",
+                    "wed6": "wedge",
+                    "wed15": "wedge15",
+                    "tri3": "triangle",
+                    "tri6": "triangle6",
+                    "quad4": "quad",
+                    "quad8": "quad8",
+                }
+                cell_type = _RAPIDCAD_TO_MESHIO.get(
+                    self.mesh_element_type or "tet4", "tetra"
+                )
+                shape_path = meshio.Mesh(
+                    points=np.asarray(self.mesh_nodes, dtype=np.float64),
+                    cells=[(cell_type, np.asarray(self.mesh_elements, dtype=np.int64))],
+                )
+                logger.info(
+                    f"Using pre-loaded mesh as shape ({self.mesh_nodes.shape[0]} nodes, "
+                    f"{self.mesh_elements.shape[0]} {cell_type} elements)"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to build meshio.Mesh from LoadCase mesh data: {e}")
+                shape_path = None
+
         fea = FEAAnalyzer(
             shape=shape_path,
             kernel=kernel,

@@ -101,6 +101,26 @@ load_case = LoadCase.from_inp("example.inp")
 analyzer = FEAAnalyzer(shape=beam, kernel="torch-fem", load_case=load_case)
 ```
 
+#### Abaqus `*INCLUDE` files
+
+The native Abaqus parser transparently handles the `*INCLUDE, INPUT=<file>` directive. Included files are resolved **relative to the directory of the file being parsed** and spliced in-place before any keyword is processed, so nested includes and multi-file Abaqus decks work out of the box:
+
+```
+project/
+├── assembly.inp          ← pass this path to from_inp()
+├── Boogie_bracket.inp    ← mesh nodes & elements
+└── loads.inp             ← optional nested include
+```
+
+```python
+# assembly.inp contains:
+#   *INCLUDE, INPUT=Boogie_bracket.inp
+#   *INCLUDE, INPUT=loads.inp
+load_case = LoadCase.from_inp("project/assembly.inp")
+```
+
+If an included file is **not found**, the parser logs a warning and continues — the rest of the file is still parsed so you get whatever inline data is present. Circular includes are detected and broken automatically.
+
 For a deeper dive into programmatically building or importing `LoadCase` objects, see the [Load Case guide](load-case).
 
 ### Define Material Properties

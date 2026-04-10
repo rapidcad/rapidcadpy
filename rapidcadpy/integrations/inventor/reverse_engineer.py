@@ -39,6 +39,17 @@ class InventorReverseEngineer:
         except Exception:
             return str(pt)
 
+    def _get_sketch_key(self, sketch):
+        """Return a stable key for a sketch across COM wrapper instances."""
+        try:
+            name = getattr(sketch, "Name", None)
+            if name:
+                return f"name:{name}"
+        except Exception:
+            pass
+        # Fallback if name is unavailable
+        return f"id:{id(sketch)}"
+
     def analyze_ipt_file(self) -> str:
         """
         Analyze an IPT file and generate Python code to recreate it.
@@ -89,7 +100,7 @@ class InventorReverseEngineer:
             if feature.Type == constants.kExtrudeFeatureObject:
                 feature = win32.CastTo(feature, "ExtrudeFeature")
                 sketch = feature.Profile.Parent
-                sketch_id = id(sketch)
+                sketch_id = self._get_sketch_key(sketch)
 
                 if sketch_id not in processed_sketches:
                     sketch_counter += 1
@@ -104,7 +115,7 @@ class InventorReverseEngineer:
             elif feature.Type == constants.kRevolveFeatureObject:
                 feature = win32.CastTo(feature, "RevolveFeature")
                 sketch = feature.Profile.Parent
-                sketch_id = id(sketch)
+                sketch_id = self._get_sketch_key(sketch)
 
                 if sketch_id not in processed_sketches:
                     sketch_counter += 1
