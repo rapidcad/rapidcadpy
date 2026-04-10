@@ -8,6 +8,7 @@ It requires GMSH to be installed and available in PATH.
 import subprocess
 import tempfile
 import logging
+import time
 from pathlib import Path
 from typing import Literal, Tuple
 import torch
@@ -27,17 +28,32 @@ class GmshSubprocessMesher(MesherBase):
     process rather than using Python bindings.
     """
 
-    def __init__(self, num_threads: int = 0):
+    def __init__(
+        self,
+        num_threads: int = 0,
+        mesh_timeout: float = 120.0,
+        tmp_dir: str | None = None,
+    ):
         """
         Initialize GMSH subprocess mesher.
 
         Args:
             num_threads: Number of threads for parallel meshing (0 = auto-detect)
+            mesh_timeout: Maximum wall-clock seconds allowed for a single GMSH
+                subprocess call.  Defaults to 120 s — well below the typical
+                NCCL watchdog limit (900 s) so a pathological geometry cannot
+                stall distributed training.  Set to 0 to disable the timeout.
+            tmp_dir: Directory for temporary .msh files produced during meshing.
+                Defaults to None, which uses the OS default temp directory
+                (typically /tmp).  Set to the run directory to keep all
+                intermediary files co-located with training artifacts.
 
         The GMSH executable is resolved from the ``GMSH_EXECUTABLE_PATH``
         environment variable, falling back to ``gmsh`` (expected in PATH).
         """
         super().__init__(num_threads)
+        self.mesh_timeout: float | None = float(mesh_timeout) if mesh_timeout else None
+        self.tmp_dir: str | None = tmp_dir
         configured = os.environ.get("GMSH_EXECUTABLE_PATH", "gmsh")
         # If the configured path is an absolute path that does not exist on this
         # machine (e.g. the Docker cadruntime path stored in .env), fall back to
@@ -116,14 +132,27 @@ class GmshSubprocessMesher(MesherBase):
                 "GMSH subprocess mesher currently only supports 3D meshing"
             )
 
-        # Create temporary output file
-        with tempfile.NamedTemporaryFile(suffix=".msh", delete=False) as tmp:
-            msh_path = tmp.name
-            print(f"  Using temporary file for GMSH output: {msh_path}")
-            print(
-                f"  Running GMSH meshing on {filename} with element type {element_type}..."
-            )
+        # Create temporary output file.
+        # Use a PID-based prefix so that DDP workers forked from the same
+        # parent process do not race on the same path: tempfile internally
+        # uses os.urandom(), which may return identical bytes on all ranks
+        # before the OS re-seeds the entropy pool after fork.
+        # When tmp_dir is set (e.g. to the training run directory) all mesh
+        # intermediaries land there instead of /tmp, keeping artifacts
+        # co-located with training outputs and avoiding /tmp exhaustion.
+        if self.tmp_dir:
+            import pathlib
 
+            pathlib.Path(self.tmp_dir).mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            prefix=f"gmsh_pid{os.getpid():05x}_",
+            suffix=".msh",
+            delete=False,
+            dir=self.tmp_dir or None,
+        ) as tmp:
+            msh_path = tmp.name
+        # print(f"  Meshing {filename} with mesh size {mesh_size}...")
+        # print(f"  Temporary mesh file: {msh_path}")
         try:
             # Build GMSH command with robustness options
             cmd = [
@@ -151,9 +180,13 @@ class GmshSubprocessMesher(MesherBase):
                 )  # Optimize high-order meshes
 
             # Run GMSH
+            _timeout = self.mesh_timeout if self.mesh_timeout else None
+            mesh_start = time.perf_counter()
             if verbose and os.getenv("RCADPY_VERBOSE") == "1":
-                print(f"  Running GMSH mesher: {' '.join(cmd)}")
-                result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+                # print(f"  Running GMSH mesher: {' '.join(cmd)}")
+                result = subprocess.run(
+                    cmd, check=True, capture_output=True, text=True, timeout=_timeout
+                )
                 if result.stdout:
                     print(result.stdout)
             else:
@@ -163,7 +196,10 @@ class GmshSubprocessMesher(MesherBase):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                     text=True,
+                    timeout=_timeout,
                 )
+            mesh_elapsed = time.perf_counter() - mesh_start
+            # print(f"  GMSH meshing time: {mesh_elapsed:.3f}s")
 
             # Parse the MSH file using meshio
             # meshio cell type names: "tetra" = tet4, "tetra10" = tet10
@@ -171,6 +207,8 @@ class GmshSubprocessMesher(MesherBase):
             meshio_type = meshio_type_map[element_type]
             mesh = meshio.read(msh_path, file_format="gmsh")
             nodes = torch.tensor(mesh.points, dtype=torch.float32)
+
+            # print(f"  Mesh file read: {nodes.shape[0]} nodes, {len(mesh.cells)} cell blocks")
 
             cells = None
             for cell_block in mesh.cells:
@@ -185,14 +223,14 @@ class GmshSubprocessMesher(MesherBase):
                 )
 
             elements = torch.tensor(cells, dtype=torch.int64)
-
-            if verbose and os.getenv("RCADPY_VERBOSE") == "1":
-                print(
-                    f"  ✓ Mesh generated: {nodes.shape[0]} nodes, {elements.shape[0]} elements"
-                )
-
             return nodes, elements
 
+        except subprocess.TimeoutExpired as e:
+            raise RuntimeError(
+                f"GMSH meshing timed out after {self.mesh_timeout:.0f} s.\n"
+                f"Command: {' '.join(cmd)}\n"
+                "Consider increasing mesh_timeout or using a larger mesh_size."
+            ) from e
         except subprocess.CalledProcessError as e:
             raise RuntimeError(
                 f"GMSH meshing failed with exit code {e.returncode}.\n"

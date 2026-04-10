@@ -28,6 +28,158 @@ if TYPE_CHECKING:
     from ..results import FEAResults, OptimizationResult
 
 
+def _vtk_can_render_offscreen() -> bool:
+    """Return True when VTK has a working offscreen rendering backend.
+
+    On Windows, headless rendering requires ``osmesa.dll`` (Mesa OpenGL software
+    implementation).  Without it VTK's ``Render()`` raises a Windows SEH
+    access-violation that cannot be caught from Python.  In that case callers
+    should use an alternative renderer (e.g. matplotlib).
+
+    On Linux / macOS this returns True unconditionally — xvfb or a real display
+    is assumed to be present (the caller has already tried ``pv.start_xvfb()``).
+    """
+    if sys.platform != "win32":
+        return True
+    # Windows: osmesa.dll is the only reliable headless path.
+    import ctypes
+    try:
+        ctypes.CDLL("osmesa")
+        return True
+    except OSError:
+        pass
+    # Physical (non-RDP) desktop sessions may have hardware OpenGL.
+    session = os.environ.get("SESSIONNAME", "")
+    return bool(session) and "rdp" not in session.lower()
+
+
+def _render_conditions_matplotlib(
+    filename: str,
+    nodes_np: np.ndarray,
+    constraint_mask: np.ndarray,
+    force_mask: np.ndarray,
+    force_vectors: np.ndarray,
+    pv_mesh=None,
+) -> None:
+    """Render FEA boundary conditions to a PNG using matplotlib (VTK-free fallback).
+
+    Coordinates are normalised to [0, 1] on each axis so the geometry always
+    fills the plot, with real units shown in the axis labels.  Equal spatial
+    scale is preserved: set_box_aspect is set to the actual data spans so that
+    1 mm in X occupies the same number of pixels as 1 mm in Y or Z.
+
+    Uses Figure/FigureCanvasAgg directly (bypasses pyplot state) so that
+    PyVista's prior Plotter creation cannot corrupt the saved output.
+
+    When pv_mesh is supplied, pv_mesh.extract_surface() is called so that only
+    the outer skin nodes are scattered (typically 1-5 % of a volumetric mesh),
+    which is both faster and geometrically more meaningful than a random sample
+    of interior nodes.
+    """
+    import matplotlib.pyplot as plt
+    plt.switch_backend("agg")  # force Agg even if PyVista changed the backend
+    from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 – registers '3d' projection
+    from matplotlib.figure import Figure
+    from matplotlib.backends.backend_agg import FigureCanvasAgg
+
+    # ── figure: bypass pyplot state entirely to avoid PyVista side-effects ──
+    fig = Figure(figsize=(10, 8))
+    FigureCanvasAgg(fig)
+    ax = fig.add_subplot(111, projection="3d")
+
+    # Background mesh — prefer surface nodes from PyVista; fall back to random sample
+    if pv_mesh is not None:
+        try:
+            surface_pts = pv_mesh.extract_surface().points
+            n_surf = len(surface_pts)
+            # sub-sample the surface if it's very large (>20 k points)
+            if n_surf > 20_000:
+                rng = np.random.default_rng(42)
+                surface_pts = surface_pts[rng.choice(n_surf, 20_000, replace=False)]
+            bg_pts = surface_pts
+        except Exception:
+            pv_mesh = None  # fall through to random sample
+    if pv_mesh is None:
+        n = len(nodes_np)
+        rng = np.random.default_rng(42)
+        idx = rng.choice(n, min(n, 8_000), replace=False) if n > 8_000 else np.arange(n)
+        bg_pts = nodes_np[idx]
+        
+    # Calculate geometric bounding box (ignoring stray reference nodes)
+    mn = bg_pts.min(axis=0)
+    mx = bg_pts.max(axis=0)
+    
+    # Optionally expand bounds to include loaded/fixed nodes if they aren't crazily far
+    # We allow the bounding box to expand by at most 50% to include BC nodes
+    core_spans = np.where((mx - mn) < 1e-9, 1.0, mx - mn)
+    
+    def _include_pts(pts):
+        nonlocal mn, mx
+        if not len(pts): return
+        pts_mn = pts.min(axis=0)
+        pts_mx = pts.max(axis=0)
+        # Only expand if it doesn't blow up the box size (e.g. > +50% in any direction)
+        if np.all((mn - pts_mn) < core_spans * 0.5): mn = np.minimum(mn, pts_mn)
+        if np.all((pts_mx - mx) < core_spans * 0.5): mx = np.maximum(mx, pts_mx)
+
+    # Fixed nodes
+    n_fixed = int(constraint_mask.sum())
+    fixed_pts = nodes_np[constraint_mask] if n_fixed else np.zeros((0, 3))
+    _include_pts(fixed_pts)
+
+    # Loaded nodes
+    n_loaded = int(force_mask.sum())
+    loaded_pts = nodes_np[force_mask] if n_loaded else np.zeros((0, 3))
+    _include_pts(loaded_pts)
+
+    # Final spans
+    spans = np.where((mx - mn) < 1e-9, 1.0, mx - mn)
+    max_span = spans.max()
+
+    # Render background
+    ax.scatter(*bg_pts.T, c="steelblue", s=1, alpha=0.2)
+
+    # Render Fixed nodes
+    if n_fixed:
+        ax.scatter(*fixed_pts.T, c="red", s=25, marker="D",
+                   label=f"Fixed nodes ({n_fixed})")
+
+    # Render Loaded nodes + force arrows
+    if n_loaded:
+        ax.scatter(*loaded_pts.T, c="limegreen", s=25, marker="^",
+                   label=f"Loaded nodes ({n_loaded})")
+        if force_vectors is not None and len(force_vectors):
+            norms = np.linalg.norm(force_vectors, axis=1, keepdims=True)
+            dirs = force_vectors / np.where(norms < 1e-12, 1.0, norms)
+            # Arrow length = 10% of the max span
+            dirs_scaled = dirs * (max_span * 0.1)
+            ax.quiver(*loaded_pts.T, *dirs_scaled.T, color="darkgreen",
+                      arrow_length_ratio=0.3, linewidth=1.5)
+
+    # ── axes: tightly fit the geometry with equal spatial scale ──────────────
+    # Expand slightly (5%) so points don't clip at edges
+    pad = spans * 0.05
+    ax.set_xlim(mn[0] - pad[0], mx[0] + pad[0])
+    ax.set_ylim(mn[1] - pad[1], mx[1] + pad[1])
+    ax.set_zlim(mn[2] - pad[2], mx[2] + pad[2])
+
+    ax.set_xlabel(f"X (span {spans[0]:.4g})", labelpad=10)
+    ax.set_ylabel(f"Y (span {spans[1]:.4g})", labelpad=10)
+    ax.set_zlabel(f"Z (span {spans[2]:.4g})", labelpad=10)
+
+    # Equal mm/pixel: box aspect proportional to real-world spans
+    ax.set_box_aspect(spans / spans.max())
+
+    ax.set_title("FEA Boundary Conditions")
+    if n_fixed or n_loaded:
+        ax.legend(loc="upper left", fontsize=8)
+
+    fig.savefig(filename, dpi=120, bbox_inches="tight")
+    logger.info("Saved matplotlib BC visualization to: %s", filename)
+    print(f"[OK] Saved boundary condition visualization (matplotlib) to: {filename}")
+
+
+
 class FEAKernel(ABC):
     """
     Abstract base class for FEA solver backends.
@@ -201,7 +353,7 @@ class FEAAnalyzer:
         mesh_size: float = 2.0,
         element_type: str = "tet4",
         device: str = "auto",
-        mesher: str = "netgen",
+        mesher: "Union[MesherBase, str]" = "netgen",
         load_case: Optional["LoadCase"] = None,
     ):
         """
@@ -392,6 +544,157 @@ class FEAAnalyzer:
         """
         return self.kernel.get_solver_name()
 
+    def get_bc_node_coverage(self) -> dict:
+        """
+        Return raw mesh-node counts for loaded and constrained zones.
+
+        These raw counts should be normalised by the maximum possible counts
+        (obtainable via :meth:`compute_max_bc_node_counts`, called once at
+        dataset-creation time and stored in ``load_case.max_n_loaded_nodes`` /
+        ``load_case.max_n_constraint_nodes``).  A ratio of 1.0 means the
+        generated geometry fully covers the intended load / support area.
+
+        Returns:
+            Dict with keys:
+                n_loaded_nodes     (int) – nodes in all load zones combined
+                n_constraint_nodes (int) – nodes in all constraint zones combined
+                n_total_nodes      (int) – total FE mesh nodes (for reference)
+
+        Notes:
+            - Returns all-zero dict with ``error`` key when meshing fails.
+            - Requires the kernel to support ``get_visualization_data()``.
+        """
+        zero = {
+            "n_loaded_nodes": 0,
+            "n_constraint_nodes": 0,
+            "n_total_nodes": 0,
+        }
+        try:
+            if hasattr(self.kernel, "get_bc_node_masks"):
+                nodes, constraint_mask, force_mask = self.kernel.get_bc_node_masks(
+                    shape=self.shape,
+                    material=self.load_case.material,
+                    loads=self.load_case.loads,
+                    constraints=self.load_case.constraints,
+                    mesh_size=self.mesh_size,
+                    element_type=self.element_type,
+                )
+            else:
+                _pv_mesh, nodes, constraint_mask, force_mask, _ = (
+                    self.kernel.get_visualization_data(
+                        shape=self.shape,
+                        material=self.load_case.material,
+                        loads=self.load_case.loads,
+                        constraints=self.load_case.constraints,
+                        mesh_size=self.mesh_size,
+                        element_type=self.element_type,
+                        with_conditions=True,
+                    )
+                )
+            n_total = int(nodes.shape[0])
+            if n_total == 0:
+                return {**zero, "error": "Empty mesh"}
+
+            return {
+                "n_loaded_nodes": int(np.sum(force_mask)),
+                "n_constraint_nodes": int(np.sum(constraint_mask)),
+                "n_total_nodes": n_total,
+            }
+        except Exception as e:
+            return {**zero, "error": str(e)}
+
+    def compute_max_bc_node_counts(self) -> dict:
+        """
+        Compute the theoretical maximum loaded/constrained node counts.
+
+        Meshes a solid box that fills the entire design domain (from
+        ``load_case.bounds``) and counts how many nodes fall in each BC zone.
+        This represents coverage = 1.0 — achievable only when the generated
+        part completely fills every load and constraint region.
+
+        Call this **once per load case at dataset-creation time** and store
+        the results::
+
+            counts = fea.compute_max_bc_node_counts()
+            load_case.max_n_loaded_nodes     = counts["max_n_loaded_nodes"]
+            load_case.max_n_constraint_nodes = counts["max_n_constraint_nodes"]
+
+        Returns:
+            Dict with keys:
+                max_n_loaded_nodes     (int)
+                max_n_constraint_nodes (int)
+            Plus ``error`` key when the computation fails.
+        """
+        import os
+        import tempfile
+
+        try:
+            import cadquery as cq
+        except ImportError:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": "cadquery not available",
+            }
+
+        bounds = self.load_case.bounds
+        if not bounds:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": "No bounds in load_case",
+            }
+
+        try:
+            x_min = bounds.get("x_min", 0.0)
+            x_max = bounds.get("x_max", 100.0)
+            y_min = bounds.get("y_min", 0.0)
+            y_max = bounds.get("y_max", 100.0)
+            z_min = bounds.get("z_min", 0.0)
+            z_max = bounds.get("z_max", 100.0)
+            dx = max(x_max - x_min, 1e-6)
+            dy = max(y_max - y_min, 1e-6)
+            dz = max(z_max - z_min, 1e-6)
+
+            box_shape = (
+                cq.Workplane("XY")
+                .box(dx, dy, dz, centered=False)
+                .translate((x_min, y_min, z_min))
+            )
+
+            tmp_fd, tmp_path = tempfile.mkstemp(suffix=".step")
+            os.close(tmp_fd)
+            try:
+                cq.exporters.export(box_shape, tmp_path)
+
+                _, nodes, constraint_mask, force_mask, _ = (
+                    self.kernel.get_visualization_data(
+                        shape=tmp_path,
+                        material=self.load_case.material,
+                        loads=self.load_case.loads,
+                        constraints=self.load_case.constraints,
+                        mesh_size=self.mesh_size,
+                        element_type=self.element_type,
+                        with_conditions=True,
+                    )
+                )
+                return {
+                    "max_n_loaded_nodes": int(np.sum(force_mask)),
+                    "max_n_constraint_nodes": int(np.sum(constraint_mask)),
+                }
+            finally:
+                try:
+                    os.unlink(tmp_path)
+                except OSError:
+                    pass
+
+        except Exception as e:
+            return {
+                "max_n_loaded_nodes": 0,
+                "max_n_constraint_nodes": 0,
+                "error": str(e),
+            }
+
     def validate_connectivity(self) -> bool:
         """
         Check if loaded and constrained nodes are connected via the mesh.
@@ -485,6 +788,7 @@ class FEAAnalyzer:
         window_size: Tuple[int, int] = (1400, 700),
         filename: Optional[str] = None,
         show_legend: bool = True,
+        show_grid: bool = True,
         display: str = "conditions",
         camera_position: str = "iso",
     ) -> None:
@@ -590,6 +894,11 @@ class FEAAnalyzer:
                 PointLoad,
                 DistributedLoad,
             )
+            from ..boundary_conditions import (
+                FixedConstraint,
+                PointLoad,
+                DistributedLoad,
+            )
 
             load_case = self.load_case
 
@@ -600,6 +909,12 @@ class FEAAnalyzer:
                 geometry_bounds = FEAAnalyzer._get_geometry_bounds(self.shape)
             if not geometry_bounds:
                 geometry_bounds = {
+                    "x_min": 0,
+                    "x_max": 1,
+                    "y_min": 0,
+                    "y_max": 1,
+                    "z_min": 0,
+                    "z_max": 1,
                     "x_min": 0,
                     "x_max": 1,
                     "y_min": 0,
@@ -673,6 +988,14 @@ class FEAAnalyzer:
                         s=100,
                         label=label if i == 0 else None,
                     )
+                    ax.scatter(
+                        cx_b,
+                        cy_b,
+                        cz_b,
+                        color="tab:red",
+                        s=100,
+                        label=label if i == 0 else None,
+                    )
 
             # ── Loads in green + force arrows ─────────────────────────────────
             for i, ld in enumerate(load_case.loads):
@@ -688,6 +1011,14 @@ class FEAAnalyzer:
                     elif isinstance(pt, (tuple, list)) and len(pt) == 3:
                         lx, ly, lz = float(pt[0]), float(pt[1]), float(pt[2])
                     if lx is not None:
+                        ax.scatter(
+                            lx,
+                            ly,
+                            lz,
+                            color="tab:green",
+                            s=100,
+                            label=label if i == 0 else None,
+                        )
                         ax.scatter(
                             lx,
                             ly,
@@ -716,6 +1047,12 @@ class FEAAnalyzer:
                             "-y": (0, -1, 0),
                             "z": (0, 0, 1),
                             "-z": (0, 0, -1),
+                            "x": (1, 0, 0),
+                            "-x": (-1, 0, 0),
+                            "y": (0, 1, 0),
+                            "-y": (0, -1, 0),
+                            "z": (0, 0, 1),
+                            "-z": (0, 0, -1),
                         }
                         vx, vy, vz = _axis_map.get(direction, (0, 0, 1))
                     else:
@@ -725,12 +1062,19 @@ class FEAAnalyzer:
                     ax.quiver(
                         lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen"
                     )
+                    ax.quiver(
+                        lx, ly, lz, vx, vy, vz, length=span * 0.15, color="darkgreen"
+                    )
 
             ax.set_title("FEA Debug: Design domain + BC/Load Regions")
             ax.set_xlabel("X")
             ax.set_ylabel("Y")
             ax.set_zlabel("Z")
-            ax.legend(fontsize=8, loc="upper right")
+            if not show_grid:
+                ax.grid(False)
+                ax.set_axis_off()
+            if show_legend:
+                ax.legend(fontsize=8, loc="upper right")
             plt.tight_layout()
 
             if filename:
@@ -756,6 +1100,15 @@ class FEAAnalyzer:
         # NSWindow even when off_screen=True.  Ensure VTK uses its true
         # framebuffer-only code path (set before Plotter construction).
         os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
+
+        # On headless Linux servers (no X display), start a virtual framebuffer
+        # so VTK can initialise its renderer without a real display.
+        # pv.start_xvfb() is a no-op if a display is already available.
+        if not interactive:
+            try:
+                pv.start_xvfb()
+            except Exception:
+                pass  # xvfb not installed or already running — carry on
 
         plotter = pv.Plotter(window_size=list(window_size), off_screen=True)
         logger.debug(
@@ -858,25 +1211,6 @@ class FEAAnalyzer:
                     position="lower_left",
                     font_size=10,
                 )
-        elif display == "mesh":
-            # Display mode is 'mesh'
-            if has_design_space:
-                plotter.add_text(
-                    "Mesh + Design Space", position="upper_edge", font_size=12
-                )
-            else:
-                plotter.add_text(
-                    "Mesh Visualization", position="upper_edge", font_size=12
-                )
-        elif display == "design space":
-            if pv_mesh is not None:
-                plotter.add_text(
-                    "Design Space + Mesh", position="upper_edge", font_size=12
-                )
-            else:
-                plotter.add_text(
-                    "Design Space (bounds only)", position="upper_edge", font_size=12
-                )
 
         plotter.add_axes()
 
@@ -896,15 +1230,53 @@ class FEAAnalyzer:
 
         # Show or save
         if filename:
-            # Save to file
-            logger.info(
-                f"Saving visualization to: {filename} using renderer {plotter.renderer.GetClassName()}"
-            )
-            plotter.screenshot(filename)
-            print(f"✓ Saved boundary condition visualization to: {filename}")
-            plotter.close()
-        elif interactive:
-            plotter.show()
+            if _vtk_can_render_offscreen():
+                # Normal path: VTK has a working offscreen renderer.
+                logger.info(
+                    f"Saving visualization to: {filename} using renderer "
+                    f"{plotter.renderer.GetClassName()}"
+                )
+                plotter.screenshot(filename)
+                print(f"✓ Saved boundary condition visualization to: {filename}")
+                plotter.close()
+            else:
+                # Fallback: VTK cannot render headlessly (Windows without osmesa.dll).
+                # Use a matplotlib 3-D scatter plot that needs no OpenGL / display.
+                try:
+                    plotter.close()
+                except Exception:
+                    pass
+                if nodes is not None:
+                    _render_conditions_matplotlib(
+                        filename=filename,
+                        nodes_np=nodes,
+                        constraint_mask=(
+                            constraint_mask
+                            if constraint_mask is not None
+                            else np.zeros(nodes.shape[0], dtype=bool)
+                        ),
+                        force_mask=(
+                            force_mask
+                            if force_mask is not None
+                            else np.zeros(nodes.shape[0], dtype=bool)
+                        ),
+                        force_vectors=(
+                            force_vectors
+                            if force_vectors is not None
+                            else np.zeros((0, 3))
+                        ),
+                        pv_mesh=pv_mesh,
+                    )
+                else:
+                    logger.warning(
+                        "No mesh data available; cannot produce matplotlib fallback render."
+                    )
+        else:
+            # Show interactively
+            if interactive:
+                plotter.show()
+            else:
+                plotter.show(jupyter_backend="static")
 
     def export_gltf(
         self,
