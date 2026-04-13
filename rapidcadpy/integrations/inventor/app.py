@@ -361,7 +361,12 @@ class InventorApp(App):
                 "No active document. Call app.new_document() or app.open_document() first."
             )
 
-        units_enum = self._resolve_units_enum(units)
+        # Validate the unit string early (raises ValueError for unknowns).
+        self._resolve_units_enum(units)
+        # AddByExpression expects the UnitsSpecifier as a *string* (e.g. "mm"),
+        # NOT the numeric kUnitsTypeEnum integer.  Passing the integer causes
+        # COM error -2147467259.
+        units_str = units.strip() if units.strip() else "ul"
         user_params = self.comp_def.Parameters.UserParameters
 
         # If a parameter with this name already exists, update it.
@@ -371,15 +376,18 @@ class InventorApp(App):
                 if expression is not None:
                     existing.Expression = expression
                 else:
-                    existing.Expression = f"{value} {units}".strip()
+                    existing.Expression = f"{value} {units_str}".strip()
                 return float(existing.Value)
             except Exception as e:
                 raise RuntimeError(f"Failed to update existing parameter '{name}': {e}")
 
         # Create a new user parameter.
-        expr_str = expression if expression is not None else f"{value} {units}".strip()
+        # NOTE: Do NOT include the unit suffix in the expression string.
+        # AddByExpression takes the expression and the units specifier as separate
+        # arguments; putting both produces a COM error (-2147467259).
+        expr_str = expression if expression is not None else str(value)
         try:
-            param = user_params.AddByExpression(name, expr_str, units_enum)
+            param = user_params.AddByExpression(name, expr_str, units_str)
         except Exception as e:
             raise RuntimeError(
                 f"Failed to create Inventor parameter '{name}' = '{expr_str}': {e}"
