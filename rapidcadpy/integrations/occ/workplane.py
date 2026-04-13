@@ -8,10 +8,10 @@ from OCC.Core.gp import gp_Pnt, gp_Vec
 from OCC.Core.TopoDS import TopoDS_Compound
 
 from .app import App
-from .cad_types import Vector, VectorLike, Vertex
+from ...cad_types import Vector, VectorLike, Vertex
 from .shape import OccShape
-from .primitives import Line
-from .workplane import Workplane
+from ...primitives import Line
+from ...workplane import Workplane
 
 
 class OccWorkplane(Workplane):
@@ -36,8 +36,6 @@ class OccWorkplane(Workplane):
         Returns:
             New OccWorkplane with specified origin and normal
         """
-        from .cad_types import Vector
-
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
         normal_vec = Vector(*normal) if not isinstance(normal, Vector) else normal
