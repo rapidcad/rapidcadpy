@@ -1,5 +1,5 @@
 from math import degrees, pi
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 
 from ...app import App
@@ -176,7 +176,7 @@ class OccWorkplane(Workplane):
 
     def revolve(
         self,
-        angle: float,
+        angle: Union[float, str],
         axis: str = "Z",
         operation: str = "NewBodyFeatureOperation",
     ) -> "OccWorkplane":
@@ -184,13 +184,15 @@ class OccWorkplane(Workplane):
         Revolve the current sketch around a specified axis.
 
         Args:
-            angle: Angle in radians
+            angle: Angle in radians, or a named parameter string resolved via the
+                   app parameter store.
             axis: Axis to revolve around ('X', 'Y', or 'Z')
             operation: Operation type (default 'NewBodyFeatureOperation')
 
         Returns:
             OccShape: The revolved 3D solid
         """
+        angle = self._resolve_distance(angle)
         from OCP.BRepPrimAPI import BRepPrimAPI_MakeRevol
         from OCP.gp import gp_Ax1, gp_Pnt, gp_Dir
         from .sketch2d import OccSketch2D

@@ -2,7 +2,7 @@
 OccSketch2D - OpenCASCADE implementation of Sketch2D.
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from OCC.Core.BRepPrimAPI import BRepPrimAPI_MakePrism
 from OCC.Core.gp import gp_Vec, gp_Pnt, gp_Ax2, gp_Circ, gp_Dir
@@ -185,18 +185,20 @@ class OccSketch2D(Sketch2D):
         return explorer.Current()
 
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation"
+        self, distance: Union[float, str], operation: str = "NewBodyFeatureOperation"
     ) -> OccShape:
         """
         Extrude the sketch face along the workplane's normal direction.
 
         Args:
-            distance: Distance to extrude (can be negative for opposite direction)
+            distance: Distance to extrude (can be negative for opposite direction),
+                      or a named parameter string resolved via the app parameter store.
             operation: Operation type (reserved for future use)
 
         Returns:
             OccShape: The extruded 3D solid
         """
+        distance = self._workplane._resolve_distance(distance)
         # Calculate extrude vector based on workplane normal
         up_dir_vec = self._workplane.normal_vector * distance
 
