@@ -61,9 +61,9 @@ class TestFromInp:
                 "mesh_element_type": "tet4",
             },
             "fea_test_4": {
-                "path": inp_file / "fea_test_4.inp",
-                "problem_id": "FEA_TEST_4",
-                "description_contains": "fea_test_4.inp",
+                "path": inp_file / "fea_test_4_freecad.inp",
+                "problem_id": "FEA_TEST_4_FREECAD",
+                "description_contains": "fea_test_4_freecad.inp",
                 "bounds": {
                     "x_min": -52.477569,
                     "x_max": 47.522431,

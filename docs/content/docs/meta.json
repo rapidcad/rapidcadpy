@@ -5,6 +5,7 @@
     "computer-aided-design",
     "finite-element-analysis",
     "advanced",
-    "mcp-server"
+    "mcp-server",
+    "rest-api"
   ]
 }

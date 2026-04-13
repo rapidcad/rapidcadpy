@@ -1,0 +1,277 @@
+---
+title: Named Parameters
+description: Drive your Inventor models with named, editable parameters — create, read, update and link them to features
+---
+
+# Named Parameters
+
+Named parameters let you give meaningful names to dimensions and values in your Inventor model.
+They appear in Inventor's **Parameters** dialog (`Manage → Parameters`) and drive the model
+parametrically — change one value and every linked feature rebuilds automatically.
+
+## Quick Start
+
+```python
+from rapidcadpy.integrations.inventor import InventorApp
+
+app = InventorApp()
+app.new_document()
+
+# 1. Create named parameters
+width  = app.add_parameter("width",  50)    # 50 mm
+height = app.add_parameter("height", 30)    # 30 mm
+depth  = app.add_parameter("depth",  10)    # 10 mm
+
+# 2. Use them to build the model — feature is parametrically linked
+wp = app.work_plane("XY")
+box = wp.rect(width, height).extrude("depth")
+
+# 3. Update a parameter → rebuild
+app.set_parameter("depth", 20)
+app.inventor_app.ActiveDocument.Update()
+```
+
+> **Tip:** Pass the *string* name `"depth"` to `extrude()` (or `revolve()`) to link the feature
+> to the parameter. Alternatively, pass the *float* return value of `add_parameter()` to use
+> the current value without creating a link.
+
+---
+
+## Creating Parameters
+
+### `add_parameter(name, value, units, expression)`
+
+Creates a new **user parameter** visible in Inventor's Parameters dialog.
+Returns the current numeric value so it can be used directly in Python arithmetic.
+
+```python
+# Basic length parameter (millimetres, the default unit)
+width = app.add_parameter("width", 50)          # → 50.0
+
+# Specify a different unit
+gap = app.add_parameter("gap", 0.5, units="cm") # → 0.5 (cm)
+
+# Driven (expression-based) parameter — value is ignored
+inner = app.add_parameter(
+    "inner_radius",
+    value=0,
+    expression="outer_radius / 2",
+)
+```
+
+If a parameter with the same name already exists, its expression is updated instead of
+creating a duplicate.
+
+#### Supported units
+
+| String | Meaning |
+|--------|---------|
+| `"mm"` | Millimetres *(default)* |
+| `"cm"` | Centimetres |
+| `"m"` | Metres |
+| `"in"` | Inches |
+| `"ft"` | Feet |
+| `"deg"` | Degrees |
+| `"rad"` | Radians |
+| `""` / `"ul"` | Unitless |
+
+---
+
+## Reading Parameters
+
+### `get_parameter(name)`
+
+Returns the current value of any user **or** model parameter (e.g. a sketch dimension
+renamed in Inventor).
+
+```python
+val = app.get_parameter("width")   # → 50.0
+```
+
+Raises `KeyError` if the name is not found.
+
+---
+
+## Updating Parameters
+
+### `set_parameter(name, value, units)`
+
+Changes the value of an existing parameter. If the document is set to auto-rebuild,
+all linked features update immediately; otherwise call `document.Update()` manually.
+
+```python
+app.set_parameter("width", 80)              # change to 80 mm
+app.set_parameter("gap", 1.5, units="cm")   # change unit and value together
+
+# Trigger rebuild if needed
+app.inventor_app.ActiveDocument.Update()
+```
+
+Raises `KeyError` if no parameter with that name exists.
+
+---
+
+## Listing Parameters
+
+### `list_parameters()`
+
+Returns a `{name: value}` dictionary of all user parameters in the current document.
+Useful for debugging or iterating over a parameter set.
+
+```python
+params = app.list_parameters()
+print(params)
+# {'width': 50.0, 'height': 30.0, 'depth': 10.0}
+```
+
+Returns an empty dict `{}` when no document is open.
+
+---
+
+## Linking Features to Parameters
+
+When you pass a **string** name to `extrude()` or `revolve()`, the feature's primary
+extent parameter is linked to the named user parameter. Changing the user parameter
+in Python (or inside Inventor's Parameters dialog) then rebuilds the feature.
+
+```python
+depth  = app.add_parameter("depth", 10)
+radius = app.add_parameter("fillet_r", 2)
+
+# String → linked to Inventor parameter "depth"
+shape = wp.rect(50, 30).extrude("depth")
+
+# Float → uses the value 10.0, no live link created
+shape = wp.rect(50, 30).extrude(depth)
+```
+
+---
+
+## Full Example — Parametric Bracket
+
+```python
+from rapidcadpy.integrations.inventor import InventorApp
+import math
+
+app = InventorApp()
+app.new_document()
+
+# Define the design intent as named parameters
+base_w  = app.add_parameter("base_width",   80)
+base_h  = app.add_parameter("base_height",  60)
+wall_t  = app.add_parameter("wall_thick",    8)
+hole_r  = app.add_parameter("hole_radius",   5)
+# Driven: total depth is twice the wall thickness
+depth   = app.add_parameter("depth", 0, expression="wall_thick * 2")
+
+# Body
+wp = app.work_plane("XY")
+body = wp.rect(base_w, base_h).extrude("depth")
+
+# Mounting hole
+wp2 = app.work_plane("XY")
+hole = wp2.move_to(0, 0).circle(hole_r).extrude("depth")
+body.cut(hole)
+
+body.to_step("bracket.step")
+
+# --- Later: resize by changing a single parameter ---
+app.set_parameter("base_width", 100)
+app.set_parameter("wall_thick", 10)   # depth updates automatically via expression
+app.inventor_app.ActiveDocument.Update()
+```
+
+---
+
+## API Reference
+
+<PythonClass
+  name="InventorApp"
+  description="Autodesk Inventor integration. Manages documents, workplanes, and named parameters."
+  source="https://github.com/rapidcad/rapidcadpy/blob/main/rapidcadpy/integrations/inventor/app.py"
+>
+  <PythonFunction
+    name="add_parameter"
+    signature="add_parameter(name: str, value: float, units: str = 'mm', expression: str | None = None) -> float"
+    description="Create (or update) a named user parameter in the Inventor model. Returns the current numeric value."
+    params={{
+      name: {
+        type: 'str',
+        description: 'Parameter name. Must be a valid Inventor identifier (no spaces).',
+        required: true,
+      },
+      value: {
+        type: 'float',
+        description: 'Numeric value in the given units. Ignored when expression is provided.',
+        required: true,
+      },
+      units: {
+        type: 'str',
+        description: "Unit string: 'mm' (default), 'cm', 'm', 'in', 'ft', 'deg', 'rad', or '' for unitless.",
+        required: false,
+        default: "'mm'",
+      },
+      expression: {
+        type: 'str | None',
+        description: "Optional Inventor expression string (e.g. 'width * 2'). When supplied, value is ignored.",
+        required: false,
+        default: 'None',
+      },
+    }}
+    returns={{
+      type: 'float',
+      description: 'Current numeric value of the parameter as evaluated by Inventor.',
+    }}
+  />
+
+  <PythonFunction
+    name="get_parameter"
+    signature="get_parameter(name: str) -> float"
+    description="Return the current value of a named parameter (user or model parameter)."
+    params={{
+      name: {
+        type: 'str',
+        description: 'Parameter name.',
+        required: true,
+      },
+    }}
+    returns={{
+      type: 'float',
+      description: "Current value in Inventor's internal units.",
+    }}
+  />
+
+  <PythonFunction
+    name="set_parameter"
+    signature="set_parameter(name: str, value: float, units: str = 'mm') -> None"
+    description="Update the value of an existing named parameter. Triggers a model rebuild if auto-rebuild is enabled."
+    params={{
+      name: {
+        type: 'str',
+        description: 'Parameter name. Must already exist; use add_parameter() to create it first.',
+        required: true,
+      },
+      value: {
+        type: 'float',
+        description: 'New numeric value.',
+        required: true,
+      },
+      units: {
+        type: 'str',
+        description: "Unit string (default 'mm').",
+        required: false,
+        default: "'mm'",
+      },
+    }}
+  />
+
+  <PythonFunction
+    name="list_parameters"
+    signature="list_parameters() -> dict[str, float]"
+    description="Return all user parameters as a name → value dictionary."
+    returns={{
+      type: 'dict[str, float]',
+      description: 'Dictionary mapping parameter name to its current float value. Empty dict when no document is open.',
+    }}
+  />
+</PythonClass>

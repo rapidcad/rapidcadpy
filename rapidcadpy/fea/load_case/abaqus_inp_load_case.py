@@ -60,32 +60,32 @@ logger = logging.getLogger(__name__)
 # Abaqus element type → RapidCAD element type string, and nodes per element
 _ELEM_TYPE_MAP: Dict[str, Tuple[str, int]] = {
     # --- 20-node hex ---
-    "C3D20R":  ("hex20", 20),
-    "C3D20":   ("hex20", 20),
-    "C3D20H":  ("hex20", 20),
+    "C3D20R": ("hex20", 20),
+    "C3D20": ("hex20", 20),
+    "C3D20H": ("hex20", 20),
     "C3D20RH": ("hex20", 20),
     # --- 8-node hex ---
-    "C3D8R":   ("hex8",  8),
-    "C3D8":    ("hex8",  8),
-    "C3D8H":   ("hex8",  8),
-    "C3D8I":   ("hex8",  8),
-    "C3D8RH":  ("hex8",  8),
+    "C3D8R": ("hex8", 8),
+    "C3D8": ("hex8", 8),
+    "C3D8H": ("hex8", 8),
+    "C3D8I": ("hex8", 8),
+    "C3D8RH": ("hex8", 8),
     # --- 10-node tet (all hybrid/modified variants) ---
-    "C3D10":   ("tet10", 10),
-    "C3D10H":  ("tet10", 10),
+    "C3D10": ("tet10", 10),
+    "C3D10H": ("tet10", 10),
     "C3D10HS": ("tet10", 10),  # hybrid + enhanced hourglass
-    "C3D10I":  ("tet10", 10),
-    "C3D10M":  ("tet10", 10),
+    "C3D10I": ("tet10", 10),
+    "C3D10M": ("tet10", 10),
     "C3D10MH": ("tet10", 10),
     # --- 4-node tet ---
-    "C3D4":    ("tet4",  4),
-    "C3D4H":   ("tet4",  4),
+    "C3D4": ("tet4", 4),
+    "C3D4H": ("tet4", 4),
     # --- 15-node wedge ---
-    "C3D15":   ("wed15", 15),
-    "C3D15H":  ("wed15", 15),
+    "C3D15": ("wed15", 15),
+    "C3D15H": ("wed15", 15),
     # --- 6-node wedge ---
-    "C3D6":    ("wed6",  6),
-    "C3D6H":   ("wed6",  6),
+    "C3D6": ("wed6", 6),
+    "C3D6H": ("wed6", 6),
 }
 
 # Keywords whose data lines are consumed but whose content is ignored
@@ -216,9 +216,7 @@ def _expand_includes(
         inc_path = inc_path.resolve()
 
         if inc_path in _seen:
-            logger.warning(
-                "Circular *INCLUDE detected for '%s' – skipping.", inc_path
-            )
+            logger.warning("Circular *INCLUDE detected for '%s' – skipping.", inc_path)
             result.append(raw)
             continue
 
@@ -248,16 +246,16 @@ def _expand_includes(
 
 # Meshio element-type name → RapidCAD element-type string
 _MESHIO_TYPE_MAP: Dict[str, Tuple[str, int]] = {
-    "tetra":          ("tet4",  4),
-    "tetra10":        ("tet10", 10),
-    "hexahedron":     ("hex8",  8),
-    "hexahedron20":   ("hex20", 20),
-    "wedge":          ("wed6",  6),
-    "wedge15":        ("wed15", 15),
-    "quad":           ("quad4", 4),
-    "quad8":          ("quad8", 8),
-    "triangle":       ("tri3",  3),
-    "triangle6":      ("tri6",  6),
+    "tetra": ("tet4", 4),
+    "tetra10": ("tet10", 10),
+    "hexahedron": ("hex8", 8),
+    "hexahedron20": ("hex20", 20),
+    "wedge": ("wed6", 6),
+    "wedge15": ("wed15", 15),
+    "quad": ("quad4", 4),
+    "quad8": ("quad8", 8),
+    "triangle": ("tri3", 3),
+    "triangle6": ("tri6", 6),
 }
 
 
@@ -323,9 +321,7 @@ def _load_included_meshes_via_meshio(
             continue
 
         if mesh.points is None or len(mesh.points) == 0:
-            logger.debug(
-                "*INCLUDE mesh fallback: no points in '%s'", inc_path
-            )
+            logger.debug("*INCLUDE mesh fallback: no points in '%s'", inc_path)
             continue
 
         # Convert meshio 0-based points → 1-based node dict
@@ -356,6 +352,7 @@ def _load_included_meshes_via_meshio(
         break  # use first successfully loaded include file
 
     return nodes, elements
+
 
 class AbaqusInpLoadCase:
     """
@@ -404,14 +401,16 @@ class AbaqusInpLoadCase:
         # Single-pass line parser
         # ------------------------------------------------------------------
         # section tracking
-        section: Optional[str] = None   # e.g. "NODE", "ELEMENT", "NSET", …
+        section: Optional[str] = None  # e.g. "NODE", "ELEMENT", "NSET", …
         section_params: Dict[str, str] = {}
 
         # Accumulated data
-        nodes: Dict[int, Tuple[float, float, float]] = {}   # id1-based → (x,y,z)
-        elements: Dict[str, List[Tuple[int, ...]]] = {}     # elem_type → list of connectivity tuples (1-based node IDs)
-        nsets: Dict[str, List[int]] = {}    # name → list of 1-based node IDs
-        elsets: Dict[str, List[int]] = {}   # name → list of 1-based element IDs
+        nodes: Dict[int, Tuple[float, float, float]] = {}  # id1-based → (x,y,z)
+        elements: Dict[str, List[Tuple[int, ...]]] = (
+            {}
+        )  # elem_type → list of connectivity tuples (1-based node IDs)
+        nsets: Dict[str, List[int]] = {}  # name → list of 1-based node IDs
+        elsets: Dict[str, List[int]] = {}  # name → list of 1-based element IDs
 
         raw_bc_lines: List[str] = []
         raw_cload_lines: List[str] = []
@@ -419,7 +418,7 @@ class AbaqusInpLoadCase:
         # For multi-line element connectivity we accumulate partial token lists
         _pending_elem_tokens: List[str] = []
         _current_elem_type: Optional[str] = None
-        _current_elem_nodes_per: int = 0    # expected nodes-per-element
+        _current_elem_nodes_per: int = 0  # expected nodes-per-element
         _skip_current_element_block = False  # True when FILE= substructure
 
         def _flush_pending_elem():
@@ -471,7 +470,9 @@ class AbaqusInpLoadCase:
                         _skip_current_element_block = True
                     else:
                         section = "ELEMENT"
-                        _current_elem_type, _current_elem_nodes_per = _ELEM_TYPE_MAP[raw_etype]
+                        _current_elem_type, _current_elem_nodes_per = _ELEM_TYPE_MAP[
+                            raw_etype
+                        ]
                         _skip_current_element_block = False
                         _pending_elem_tokens.clear()
                     section_params = params
@@ -558,14 +559,24 @@ class AbaqusInpLoadCase:
                     except (ValueError, IndexError):
                         pass
                 else:
-                    # Direct list (may have trailing comma)
+                    # Direct list (may have trailing comma).
+                    # Tokens may be either integer node IDs or the names of
+                    # other NSETs (Abaqus set-of-sets syntax).  NSET names
+                    # that are encountered before their definition will be
+                    # resolved in the post-processing pass below.
                     for tok in stripped.split(","):
                         tok = tok.strip()
                         if tok:
                             try:
                                 nsets[set_name].append(int(tok))
                             except ValueError:
-                                pass
+                                # Treat as a sub-set name reference
+                                if tok in nsets:
+                                    nsets[set_name].extend(nsets[tok])
+                                else:
+                                    # Forward reference: store name as sentinel
+                                    # (resolved in post-processing step below)
+                                    nsets[set_name].append(tok)
 
             elif section == "ELSET":
                 set_name = section_params.get("NAME", "")
@@ -595,8 +606,44 @@ class AbaqusInpLoadCase:
                 raw_cload_lines.append(stripped)
 
         # Flush any remaining pending element
-        if section == "ELEMENT" and not _skip_current_element_block and _pending_elem_tokens:
+        if (
+            section == "ELEMENT"
+            and not _skip_current_element_block
+            and _pending_elem_tokens
+        ):
             _flush_pending_elem()
+
+        # ------------------------------------------------------------------
+        # Resolve NSET-of-NSETs (post-processing pass)
+        #
+        # NSET data lines may reference other NSET names (Abaqus set-of-sets
+        # syntax).  Forward references (sets defined after the referencing set)
+        # were stored as string sentinels; resolve them now iteratively.
+        # ------------------------------------------------------------------
+        _changed = True
+        _max_rounds = 10  # guard against circular references
+        while _changed and _max_rounds > 0:
+            _changed = False
+            _max_rounds -= 1
+            for sname, id_list in nsets.items():
+                new_ids: List[int] = []
+                kept_strings: List[str] = []
+                for entry in id_list:
+                    if isinstance(entry, int):
+                        new_ids.append(entry)
+                    elif isinstance(entry, str):
+                        if entry in nsets:
+                            # Resolve: replace the sentinel with all integer IDs
+                            resolved = [v for v in nsets[entry] if isinstance(v, int)]
+                            new_ids.extend(resolved)
+                            _changed = True
+                        else:
+                            kept_strings.append(entry)
+                nsets[sname] = new_ids + kept_strings  # type: ignore[assignment]
+
+        # Strip any remaining unresolvable string sentinels
+        for sname in list(nsets.keys()):
+            nsets[sname] = [v for v in nsets[sname] if isinstance(v, int)]
 
         # ------------------------------------------------------------------
         # Build numpy arrays
@@ -628,7 +675,10 @@ class AbaqusInpLoadCase:
                 sorted_ids = sorted(nodes.keys())
                 node_id_to_idx = {nid: i for i, nid in enumerate(sorted_ids)}
                 nodes_arr = np.array(
-                    [(nodes[nid][0], nodes[nid][1], nodes[nid][2]) for nid in sorted_ids],
+                    [
+                        (nodes[nid][0], nodes[nid][1], nodes[nid][2])
+                        for nid in sorted_ids
+                    ],
                     dtype=np.float64,
                 )
         else:
@@ -643,11 +693,16 @@ class AbaqusInpLoadCase:
 
         # Choose element block: prefer 3D, then by count
         _dim_rank = {
-            "hex20": 3, "hex8": 3,
-            "tet10": 3, "tet4":  3,
-            "wed6":  3, "wed15": 3,
-            "quad4": 2, "quad8": 2,
-            "tri3":  2, "tri6":  2,
+            "hex20": 3,
+            "hex8": 3,
+            "tet10": 3,
+            "tet4": 3,
+            "wed6": 3,
+            "wed15": 3,
+            "quad4": 2,
+            "quad8": 2,
+            "tri3": 2,
+            "tri6": 2,
         }
         best_etype: Optional[str] = None
         best_rank = -1
@@ -666,10 +721,7 @@ class AbaqusInpLoadCase:
             # Nodes not present in the inline node table are mapped to 0
             # (silently) so the array shape remains consistent.
             elems_arr = np.array(
-                [
-                    [node_id_to_idx.get(nid, 0) for nid in conn]
-                    for conn in raw_conns
-                ],
+                [[node_id_to_idx.get(nid, 0) for nid in conn] for conn in raw_conns],
                 dtype=np.int64,
             )
             resolved_elem_type = best_etype
@@ -692,9 +744,12 @@ class AbaqusInpLoadCase:
             }
         else:
             bounds = {
-                "x_min": 0.0, "x_max": 0.0,
-                "y_min": 0.0, "y_max": 0.0,
-                "z_min": 0.0, "z_max": 0.0,
+                "x_min": 0.0,
+                "x_max": 0.0,
+                "y_min": 0.0,
+                "y_max": 0.0,
+                "z_min": 0.0,
+                "z_max": 0.0,
             }
 
         positive_dims = [
@@ -848,12 +903,17 @@ class AbaqusInpLoadCase:
         for nset_name, locked_dofs in _bc_dofs_by_target.items():
             dof_lock = tuple(i in locked_dofs for i in (1, 2, 3))
             sel_ids = _find_selectors(nset_name)
+            # Retrieve the exact node coordinates for this NSET (if available)
+            _nset_coords: Optional[np.ndarray] = None
+            if nset_name in point_sets and len(point_sets[nset_name]) > 0:
+                _nset_coords = nodes_arr[point_sets[nset_name]].astype(np.float64)
             if sel_ids:
                 for sel_id in sel_ids:
                     bc = FixedConstraint(
                         location=load_case.selectors[sel_id].query,
                         dofs=dof_lock,
                         tolerance=1,
+                        node_coords=_nset_coords,
                     )
                     load_case.boundary_conditions.append(bc)
             elif nset_name.isdigit():
@@ -875,7 +935,10 @@ class AbaqusInpLoadCase:
                     )
                     load_case.boundary_conditions.append(
                         FixedConstraint(
-                            location=(nx, ny, nz), dofs=dof_lock, tolerance=1
+                            location=(nx, ny, nz),
+                            dofs=dof_lock,
+                            tolerance=1,
+                            node_coords=np.array([[nx, ny, nz]], dtype=np.float64),
                         )
                     )
 
@@ -919,12 +982,36 @@ class AbaqusInpLoadCase:
             sel_id = _find_selector(target)
             if sel_id:
                 query = load_case.selectors[sel_id].query
-                cx = query.get("x", (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2)
-                cy = query.get("y", (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2)
-                cz = query.get("z", (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2)
-                rx = query.get("rx", max((query.get("x_max", cx) - query.get("x_min", cx)) / 2, min_radius))
-                ry = query.get("ry", max((query.get("y_max", cy) - query.get("y_min", cy)) / 2, min_radius))
-                rz = query.get("rz", max((query.get("z_max", cz) - query.get("z_min", cz)) / 2, min_radius))
+                cx = query.get(
+                    "x", (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2
+                )
+                cy = query.get(
+                    "y", (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2
+                )
+                cz = query.get(
+                    "z", (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2
+                )
+                rx = query.get(
+                    "rx",
+                    max(
+                        (query.get("x_max", cx) - query.get("x_min", cx)) / 2,
+                        min_radius,
+                    ),
+                )
+                ry = query.get(
+                    "ry",
+                    max(
+                        (query.get("y_max", cy) - query.get("y_min", cy)) / 2,
+                        min_radius,
+                    ),
+                )
+                rz = query.get(
+                    "rz",
+                    max(
+                        (query.get("z_max", cz) - query.get("z_min", cz)) / 2,
+                        min_radius,
+                    ),
+                )
 
                 load = PointLoad(
                     point=(cx, cy, cz),
@@ -979,14 +1066,18 @@ class AbaqusInpLoadCase:
                     id=agg_pt_id,
                     type="box_3d",
                     query={
-                        "x": cx, "y": cy, "z": cz,
+                        "x": cx,
+                        "y": cy,
+                        "z": cz,
                         "x_min": float(coords[:, 0].min()),
                         "x_max": float(coords[:, 0].max()),
                         "y_min": float(coords[:, 1].min()),
                         "y_max": float(coords[:, 1].max()),
                         "z_min": float(coords[:, 2].min()),
                         "z_max": float(coords[:, 2].max()),
-                        "rx": rx, "ry": ry, "rz": rz,
+                        "rx": rx,
+                        "ry": ry,
+                        "rz": rz,
                     },
                 ),
             )

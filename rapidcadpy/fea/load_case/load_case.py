@@ -199,18 +199,69 @@ class LoadCase(LoadCaseFromFreeCadInp):
     def get_fea_analyzer(
         self,
         mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
-        mesh_size: float = 1,
+        mesh_size: Optional[float] = None,
         device: str = "auto",
         kernel: str = "torch-fem",
         log_exports: bool = True,
     ) -> "FEAAnalyzer":
         from ..fea_analyzer import FEAAnalyzer
 
+        # Auto-compute mesh_size from geometry bounds when not supplied.
+        # Target ~3 000 nodes — coarse enough to be fast, fine enough to be
+        # meaningful for both visualisation and lightweight FEA checks.
+        # Falls back to 10.0 if no bounds/domain are available yet.
+        if mesh_size is None:
+            try:
+                mesh_size = self.calc_mesh_size(num_nodes=3000)
+                logger.debug(f"Auto mesh_size={mesh_size:.3f} (target 3000 nodes)")
+            except Exception:
+                mesh_size = 10.0
+                logger.debug("mesh_size defaulted to 10.0 (no bounds available)")
+
         # Create design space geometry and export to STEP
         shape_path = None
 
-        # Prefer new domain object over legacy bounds
-        if self.domain:
+        # First priority: if the LoadCase already carries a pre-loaded mesh
+        # (e.g. imported from .inp / .cdb / .dat), use it directly as a
+        # meshio.Mesh.  This avoids invoking GMSH on a bounding-box STEP that
+        # would produce different node positions from the original mesh,
+        # causing all point-based BC selectors to miss.
+        if self.mesh_nodes is not None and self.mesh_elements is not None:
+            try:
+                import meshio
+
+                _RAPIDCAD_TO_MESHIO: Dict[str, str] = {
+                    "tet4": "tetra",
+                    "tet10": "tetra10",
+                    "hex8": "hexahedron",
+                    "hex20": "hexahedron20",
+                    "wed6": "wedge",
+                    "wed15": "wedge15",
+                    "tri3": "triangle",
+                    "tri6": "triangle6",
+                    "quad4": "quad",
+                    "quad8": "quad8",
+                }
+                cell_type = _RAPIDCAD_TO_MESHIO.get(
+                    self.mesh_element_type or "tet4", "tetra"
+                )
+                shape_path = meshio.Mesh(
+                    points=np.asarray(self.mesh_nodes, dtype=np.float64),
+                    cells=[(cell_type, np.asarray(self.mesh_elements, dtype=np.int64))],
+                )
+                logger.info(
+                    f"Using pre-loaded mesh as shape ({self.mesh_nodes.shape[0]} nodes, "
+                    f"{self.mesh_elements.shape[0]} {cell_type} elements)"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to build meshio.Mesh from LoadCase mesh data: {e}"
+                )
+                shape_path = None
+
+        # Fallback: build STEP geometry from domain or bounds and let GMSH mesh it.
+        # Only reached when no pre-loaded mesh is available.
+        if shape_path is None and self.domain:
             try:
                 import tempfile
                 import os
@@ -225,10 +276,12 @@ class LoadCase(LoadCaseFromFreeCadInp):
                     )
 
             except Exception as e:
-                logger.warning(f"Failed to generate design domain: {e} /n {traceback.format_exc()}")
+                logger.warning(
+                    f"Failed to generate design domain: {e} /n {traceback.format_exc()}"
+                )
                 shape_path = None
 
-        elif self.bounds:
+        if shape_path is None and self.bounds:
             # Legacy: create simple box from bounds
             try:
                 import cadquery as cq
@@ -267,42 +320,9 @@ class LoadCase(LoadCaseFromFreeCadInp):
                     logger.info(f"Exported design domain to {shape_path}")
 
             except Exception as e:
-                logger.warning(f"Failed to generate design domain box: {e} /n {traceback.format_exc()}")
-                shape_path = None
-
-        # Last resort: if no STEP geometry is available but the LoadCase
-        # already carries a pre-loaded mesh (e.g. imported from .inp), wrap
-        # it as a meshio.Mesh so that get_visualization_data() can use it
-        # directly without re-meshing.
-        if shape_path is None and self.mesh_nodes is not None and self.mesh_elements is not None:
-            try:
-                import meshio
-
-                _RAPIDCAD_TO_MESHIO: Dict[str, str] = {
-                    "tet4": "tetra",
-                    "tet10": "tetra10",
-                    "hex8": "hexahedron",
-                    "hex20": "hexahedron20",
-                    "wed6": "wedge",
-                    "wed15": "wedge15",
-                    "tri3": "triangle",
-                    "tri6": "triangle6",
-                    "quad4": "quad",
-                    "quad8": "quad8",
-                }
-                cell_type = _RAPIDCAD_TO_MESHIO.get(
-                    self.mesh_element_type or "tet4", "tetra"
+                logger.warning(
+                    f"Failed to generate design domain box: {e} /n {traceback.format_exc()}"
                 )
-                shape_path = meshio.Mesh(
-                    points=np.asarray(self.mesh_nodes, dtype=np.float64),
-                    cells=[(cell_type, np.asarray(self.mesh_elements, dtype=np.int64))],
-                )
-                logger.info(
-                    f"Using pre-loaded mesh as shape ({self.mesh_nodes.shape[0]} nodes, "
-                    f"{self.mesh_elements.shape[0]} {cell_type} elements)"
-                )
-            except Exception as e:
-                logger.warning(f"Failed to build meshio.Mesh from LoadCase mesh data: {e}")
                 shape_path = None
 
         fea = FEAAnalyzer(
@@ -318,7 +338,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
     def inspect_boundary_condition_nodes(
         self,
         mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
-        mesh_size: float = 1,
+        mesh_size: Optional[float] = None,
         device: str = "auto",
         log_exports: bool = False,
     ) -> Dict[str, Any]:
@@ -376,6 +396,10 @@ class LoadCase(LoadCaseFromFreeCadInp):
             except (TypeError, ValueError):
                 return str(value)
 
+        def _fmt_coord(value) -> str:
+            """Format a coordinate value rounded to 1 decimal place."""
+            return _fmt_num(value, max_decimals=1)
+
         def _format_location(location) -> str:
             if location is None:
                 return "unspecified location"
@@ -388,19 +412,19 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 if any(k in location for k in keys):
                     return (
                         "box "
-                        f"X[{_fmt_num(location.get('x_min', '?'))}, {_fmt_num(location.get('x_max', '?'))}], "
-                        f"Y[{_fmt_num(location.get('y_min', '?'))}, {_fmt_num(location.get('y_max', '?'))}], "
-                        f"Z[{_fmt_num(location.get('z_min', '?'))}, {_fmt_num(location.get('z_max', '?'))}]"
+                        f"X[{_fmt_coord(location.get('x_min', '?'))}, {_fmt_coord(location.get('x_max', '?'))}], "
+                        f"Y[{_fmt_coord(location.get('y_min', '?'))}, {_fmt_coord(location.get('y_max', '?'))}], "
+                        f"Z[{_fmt_coord(location.get('z_min', '?'))}, {_fmt_coord(location.get('z_max', '?'))}]"
                     )
                 if all(k in location for k in ("x", "y", "z")):
                     return (
-                        f"point ({_fmt_num(location['x'])}, "
-                        f"{_fmt_num(location['y'])}, {_fmt_num(location['z'])})"
+                        f"point ({_fmt_coord(location['x'])}, "
+                        f"{_fmt_coord(location['y'])}, {_fmt_coord(location['z'])})"
                     )
                 return str(location)
 
             if isinstance(location, (tuple, list)) and len(location) >= 3:
-                return f"point ({_fmt_num(location[0])}, {_fmt_num(location[1])}, {_fmt_num(location[2])})"
+                return f"point ({_fmt_coord(location[0])}, {_fmt_coord(location[1])}, {_fmt_coord(location[2])})"
 
             return str(location)
 
@@ -645,7 +669,9 @@ class LoadCase(LoadCaseFromFreeCadInp):
         - RIGHT: .translate((x, y, z))
         """
 
-        return requirement
+        import textwrap
+
+        return textwrap.dedent(requirement).strip()
 
     def to_inp(
         self,

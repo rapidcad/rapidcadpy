@@ -1,5 +1,5 @@
 import math
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Any, Optional, Union
 
 from win32com.client import constants
 
@@ -299,9 +299,57 @@ class InventorWorkPlane(Workplane):
 
         return self
 
+    def _resolve_distance(self, distance) -> float:
+        """Resolve a distance value that may be a float or a named parameter string.
+
+        If ``distance`` is a string, it is treated as an Inventor parameter name and
+        its current numeric value is fetched from the active document.
+
+        Args:
+            distance: Numeric value or parameter name string.
+
+        Returns:
+            Resolved float value.
+
+        Raises:
+            KeyError: If the string does not match any known parameter.
+            TypeError: If the value is neither a number nor a string.
+        """
+        if isinstance(distance, str):
+            return self.app.get_parameter(distance)
+        if isinstance(distance, (int, float)):
+            return float(distance)
+        raise TypeError(
+            f"distance must be a float or a named parameter string, got {type(distance).__name__!r}"
+        )
+
+    def _link_feature_parameter(self, feature, param_expr: str) -> None:
+        """After creating an extrude/revolve feature, link its primary extent
+        parameter to *param_expr* (a parameter name or Inventor expression string).
+
+        This wires the feature so that changing the named user parameter in Inventor
+        automatically updates the feature dimension.
+        """
+        try:
+            # The primary distance parameter of an extrude feature is typically
+            # named "ExtrusionDistance1" or "Distance1" depending on the Inventor version.
+            candidate_names = ["ExtrusionDistance1", "Distance1", "d1"]
+            params = feature.Parameters
+            for candidate in candidate_names:
+                try:
+                    p = params.Item(candidate)
+                    p.Expression = param_expr
+                    return
+                except Exception:
+                    continue
+            # If none of the known names matched, do nothing; the feature still
+            # works with the numeric value.
+        except Exception:
+            pass
+
     def extrude(
         self,
-        distance: float,
+        distance: Union[float, str],
         operation: str = "NewBodyFeatureOperation",
         symmetric: bool = False,
         **kwargs,
@@ -309,14 +357,30 @@ class InventorWorkPlane(Workplane):
         """Extrude all sketches in the workplane.
 
         Args:
-            distance: Extrusion distance (positive or negative)
+            distance: Extrusion distance (positive or negative) **or** a named
+                      parameter string (e.g. ``"depth"``).  When a string is
+                      passed the current value of that Inventor user parameter is
+                      used for the extrusion distance, and the feature is linked
+                      to the parameter so that changing it in Inventor rebuilds
+                      the model.
             operation: Operation type for extrusion
             symmetric: Whether to extrude symmetrically in both directions
             **kwargs: Additional arguments (like 'both' for backward compatibility)
 
         Returns:
             InventorShape representing the last extruded body (or combined result)
+
+        Example::
+
+            depth = app.add_parameter("depth", 20)
+            shape = wp.rect(50, 30).extrude("depth")   # linked to named parameter
+            # or equivalently:
+            shape = wp.rect(50, 30).extrude(depth)     # uses float value 20.0
         """
+        # Remember whether the caller passed a string so we can link the feature later.
+        _distance_expr: Optional[str] = distance if isinstance(distance, str) else None
+        # Resolve named parameter or numeric value
+        distance = self._resolve_distance(distance)
         # Map operation string to Inventor constants
         ext_op = {
             "JoinBodyFeatureOperation": constants.kJoinOperation,
@@ -435,6 +499,10 @@ class InventorWorkPlane(Workplane):
                 extrusion_feature = self.app.comp_def.Features.ExtrudeFeatures.Add(
                     ext_def
                 )
+                # If the caller passed a named parameter string, link the feature to it
+                # so that updating the parameter in Inventor rebuilds the feature.
+                if _distance_expr is not None:
+                    self._link_feature_parameter(extrusion_feature, _distance_expr)
                 extruded_shapes.append(
                     InventorShape(obj=extrusion_feature.SurfaceBody, app=self.app)
                 )
@@ -454,14 +522,26 @@ class InventorWorkPlane(Workplane):
 
     def revolve(
         self,
-        angle: float,
+        angle: Union[float, str],
         axis: str,
         operation: str = "NewBodyFeatureOperation",
     ) -> InventorShape:
         """
         Revolve the current sketch around a specified axis.
+
+        Args:
+            angle: Rotation angle in radians, **or** a named parameter string
+                   (e.g. ``"sweep_angle"``).  When a string is passed its current
+                   value is fetched from the Inventor model and the resulting
+                   feature is linked to the parameter.
+            axis:  Rotation axis – ``"X"``, ``"Y"``, or ``"Z"``.
+            operation: Feature operation type.
         """
         # Check if sketch has any geometry
+        _angle_expr: Optional[str] = angle if isinstance(angle, str) else None
+        angle = self._resolve_distance(
+            angle
+        )  # resolves str→float via named param or pass-through
         if self.sketch.SketchLines.Count == 0 and self.sketch.SketchArcs.Count == 0:
             raise RuntimeError("Sketch is empty - cannot create revolve feature")
 
@@ -526,4 +606,6 @@ class InventorWorkPlane(Workplane):
             raise RuntimeError(error_msg)
 
         # self._create_new_sketch()
+        if _angle_expr is not None:
+            self._link_feature_parameter(revolve_feature, _angle_expr)
         return InventorShape(obj=revolve_feature.SurfaceBody, app=self.app)

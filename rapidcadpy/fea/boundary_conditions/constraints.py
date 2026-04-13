@@ -11,7 +11,9 @@ concrete constraint implementations:
 """
 
 from abc import ABC, abstractmethod
-from typing import Tuple, Union, Literal, TYPE_CHECKING
+from typing import Optional, Tuple, Union, Literal, TYPE_CHECKING
+
+import numpy as np
 
 if TYPE_CHECKING:
     from ....cad_types import Vector
@@ -47,6 +49,7 @@ class FixedConstraint(BoundaryCondition):
         location: Union[str, dict, Tuple[float, float, float]],
         dofs: Tuple[bool, bool, bool] = (True, True, True),
         tolerance: float = 1,
+        node_coords: Optional[np.ndarray] = None,
     ):
         """
         Create a fixed constraint.
@@ -62,10 +65,17 @@ class FixedConstraint(BoundaryCondition):
 
             dofs: Which translational DOFs to constrain — ``(X, Y, Z)``.
             tolerance: Node-selection tolerance multiplier (× mesh_size, mm).
+            node_coords: Optional ``(N, 3)`` array of *exact* constraint node
+                coordinates.  When supplied the bounding-box ``location`` is
+                ignored and instead the nearest mesh node to each supplied
+                coordinate is selected (within ``tolerance × mesh_size``).
+                This produces precise results when the constraint comes from a
+                named node-set (NSET) whose members are spatially scattered.
         """
         self.location = location
         self.dofs = dofs
         self.tolerance = tolerance
+        self.node_coords = node_coords
 
     def __repr__(self) -> str:
         return (
@@ -80,6 +90,39 @@ class FixedConstraint(BoundaryCondition):
 
         bbox = geometry_info["bounding_box"]
 
+        # ── Fast-path: exact node coordinates supplied (e.g. from NSET) ──────
+        if self.node_coords is not None and len(self.node_coords) > 0:
+            import torch as _torch
+
+            ref = _torch.tensor(
+                self.node_coords, dtype=nodes.dtype, device=nodes.device
+            )  # (M, 3)
+            # For each reference point find the closest mesh node within tolerance
+            tol = self.tolerance * mesh_size
+            matched: list = []
+            for pt in ref:
+                dists = _torch.norm(nodes - pt, dim=1)
+                closest_idx = int(dists.argmin().item())
+                if float(dists[closest_idx].item()) <= tol:
+                    matched.append(closest_idx)
+                else:
+                    # Tolerance too tight — fall back to search within 2× tol
+                    within = (dists <= 2 * tol).nonzero(as_tuple=False).squeeze(1)
+                    if within.numel() > 0:
+                        matched.append(int(within[0].item()))
+
+            if matched:
+                constrained_nodes = _torch.tensor(
+                    list(dict.fromkeys(matched)),  # unique, order-preserving
+                    dtype=_torch.long,
+                    device=nodes.device,
+                )
+                for i, constrain in enumerate(self.dofs):
+                    if constrain:
+                        model.constraints[constrained_nodes, i] = True
+                return len(constrained_nodes)
+            # Fall through to bounding-box if nothing matched
+        # ── Bounding-box / string / point path (original logic) ───────────────
         if isinstance(self.location, dict):
             constrained_nodes = find_nodes_in_box(
                 nodes,
