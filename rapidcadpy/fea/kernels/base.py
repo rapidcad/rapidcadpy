@@ -44,6 +44,7 @@ def _vtk_can_render_offscreen() -> bool:
         return True
     # Windows: osmesa.dll is the only reliable headless path.
     import ctypes
+
     try:
         ctypes.CDLL("osmesa")
         return True
@@ -78,6 +79,7 @@ def _render_conditions_matplotlib(
     of interior nodes.
     """
     import matplotlib.pyplot as plt
+
     plt.switch_backend("agg")  # force Agg even if PyVista changed the backend
     from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 – registers '3d' projection
     from matplotlib.figure import Figure
@@ -105,23 +107,26 @@ def _render_conditions_matplotlib(
         rng = np.random.default_rng(42)
         idx = rng.choice(n, min(n, 8_000), replace=False) if n > 8_000 else np.arange(n)
         bg_pts = nodes_np[idx]
-        
+
     # Calculate geometric bounding box (ignoring stray reference nodes)
     mn = bg_pts.min(axis=0)
     mx = bg_pts.max(axis=0)
-    
+
     # Optionally expand bounds to include loaded/fixed nodes if they aren't crazily far
     # We allow the bounding box to expand by at most 50% to include BC nodes
     core_spans = np.where((mx - mn) < 1e-9, 1.0, mx - mn)
-    
+
     def _include_pts(pts):
         nonlocal mn, mx
-        if not len(pts): return
+        if not len(pts):
+            return
         pts_mn = pts.min(axis=0)
         pts_mx = pts.max(axis=0)
         # Only expand if it doesn't blow up the box size (e.g. > +50% in any direction)
-        if np.all((mn - pts_mn) < core_spans * 0.5): mn = np.minimum(mn, pts_mn)
-        if np.all((pts_mx - mx) < core_spans * 0.5): mx = np.maximum(mx, pts_mx)
+        if np.all((mn - pts_mn) < core_spans * 0.5):
+            mn = np.minimum(mn, pts_mn)
+        if np.all((pts_mx - mx) < core_spans * 0.5):
+            mx = np.maximum(mx, pts_mx)
 
     # Fixed nodes
     n_fixed = int(constraint_mask.sum())
@@ -142,20 +147,31 @@ def _render_conditions_matplotlib(
 
     # Render Fixed nodes
     if n_fixed:
-        ax.scatter(*fixed_pts.T, c="red", s=25, marker="D",
-                   label=f"Fixed nodes ({n_fixed})")
+        ax.scatter(
+            *fixed_pts.T, c="red", s=25, marker="D", label=f"Fixed nodes ({n_fixed})"
+        )
 
     # Render Loaded nodes + force arrows
     if n_loaded:
-        ax.scatter(*loaded_pts.T, c="limegreen", s=25, marker="^",
-                   label=f"Loaded nodes ({n_loaded})")
+        ax.scatter(
+            *loaded_pts.T,
+            c="limegreen",
+            s=25,
+            marker="^",
+            label=f"Loaded nodes ({n_loaded})",
+        )
         if force_vectors is not None and len(force_vectors):
             norms = np.linalg.norm(force_vectors, axis=1, keepdims=True)
             dirs = force_vectors / np.where(norms < 1e-12, 1.0, norms)
             # Arrow length = 10% of the max span
             dirs_scaled = dirs * (max_span * 0.1)
-            ax.quiver(*loaded_pts.T, *dirs_scaled.T, color="darkgreen",
-                      arrow_length_ratio=0.3, linewidth=1.5)
+            ax.quiver(
+                *loaded_pts.T,
+                *dirs_scaled.T,
+                color="darkgreen",
+                arrow_length_ratio=0.3,
+                linewidth=1.5,
+            )
 
     # ── axes: tightly fit the geometry with equal spatial scale ──────────────
     # Expand slightly (5%) so points don't clip at edges
@@ -178,7 +194,6 @@ def _render_conditions_matplotlib(
     fig.savefig(filename, dpi=120, bbox_inches="tight")
     logger.info("Saved matplotlib BC visualization to: %s", filename)
     print(f"[OK] Saved boundary condition visualization (matplotlib) to: {filename}")
-
 
 
 class FEAKernel(ABC):

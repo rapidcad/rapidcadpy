@@ -76,6 +76,7 @@ class DesignDomain:
         """
         if app is None:
             from rapidcadpy.integrations.ocp.app import OpenCascadeOcpApp
+
             app = OpenCascadeOcpApp()
 
         if self.shape_type == "box":
@@ -186,10 +187,16 @@ class DesignDomain:
             shape = None
             if op_type == "box":
                 wp = app.work_plane("XY", offset=params.get("z", 0))
-                wp.move_to(params.get("x", 0), params.get("y", 0)).rect(params.get("dx", 100), params.get("dy", 100), centered=False)
+                wp.move_to(params.get("x", 0), params.get("y", 0)).rect(
+                    params.get("dx", 100), params.get("dy", 100), centered=False
+                )
                 shape = wp.extrude(params.get("dz", 100))
             elif op_type == "cylinder":
-                cx, cy, cz = params.get("cx", 0), params.get("cy", 0), params.get("cz", 0)
+                cx, cy, cz = (
+                    params.get("cx", 0),
+                    params.get("cy", 0),
+                    params.get("cz", 0),
+                )
                 axis = params.get("axis", "z").lower()
                 r, ht = params.get("radius", 50), params.get("height", 100)
                 if axis == "x":
@@ -203,10 +210,16 @@ class DesignDomain:
                     wp.move_to(cx, cy).circle(r)
                 shape = wp.extrude(ht)
             elif op_type == "sphere":
-                cx, cy, cz = params.get("cx", 0), params.get("cy", 0), params.get("cz", 0)
+                cx, cy, cz = (
+                    params.get("cx", 0),
+                    params.get("cy", 0),
+                    params.get("cz", 0),
+                )
                 r = params.get("radius", 50)
                 wp = app.work_plane("XY", offset=cz)
-                wp.move_to(cx, cy - r).line_to(cx, cy + r).three_point_arc((cx + r, cy), (cx, cy - r))
+                wp.move_to(cx, cy - r).line_to(cx, cy + r).three_point_arc(
+                    (cx + r, cy), (cx, cy - r)
+                )
                 shape = wp.close().revolve(360, axis="Y")
             if shape:
                 if result is None or oper == "add":
@@ -214,8 +227,10 @@ class DesignDomain:
                 elif oper == "subtract":
                     result = result.cut(shape)
                 elif oper == "intersect":
-                    if hasattr(result, "intersect"): result = result.intersect(shape)
-        if result is None: raise ValueError("No geometry")
+                    if hasattr(result, "intersect"):
+                        result = result.intersect(shape)
+        if result is None:
+            raise ValueError("No geometry")
         return result
 
     def export_step(self, filepath: str) -> str:
@@ -334,17 +349,28 @@ class DesignDomain:
 
         # For CSG and unknown shapes fall back to building the geometry
         geometry = self.build_geometry()
-        
+
         try:
             from OCP.Bnd import Bnd_Box
             from OCP.BRepBndLib import BRepBndLib
+
             bnd_box = Bnd_Box()
             BRepBndLib.Add_s(geometry.obj, bnd_box)
             xmin, ymin, zmin, xmax, ymax, zmax = bnd_box.Get()
             return {
-                "x_min": xmin, "x_max": xmax,
-                "y_min": ymin, "y_max": ymax,
-                "z_min": zmin, "z_max": zmax
+                "x_min": xmin,
+                "x_max": xmax,
+                "y_min": ymin,
+                "y_max": ymax,
+                "z_min": zmin,
+                "z_max": zmax,
             }
         except Exception:
-            return {"x_min": 0, "x_max": 0, "y_min": 0, "y_max": 0, "z_min": 0, "z_max": 0}
+            return {
+                "x_min": 0,
+                "x_max": 0,
+                "y_min": 0,
+                "y_max": 0,
+                "z_min": 0,
+                "z_max": 0,
+            }

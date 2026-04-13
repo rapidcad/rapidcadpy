@@ -327,6 +327,27 @@ class FEAAnalyzer:
 
         return self._visualization_mesher
 
+    @staticmethod
+    def _estimate_mesh_size_from_nodes(nodes) -> float:
+        """
+        Estimate characteristic element size from the node cloud.
+
+        Uses the classic volumetric estimate ``h ≈ (V / N)^(1/3)`` where V is
+        the bounding-box volume and N is the node count.  This gives the
+        correct scale for the constraint-tolerance multiplier when working with
+        a pre-loaded mesh instead of a freshly GMSH-generated one.
+        """
+        import torch
+
+        n = nodes.shape[0]
+        if n <= 1:
+            return 1.0
+        ranges = nodes.max(dim=0).values - nodes.min(dim=0).values
+        volume = float(ranges[0] * ranges[1] * ranges[2])
+        if volume <= 0:
+            return 1.0
+        return max(float((volume / n) ** (1.0 / 3.0)), 1e-3)
+
     def _prepare_visualization_nodes_elements(
         self,
         shape: Union["Shape", str, Any],
@@ -461,6 +482,12 @@ class FEAAnalyzer:
         nodes, elements, _step_path = self._prepare_visualization_nodes_elements(
             shape, mesh_size, element_type
         )
+        # When the shape was a pre-loaded mesh the GMSH target mesh_size is
+        # unrelated to the actual element density.  Re-derive the element size
+        # directly from the node cloud so that constraint tolerances are scaled
+        # to the real mesh resolution (not the coarse GMSH planning value).
+        if self._is_meshio_mesh(shape):
+            mesh_size = self._estimate_mesh_size_from_nodes(nodes)
         pv_mesh = self._build_pyvista_unstructured_grid(nodes, elements)
         nodes_np = nodes.cpu().numpy()
 
@@ -1136,19 +1163,18 @@ class FEAAnalyzer:
         # Configure for headless/non-interactive mode if needed
         if filename:
             interactive = False
-            pv.OFF_SCREEN = True
 
-        # On macOS, vtkCocoaRenderWindow requires the main thread to create
-        # NSWindow even when off_screen=True.  Ensure VTK uses its true
-        # framebuffer-only code path (set before Plotter construction).
-        os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
+        off_screen = bool(filename) or (not interactive)
 
-        # Older PyVista versions recommended pv.start_xvfb() here for
-        # headless Linux rendering, but that helper is deprecated. Rely on
-        # VTK's off-screen render path instead and let the runtime provide an
-        # appropriate backend (for example OSMesa on headless systems).
+        # Only force VTK's framebuffer-only path when we actually need off-screen
+        # rendering.  Leaving the env-var unset allows the trame / panel Jupyter
+        # backends to attach their own WebGL render window.
+        if off_screen:
+            os.environ["VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN"] = "1"
+        else:
+            os.environ.pop("VTK_DEFAULT_RENDER_WINDOW_OFFSCREEN", None)
 
-        plotter = pv.Plotter(window_size=list(window_size), off_screen=True)
+        plotter = pv.Plotter(window_size=list(window_size), off_screen=off_screen)
 
         # Add design-space box (wireframe) if bounds are available
         has_design_space = _add_design_space_box(plotter, self.load_case.bounds)
@@ -1260,11 +1286,9 @@ class FEAAnalyzer:
             plotter.screenshot(filename)
             plotter.close()
         else:
-            # Show interactively
-            if interactive:
-                plotter.show()
-            else:
-                plotter.show(jupyter_backend="static")
+            # Show interactively — the active PyVista Jupyter backend
+            # (trame, panel, static, …) is used automatically.
+            plotter.show()
 
     def export_gltf(
         self,

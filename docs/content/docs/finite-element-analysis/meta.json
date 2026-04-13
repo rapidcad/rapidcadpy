@@ -5,6 +5,7 @@
     "constraints",
     "materials",
     "fea-analysis",
+    "importing",
     "optimization",
     "visualization"
   ]

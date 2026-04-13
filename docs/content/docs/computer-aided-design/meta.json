@@ -3,6 +3,7 @@
   "pages": [
     "shape",
     "sweep",
-    "built-in-profiles"
+    "built-in-profiles",
+    "parameters"
   ]
 }
