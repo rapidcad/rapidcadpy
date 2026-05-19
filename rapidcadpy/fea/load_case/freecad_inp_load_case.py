@@ -56,6 +56,7 @@ class LoadCaseFromFreeCadInp:
                 _meshio_err,
             )
             from .abaqus_inp_load_case import AbaqusInpLoadCase  # noqa: PLC0415
+
             return AbaqusInpLoadCase.from_inp(filepath)
 
         nodes_arr = np.asarray(mesh.points, dtype=np.float64)

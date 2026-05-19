@@ -1,13 +1,10 @@
 import tempfile
-from typing import TYPE_CHECKING, List, Optional, Type, Union
-
-from .fea.results import FEAResults
+from typing import TYPE_CHECKING, Dict, List, Optional, Type, Union
 
 if TYPE_CHECKING:
-    pass
-
-from .fea.boundary_conditions import BoundaryCondition, Load
-from .fea.materials import MaterialProperties
+    from .fea.boundary_conditions import BoundaryCondition, Load
+    from .fea.materials import MaterialProperties
+    from .fea.results import FEAResults
 from .shape import Shape
 from .workplane import Workplane
 
@@ -22,6 +19,99 @@ class App:
         self._shapes: List["Shape"] = []
         # If True, geometry operations will fail silently and be discarded
         self.silent_geometry_failures = silent_geometry_failures
+        # Named parameter store used by OCC/OCP backends (Inventor overrides these)
+        self._parameters: Dict[str, float] = {}
+
+    @property
+    def work_plane_class(self) -> Type[Workplane]:
+        return self.workplane_class
+
+    # ------------------------------------------------------------------
+    # Named Parameter API (dict-backed; overridden by Inventor integration)
+    # ------------------------------------------------------------------
+
+    def add_parameter(
+        self,
+        name: str,
+        value: float,
+        units: str = "mm",
+        expression: Optional[str] = None,
+    ) -> float:
+        """Create or overwrite a named parameter.
+
+        In the OCC/OCP backends parameters are stored in a plain Python dict;
+        the ``units`` and ``expression`` arguments are accepted for API
+        compatibility but are not evaluated.  When using the Inventor backend
+        this method is overridden and the parameter is created inside Inventor.
+
+        Args:
+            name:       Parameter name.
+            value:      Numeric value.
+            units:      Unit string (stored for documentation; not evaluated here).
+            expression: Ignored in the base implementation.
+
+        Returns:
+            The stored ``float`` value.
+
+        Example::
+
+            width  = app.add_parameter("width",  50)
+            height = app.add_parameter("height", 30)
+            wp = app.work_plane("XY")
+            wp.rect(width, height).extrude(10)
+        """
+        self._parameters[name] = float(value)
+        return float(value)
+
+    def get_parameter(self, name: str) -> float:
+        """Return the current value of a named parameter.
+
+        Args:
+            name: Parameter name.
+
+        Returns:
+            Current ``float`` value.
+
+        Raises:
+            KeyError: If no parameter with that name exists.
+        """
+        if name not in self._parameters:
+            raise KeyError(f"Parameter '{name}' not found.")
+        return self._parameters[name]
+
+    def set_parameter(self, name: str, value: float, units: str = "mm") -> None:
+        """Update the value of an existing named parameter.
+
+        Args:
+            name:   Parameter name.
+            value:  New numeric value.
+            units:  Unit string (accepted for API compatibility; not evaluated).
+
+        Raises:
+            KeyError: If the parameter does not exist.
+
+        Example::
+
+            app.set_parameter("width", 80)
+        """
+        if name not in self._parameters:
+            raise KeyError(
+                f"Parameter '{name}' not found. Use add_parameter() to create it first."
+            )
+        self._parameters[name] = float(value)
+
+    def list_parameters(self) -> Dict[str, float]:
+        """Return all named parameters as a ``{name: value}`` dictionary.
+
+        Returns:
+            Shallow copy of the parameter dict.
+
+        Example::
+
+            params = app.list_parameters()
+            print(params)  # {'width': 50.0, 'height': 30.0}
+        """
+        return dict(self._parameters)
 
     def work_plane(self, name: str, offset: Optional[float] = None) -> Workplane:
         if name.upper() == "XY":

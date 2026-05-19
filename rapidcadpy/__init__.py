@@ -25,22 +25,27 @@ from .sketch3d import Sketch3D
 # Components - preset profiles
 from .components import profiles
 
-# Optional integrations - import with error handling
-try:
-    from .integrations.occ.app import OpenCascadeApp
-except ImportError:
-    OpenCascadeApp = None
+# Optional integrations are loaded lazily so importing rapidcadpy does not
+# require FreeCAD/OCP/Inventor runtimes or emit warnings in MCP stdio mode.
+_OPTIONAL_INTEGRATIONS = {
+    "OpenCascadeApp": ".integrations.occ.app",
+    "OpenCascadeOcpApp": ".integrations.ocp.app",
+    "InventorApp": ".integrations.inventor.app",
+    "FreeCADApp": ".integrations.freecad.app",
+}
 
-try:
-    from .integrations.ocp.app import OpenCascadeOcpApp
-except ImportError:
-    OpenCascadeOcpApp = None
 
-try:
-    from .integrations.inventor.app import InventorApp
-except ImportError as e:
-    print(f"Warning: Could not import InventorApp due to: {e}")
-    InventorApp = None
+def __getattr__(name):
+    if name not in _OPTIONAL_INTEGRATIONS:
+        raise AttributeError(f"module 'rapidcadpy' has no attribute {name!r}")
+
+    import importlib
+
+    module = importlib.import_module(_OPTIONAL_INTEGRATIONS[name], __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
 
 # Essential primitives for fluent modeling
 from .workplane import Workplane
@@ -69,4 +74,5 @@ __all__ = [
     "OpenCascadeApp",
     "OpenCascadeOcpApp",
     "InventorApp",
+    "FreeCADApp",
 ]

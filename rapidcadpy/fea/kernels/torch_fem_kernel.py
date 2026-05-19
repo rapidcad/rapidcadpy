@@ -29,10 +29,10 @@ if TYPE_CHECKING:
 # Maps nodes-per-cell → VTK element type code.
 # Covers all element families used by the Abaqus/FreeCAD parsers.
 _NNODES_TO_VTK: dict = {
-    3: 5,    # VTK_TRIANGLE
-    4: 10,   # VTK_TETRA
-    6: 13,   # VTK_WEDGE  (wed6; tri6 is also 6 nodes but we are always 3-D here)
-    8: 12,   # VTK_HEXAHEDRON
+    3: 5,  # VTK_TRIANGLE
+    4: 10,  # VTK_TETRA
+    6: 13,  # VTK_WEDGE  (wed6; tri6 is also 6 nodes but we are always 3-D here)
+    8: 12,  # VTK_HEXAHEDRON
     10: 24,  # VTK_QUADRATIC_TETRA
     15: 26,  # VTK_QUADRATIC_WEDGE
     20: 25,  # VTK_QUADRATIC_HEXAHEDRON
@@ -314,6 +314,7 @@ class TorchFEMKernel(FEAKernel):
             mesh_size,
             element_type,
             geo_props,
+            step_path=step_path,
         )
 
         return results
@@ -643,6 +644,7 @@ class TorchFEMKernel(FEAKernel):
         mesh_size: float,
         element_type: str,
         geo_props: dict,
+        step_path: Optional[str] = None,
     ) -> FEAResults:
         """
         Extract results from torch-fem solution.
@@ -689,6 +691,7 @@ class TorchFEMKernel(FEAKernel):
             max_stress_p95=stress_p95,
             max_stress_p99=stress_p99,
             model=model,  # Store model for boundary condition visualization
+            step_path=step_path,
         )
 
         return results

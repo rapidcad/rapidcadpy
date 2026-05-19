@@ -3,7 +3,7 @@ FreeCAD Workplane – coordinate-system + fluent CAD API backed by Part module.
 """
 
 import math
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING, Union, List, cast
 
 from ...app import App
 from ...cad_types import Vector, VectorLike, Vertex
@@ -30,6 +30,7 @@ class FreeCADWorkplane(Workplane):
         # Accumulates primitive lists from each .close() call so that a
         # subsequent .extrude() can build a multi-loop (holed) face.
         self._accumulated_loops: list = []
+        self._plane_origin = None
         if hasattr(self.__class__, "normal_vector") or hasattr(self, "normal_vector"):
             self._setup_coordinate_system()
 
@@ -147,6 +148,10 @@ class FreeCADWorkplane(Workplane):
         sketch = FreeCADSketch2D(
             primitives=list(self._pending_shapes), workplane=self, app=self.app
         )
+        if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
+            cast(Any, self.app).mark_history_unsupported(
+                "Pipe replay not implemented for FreeCAD history export"
+            )
         self._clear_pending_shapes()
         return sketch.pipe(diameter)  # type: ignore[return-value]
 
@@ -260,9 +265,16 @@ class FreeCADWorkplane(Workplane):
 
         solid = face.extrude(extrude_vec)
 
-        # Use the sketch helper to apply the operation
-        dummy_sketch = FreeCADSketch2D(primitives=[], workplane=self, app=self.app)
-        return dummy_sketch._apply_operation(solid, operation)  # type: ignore[return-value]
+        # Reuse the sketch helper so exported FCStd files can still include
+        # an editable sketch when the operation maps cleanly to one.
+        combined_primitives = [primitive for loop in loops for primitive in loop]
+        dummy_sketch = FreeCADSketch2D(
+            primitives=combined_primitives, workplane=self, app=self.app
+        )
+        return dummy_sketch._apply_operation(  # type: ignore[return-value]
+            solid,
+            operation,
+        )
 
     def box(
         self,
@@ -317,7 +329,23 @@ class FreeCADWorkplane(Workplane):
         m.A41, m.A42, m.A43, m.A44 = 0.0, 0.0, 0.0, 1.0
 
         box_shape = box_shape.transformGeometry(m)
-        return FreeCADShape(box_shape, self.app)
+        if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
+            cast(Any, self.app).mark_history_unsupported(
+                "Box replay not implemented for FreeCAD history export"
+            )
+
+        # Create initial Part::Feature in the document if app is FreeCADApp
+        doc = None
+        feat = None
+        if self.app is not None and hasattr(self.app, "get_doc"):
+            app_any = cast(Any, self.app)
+            doc = app_any.get_doc()
+            feat_idx = app_any.get_next_feature_index()
+            feat = doc.addObject("Part::Feature", f"Box_{feat_idx}")
+            feat.Shape = box_shape
+            doc.recompute()
+
+        return FreeCADShape(box_shape, self.app, doc=doc, current_feature=feat)
 
     def revolve(
         self,
@@ -366,8 +394,12 @@ class FreeCADWorkplane(Workplane):
                 return None  # type: ignore[return-value]
             raise RuntimeError(f"Revolve failed: {exc}") from exc
 
+        if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
+            cast(Any, self.app).mark_history_unsupported(
+                "Revolve replay not implemented for FreeCAD history export"
+            )
         self._clear_pending_shapes()
-        return sketch2d._apply_operation(solid, operation)
+        return cast("FreeCADShape", sketch2d._apply_operation(solid, operation))
 
     def sweep(
         self,
@@ -409,5 +441,135 @@ class FreeCADWorkplane(Workplane):
             transition_mode=transition_mode,
         )
 
+        if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
+            cast(Any, self.app).mark_history_unsupported(
+                "Sweep replay not implemented for FreeCAD history export"
+            )
         self._clear_pending_shapes()
         return result  # type: ignore[return-value]
+
+    def loft(
+        self,
+        profiles: Union["FreeCADWorkplane", List["FreeCADWorkplane"]],
+        make_solid: bool = True,
+        ruled: bool = False,
+        operation: str = "NewBodyFeatureOperation",
+    ) -> "FreeCADShape":
+        """
+        Loft through this workplane's profile and one or more additional profiles.
+
+        Args:
+            profiles:     One or more profile workplanes in loft order.
+            make_solid:   Create a solid (True) or shell (False).
+            ruled:        Create ruled faces instead of smooth transitions.
+            operation:    Same semantics as ``Sketch2D.extrude``.
+
+        Returns:
+            FreeCADShape wrapping the lofted shape.
+        """
+        import FreeCAD
+        import Part
+        from .sketch2d import FreeCADSketch2D
+
+        profile_wps = [profiles] if not isinstance(profiles, list) else profiles
+
+        # Build an ordered list of all profile workplanes (self first).
+        all_wps = [self] + profile_wps
+
+        def _consume_profile_primitives(wp: "FreeCADWorkplane"):
+            # Prefer active sketch primitives; otherwise consume the last closed loop.
+            if getattr(wp, "_pending_shapes", None):
+                primitives = list(wp._pending_shapes)
+                wp._pending_shapes = []
+                wp._current_position = Vertex(0, 0)
+                wp._loop_start = None  # type: ignore[assignment]
+                return primitives
+
+            loops = getattr(wp, "_accumulated_loops", None)
+            if loops:
+                return loops.pop()
+
+            raise ValueError("Loft profile has no sketch primitives.")
+
+        wires = []
+        profile_sketches = []
+        root_sketch = None
+        for i, wp in enumerate(all_wps):
+            primitives = _consume_profile_primitives(wp)
+            sketch = FreeCADSketch2D(primitives=primitives, workplane=wp, app=wp.app)
+            profile_sketches.append(sketch)
+            wire = sketch._make_wire()
+            if wire is None:
+                if getattr(self.app, "silent_geometry_failures", False):
+                    return None  # type: ignore[return-value]
+                raise ValueError("Failed to build loft profile wire.")
+            wires.append(wire)
+            if i == 0:
+                root_sketch = sketch
+
+        if len(wires) < 2:
+            raise ValueError("Loft requires at least two profiles.")
+
+        # Prefer creating a real Part::Loft feature when we have a FreeCAD document,
+        # so users can edit loft sections in the FreeCAD UI.
+        if self.app is not None and hasattr(self.app, "get_doc"):
+            try:
+                app_any = cast(Any, self.app)
+                doc = app_any.get_doc()
+                section_objs = []
+                for wire, sketch in zip(wires, profile_sketches):
+                    section_name = f"LoftSection_{app_any.get_next_feature_index()}"
+
+                    # Build editable section sketches when Sketcher is available.
+                    section_obj = None
+                    if sketch._primitives:
+                        try:
+                            section_obj = sketch._create_editable_sketch(
+                                doc, section_name
+                            )
+                        except Exception:
+                            section_obj = None
+
+                    if section_obj is None:
+                        section_obj = doc.addObject("Part::Feature", section_name)
+                        section_obj.Shape = wire
+
+                    section_objs.append(section_obj)
+
+                loft_name = f"Loft_{app_any.get_next_feature_index()}"
+                loft_obj = doc.addObject("Part::Loft", loft_name)
+                loft_obj.Sections = section_objs
+                loft_obj.Solid = bool(make_solid)
+                loft_obj.Ruled = bool(ruled)
+                if hasattr(loft_obj, "Closed"):
+                    loft_obj.Closed = False
+
+                doc.recompute()
+                solid = loft_obj.Shape
+
+                # Default operation: return the true Loft feature as current feature.
+                if operation == "NewBodyFeatureOperation":
+                    from .shape import FreeCADShape
+
+                    return FreeCADShape(
+                        solid,
+                        self.app,
+                        doc=doc,
+                        current_feature=loft_obj,
+                    )
+            except Exception as exc:
+                if getattr(self.app, "silent_geometry_failures", False):
+                    return None  # type: ignore[return-value]
+                raise RuntimeError(f"Loft feature creation failed: {exc}") from exc
+        else:
+            try:
+                solid = Part.makeLoft(wires, bool(make_solid), bool(ruled))
+            except Exception as exc:
+                if getattr(self.app, "silent_geometry_failures", False):
+                    return None  # type: ignore[return-value]
+                raise RuntimeError(f"Loft failed: {exc}") from exc
+
+        if root_sketch is None:
+            raise ValueError("Internal error: missing root profile for loft operation.")
+
+        return cast("FreeCADShape", root_sketch._apply_operation(solid, operation))

@@ -39,6 +39,10 @@ class FEAResults:
     # Boundary conditions (optional, for visualization)
     model: Optional[Any] = None  # FEA solver model with constraints and forces
 
+    # CAD geometry — path to the STEP file used to generate this mesh.
+    # Available when the mesh was produced from a Shape or STEP file (not meshio).
+    step_path: Optional[str] = None
+
     # Visualization
     _plotter: Optional[Any] = None
 
@@ -102,6 +106,7 @@ class FEAResults:
         displacement_scale: float = 10.0,
         interactive: bool = True,
         window_size: Tuple[int, int] = (1600, 600),
+        view: str = "iso",
     ):
         """
         Display FEA results interactively or save to file.
@@ -111,6 +116,7 @@ class FEAResults:
             displacement_scale: Scale factor for displacement visualization
             interactive: Use interactive viewer (vs. off-screen). Default: True
             window_size: Window dimensions (width, height)
+            view: Camera view - 'iso', 'front', 'side', or 'top'
 
         Returns:
             PyVista plotter object (or None for 'conditions' mode)
@@ -176,6 +182,19 @@ class FEAResults:
         )
         mesh.cell_data["von_mises_stress"] = self.von_mises_stress.cpu().numpy()
 
+        def _apply_view(plotter: "pv.Plotter") -> None:
+            normalized_view = (view or "iso").lower()
+            if normalized_view in {"iso", "isometric"}:
+                plotter.camera_position = "iso"
+            elif normalized_view in {"front", "y", "yz"}:
+                plotter.view_yz()
+            elif normalized_view in {"side", "x", "xz"}:
+                plotter.view_xz()
+            elif normalized_view in {"top", "z", "xy"}:
+                plotter.view_xy()
+            else:
+                raise ValueError(f"Invalid camera view: {view}")
+
         # Create plotter
         if display == "both":
             plotter = pv.Plotter(
@@ -192,8 +211,8 @@ class FEAResults:
                 show_edges=False,
                 scalar_bar_args={"title": "Stress (MPa)", "vertical": True},
             )
-            plotter.camera_position = "iso"
             plotter.add_axes()
+            _apply_view(plotter)
 
             # Right: Displacement
             plotter.subplot(0, 1)
@@ -210,8 +229,8 @@ class FEAResults:
                 show_edges=False,
                 scalar_bar_args={"title": "Displacement (mm)", "vertical": True},
             )
-            plotter.camera_position = "iso"
             plotter.add_axes()
+            _apply_view(plotter)
 
         else:
             plotter = pv.Plotter(
@@ -246,8 +265,8 @@ class FEAResults:
             else:
                 raise ValueError(f"Invalid display mode: {display}")
 
-            plotter.camera_position = "iso"
             plotter.add_axes()
+            _apply_view(plotter)
 
         if interactive:
             plotter.show()
@@ -266,6 +285,7 @@ class FEAResults:
         window_size: Tuple[int, int] = (1600, 600),
         transparent_background: bool = False,
         interactive: bool = False,
+        view: str = "iso",
     ) -> str:
         """
         Save FEA visualization to an image file.
@@ -279,6 +299,7 @@ class FEAResults:
             displacement_scale: Scale factor for displacement visualization
             window_size: Size of the rendered image (width, height) in pixels
             transparent_background: If True, save with transparent background
+            view: Camera view - 'iso', 'front', 'side', or 'top'
 
         Returns:
             The path to the saved image file
@@ -294,6 +315,7 @@ class FEAResults:
             displacement_scale=displacement_scale,
             interactive=False,
             window_size=window_size,
+            view=view,
         )
 
         # Save the screenshot
@@ -386,6 +408,189 @@ class FEAResults:
         lines.append("=" * 80)
 
         return "\n".join(lines)
+
+    def show_cad(
+        self,
+        color: str = "lightblue",
+        opacity: float = 1.0,
+        show_edges: bool = False,
+        interactive: bool = True,
+        window_size: Tuple[int, int] = (1200, 800),
+        mesh_deflection: float = 0.01,
+        show_conditions: bool = False,
+        point_size: float = 12.0,
+    ):
+        """
+        Display the CAD geometry (STEP file) as a 3D solid in the notebook.
+
+        Tessellates the stored STEP file with pythonocc and renders it via
+        PyVista so the same interactive viewer used for FEA results is reused.
+
+        Args:
+            color: Surface colour (any PyVista / matplotlib colour string).
+            opacity: Surface opacity (0 = transparent, 1 = opaque).
+            show_edges: Show tessellation edges.
+            interactive: Use interactive trame viewer (False = off-screen).
+            window_size: Viewer width × height in pixels.
+            mesh_deflection: Tessellation quality — smaller = finer (default 0.01).
+            show_conditions: Overlay boundary conditions on the CAD body.
+                When True, fixed/constrained nodes are shown as red spheres and
+                loaded nodes are shown as green spheres with force arrows.
+                Requires that FEA has been run so that ``self.model`` and
+                ``self.nodes`` are populated.
+
+        Returns:
+            PyVista plotter object.
+        """
+        if self.step_path is None:
+            raise ValueError(
+                "No STEP file is stored in this FEAResults object. "
+                "step_path is only set when the mesh was produced from a Shape "
+                "or a STEP file path, not from a meshio mesh."
+            )
+
+        import os as _os
+
+        if not _os.path.exists(self.step_path):
+            raise FileNotFoundError(
+                f"STEP file not found at '{self.step_path}'. "
+                "It may have been created as a temporary file that was deleted."
+            )
+
+        try:
+            import pyvista as pv
+        except ImportError:
+            raise ImportError("PyVista is required: pip install pyvista")
+
+        # --- Read STEP with pythonocc, tessellate, then emit STL ---------------
+        # Using StlAPI_Writer avoids all manual location-transform complexity:
+        # pythonocc writes world-space triangles directly into the binary STL.
+        # Try pythonocc (OCC.Core) first, then fall back to the OCP variant used
+        # by cadquery.
+        try:
+            from OCC.Core.STEPControl import STEPControl_Reader
+            from OCC.Core.BRepMesh import BRepMesh_IncrementalMesh
+            from OCC.Core.StlAPI import StlAPI_Writer
+        except ImportError:
+            try:
+                from OCP.STEPControl import STEPControl_Reader
+                from OCP.BRepMesh import BRepMesh_IncrementalMesh
+                from OCP.StlAPI import StlAPI_Writer
+            except ImportError:
+                raise ImportError(
+                    "Neither pythonocc (OCC.Core) nor OCP is installed. "
+                    "Activate the occ conda environment or install pythonocc-core."
+                )
+
+        reader = STEPControl_Reader()
+        status = reader.ReadFile(str(self.step_path))
+        if status != 1:  # IFSelect_RetDone == 1
+            raise RuntimeError(
+                f"pythonocc failed to read STEP file '{self.step_path}' "
+                f"(status={status})."
+            )
+        reader.TransferRoots()
+        occ_shape = reader.OneShape()
+
+        # Tessellate the B-Rep into triangles
+        BRepMesh_IncrementalMesh(
+            occ_shape, mesh_deflection, False, 0.5, False
+        )  # isInParallel=False avoids mutex deadlock in Jupyter
+
+        # Write to a temporary STL; pyvista reads it back as a PolyData
+        import tempfile as _tmpfile
+
+        with _tmpfile.NamedTemporaryFile(suffix=".stl", delete=False) as _stl_tmp:
+            stl_path = _stl_tmp.name
+        try:
+            stl_writer = StlAPI_Writer()
+            # SetASCIIMode is absent in the OCP variant bundled with cadquery;
+            # the default is already binary, so just skip the call.
+            try:
+                stl_writer.SetASCIIMode(False)
+            except AttributeError:
+                pass
+            stl_writer.Write(occ_shape, stl_path)
+            cad_mesh = pv.read(stl_path)
+        finally:
+            _os.unlink(stl_path)
+
+        # --- Render ------------------------------------------------------------
+        plotter = pv.Plotter(window_size=list(window_size), off_screen=not interactive)
+        plotter.add_mesh(
+            cad_mesh,
+            color=color,
+            opacity=opacity,
+            show_edges=show_edges,
+            smooth_shading=True,
+        )
+        plotter.add_axes()
+        plotter.set_background("white")
+        plotter.camera_position = "iso"
+
+        # --- Boundary condition overlay ----------------------------------------
+        if show_conditions:
+            if self.model is None or self.nodes is None:
+                raise ValueError(
+                    "show_conditions=True requires model and nodes to be set. "
+                    "Run FEA first (shape.run_fea(...)) so that self.model and "
+                    "self.nodes are available."
+                )
+
+            import numpy as np
+
+            nodes_np = self.nodes.cpu().numpy()
+            # Use the x-extent of the mesh to scale arrow length only
+            x_range = float(nodes_np[:, 0].max() - nodes_np[:, 0].min())
+            arrow_len = max(x_range * 0.12, 4.0)  # at least 4 mm
+
+            # Fixed/constrained nodes — red spheres
+            constrained_mask = self.model.constraints.any(dim=1).cpu().numpy()
+            constrained_nodes = nodes_np[constrained_mask]
+            if len(constrained_nodes) > 0:
+                fixed_cloud = pv.PolyData(constrained_nodes)
+                plotter.add_mesh(
+                    fixed_cloud,
+                    color="red",
+                    point_size=point_size,
+                    render_points_as_spheres=True,
+                    label="Fixed (Constraints)",
+                )
+
+            # Loaded nodes — green spheres + force arrows
+            force_mask = (self.model.forces.abs() > 1e-10).any(dim=1).cpu().numpy()
+            loaded_nodes = nodes_np[force_mask]
+            force_vectors = self.model.forces[force_mask].cpu().numpy()
+            if len(loaded_nodes) > 0:
+                load_cloud = pv.PolyData(loaded_nodes)
+                plotter.add_mesh(
+                    load_cloud,
+                    color="limegreen",
+                    point_size=point_size,
+                    render_points_as_spheres=True,
+                    label="Loaded (Forces)",
+                )
+                # Normalise and scale arrows
+                magnitudes = np.linalg.norm(force_vectors, axis=1, keepdims=True)
+                directions = force_vectors / (magnitudes + 1e-10)
+                plotter.add_arrows(
+                    loaded_nodes,
+                    directions * arrow_len,
+                    mag=1.0,
+                    color="darkgreen",
+                )
+
+            plotter.add_legend(size=(0.2, 0.1), bcolor="white")
+            plotter.add_text(
+                "Red = Fixed  |  Green = Loaded",
+                position="lower_left",
+                font_size=9,
+            )
+
+        if interactive:
+            plotter.show()
+
+        return plotter
 
     def __repr__(self):
         return (

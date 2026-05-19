@@ -1,4 +1,4 @@
-from typing import List, Union, Optional
+from typing import List, Union, Optional, Any
 from ...shape import Shape
 
 
@@ -7,6 +7,79 @@ class OccShape(Shape):
         self.app = app
         super().__init__(obj, app)
         # Register this shape with the app
+
+    def _raw_edges(self) -> List[Any]:
+        from OCP.TopExp import TopExp_Explorer
+        from OCP.TopAbs import TopAbs_EDGE
+        from OCP.TopoDS import TopoDS
+
+        edges = []
+        explorer = TopExp_Explorer(self.obj, TopAbs_EDGE)
+        while explorer.More():
+            edges.append(TopoDS.Edge_s(explorer.Current()))
+            explorer.Next()
+        return edges
+
+    def _is_linear_edge(self, edge) -> bool:
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+        from OCP.GeomAbs import GeomAbs_Line
+        from OCP.BRep import BRep_Tool
+
+        if BRep_Tool.Degenerated_s(edge):
+            return False
+        try:
+            return BRepAdaptor_Curve(edge).GetType() == GeomAbs_Line
+        except Exception:
+            return False
+
+    def _edge_direction_vector(self, edge) -> tuple:
+        from OCP.BRepAdaptor import BRepAdaptor_Curve
+
+        direction = BRepAdaptor_Curve(edge).Line().Direction()
+        return float(direction.X()), float(direction.Y()), float(direction.Z())
+
+    def _apply_fillet_to_edges(
+        self, edges: List[Any], radius: float, selector: "Optional[str]" = None
+    ) -> None:
+        from OCP.BRepFilletAPI import BRepFilletAPI_MakeFillet
+
+        radius = float(radius)
+
+        # First try a single batch fillet for speed.
+        fillet_builder = BRepFilletAPI_MakeFillet(self.obj)
+        added_edges = []
+        for edge in edges:
+            try:
+                fillet_builder.Add(radius, edge)
+                added_edges.append(edge)
+            except Exception:
+                continue
+
+        if not added_edges:
+            return
+
+        fillet_builder.Build()
+        if fillet_builder.IsDone():
+            self.obj = fillet_builder.Shape()
+            return
+
+        # If batch solve fails, apply fillets edge-by-edge so valid edges still fillet.
+        # This avoids ending up with no visible fillet when only a few edges are invalid.
+        current_shape = self.obj
+        applied_any = False
+        for edge in added_edges:
+            try:
+                one = BRepFilletAPI_MakeFillet(current_shape)
+                one.Add(radius, edge)
+                one.Build()
+                if one.IsDone():
+                    current_shape = one.Shape()
+                    applied_any = True
+            except Exception:
+                continue
+
+        if applied_any:
+            self.obj = current_shape
 
     def volume(self) -> float:
         """
@@ -293,6 +366,7 @@ class OccShape(Shape):
 
         # Update the current object with the cut result (in-place modification)
         self.obj = cut_result.Shape()
+        self._clear_edge_selection()
         return self
 
     def union(self, other: Union[Shape, List[Shape]]) -> Shape:
@@ -330,6 +404,7 @@ class OccShape(Shape):
             # Update the current object with the union result (in-place modification)
             self.obj = fuse_result.Shape()
 
+        self._clear_edge_selection()
         return self
 
     def translate(self, x: float = 0.0, y: float = 0.0, z: float = 0.0) -> "OccShape":
@@ -366,6 +441,7 @@ class OccShape(Shape):
         transform_builder = BRepBuilderAPI_Transform(self.obj, transform, True)
         self.obj = transform_builder.Shape()
 
+        self._clear_edge_selection()
         return self
 
     def get_fea_analyzer(self, material, mesh_size, element_type="tet4"):

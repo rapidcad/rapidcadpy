@@ -4,7 +4,7 @@ and coordinate system representation (unified Plane functionality).
 """
 
 from abc import ABC, abstractmethod
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional, Union
 
 from .primitives import Arc, Circle, Line
 
@@ -552,9 +552,38 @@ class Workplane(ABC):
         wp._current_position = self._current_position
         return wp
 
+    def _resolve_distance(self, distance: Union[float, str]) -> float:
+        """Resolve a distance value that may be a named parameter reference.
+
+        If ``distance`` is a string it is looked up via ``self.app.get_parameter()``.
+        This lets any workplane backend accept parameter names just like the
+        Inventor backend does.
+
+        Args:
+            distance: A numeric value or a named parameter string.
+
+        Returns:
+            Resolved ``float`` value.
+
+        Raises:
+            KeyError:   If the parameter name is not found.
+            TypeError:  If the value is neither a number nor a string.
+        """
+        if isinstance(distance, str):
+            if self.app is None:
+                raise RuntimeError(
+                    "Cannot resolve parameter name: workplane has no app reference."
+                )
+            return float(self.app.get_parameter(distance))
+        if isinstance(distance, (int, float)):
+            return float(distance)
+        raise TypeError(
+            f"distance must be a float or a parameter name string, got {type(distance).__name__}"
+        )
+
     def extrude(
         self,
-        distance: float,
+        distance: Union[float, str],
         operation: str = "NewBodyFeatureOperation",
         symmetric: bool = False,
     ) -> Any:
@@ -563,6 +592,7 @@ class Workplane(ABC):
         """
         if len(self._pending_shapes) == 0:
             raise ValueError("No Pending Primitves to Extrude")
+        distance = self._resolve_distance(distance)
         sketch = self.close()
         extruded_shape = sketch.extrude(
             distance, operation=operation, symmetric=symmetric

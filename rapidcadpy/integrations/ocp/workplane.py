@@ -20,6 +20,7 @@ class OccWorkplane(Workplane):
         """Set the workplane to the XY plane."""
         wp = cls(app=app)
         wp.normal_vector = Vector(0, 0, 1)
+        wp._offset = float(offset) if offset is not None else 0.0
         app.register_workplane(wp)
         wp._setup_coordinate_system()
         return wp

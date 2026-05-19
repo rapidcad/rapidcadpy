@@ -15,8 +15,8 @@ from OCC.Core.BRepBuilderAPI import (
 from OCC.Core.TopTools import TopTools_ListOfShape
 from OCC.Core.TopoDS import TopoDS_Compound
 from .shape import OccShape
-from rapidcadpy.primitives import Arc, Circle, Line
-from rapidcadpy.sketch2d import Sketch2D
+from ...primitives import Arc, Circle, Line
+from ...sketch2d import Sketch2D
 
 
 class OccSketch2D(Sketch2D):
@@ -185,7 +185,10 @@ class OccSketch2D(Sketch2D):
         return explorer.Current()
 
     def extrude(
-        self, distance: float, operation: str = "NewBodyFeatureOperation"
+        self,
+        distance: float,
+        operation: str = "NewBodyFeatureOperation",
+        symmetric: bool = False,
     ) -> OccShape:
         """
         Extrude the sketch face along the workplane's normal direction.

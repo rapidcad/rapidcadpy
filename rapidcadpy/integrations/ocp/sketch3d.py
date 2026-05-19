@@ -1,20 +1,30 @@
-"""OpenCASCADE implementation of `rapidcadpy.sketch3d.Sketch3D`.
+"""OCP implementation of `rapidcadpy.sketch3d.Sketch3D`.
 
-This is a 3D *path* sketch used as the spine for sweeps/pipes.
+This is a 3D path sketch used as the spine for sweeps and pipes.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
-from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
-from OCC.Core.gp import gp_Pnt
+from OCP.BRep import BRep_Tool
+from OCP.BRepAdaptor import BRepAdaptor_CompCurve
+from OCP.BRepAlgoAPI import BRepAlgoAPI_Fuse
+from OCP.BRepBuilderAPI import (
+    BRepBuilderAPI_MakeEdge,
+    BRepBuilderAPI_MakeFace,
+    BRepBuilderAPI_MakeWire,
+    BRepBuilderAPI_Transform,
+    BRepBuilderAPI_TransitionMode,
+)
+from OCP.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
+from OCP.gp import gp_Ax2, gp_Ax3, gp_Circ, gp_Dir, gp_Pnt, gp_Trsf, gp_Vec
 
 from ...sketch3d import Polyline3D, Sketch3D
 
 
 class OccSketch3D(Sketch3D):
-    """OpenCASCADE-backed 3D sketch (wire builder)."""
+    """OCP-backed 3D sketch (wire builder)."""
 
     def _primitive_to_edges(self, primitive: object):
         if isinstance(primitive, Polyline3D):
@@ -25,6 +35,7 @@ class OccSketch3D(Sketch3D):
                     gp_Pnt(float(b[0]), float(b[1]), float(b[2])),
                 ).Edge()
             return
+
         raise TypeError(f"Unsupported 3D primitive: {type(primitive).__name__}")
 
     def wire(self):
@@ -32,8 +43,8 @@ class OccSketch3D(Sketch3D):
             raise ValueError("Cannot create wire: no primitives in 3D sketch")
 
         wire_builder: Any = BRepBuilderAPI_MakeWire()
-        for prim in self._primitives:
-            for edge in self._primitive_to_edges(prim):
+        for primitive in self._primitives:
+            for edge in self._primitive_to_edges(primitive):
                 wire_builder.Add(edge)
         wire_builder.Build()
 
@@ -48,17 +59,6 @@ class OccSketch3D(Sketch3D):
         is_frenet: bool = True,
         transition_mode: str = "right",
     ):
-        """Create a pipe along this 3D sketch (wire) spine."""
-
-        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeFace
-        from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
-        from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Fuse
-        from OCC.Core.gp import gp_Ax2, gp_Circ, gp_Dir, gp_Pnt, gp_Vec
-        from OCC.Core.BRepAdaptor import BRepAdaptor_CompCurve
-        from OCC.Core.BRep import BRep_Tool
-        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
-        from typing import cast
-
         from .shape import OccShape
 
         spine = self.wire()
@@ -67,7 +67,7 @@ class OccSketch3D(Sketch3D):
         wire_adaptor = BRepAdaptor_CompCurve(spine)
         first_param = wire_adaptor.FirstParameter()
         last_param = wire_adaptor.LastParameter()
-        is_closed = BRep_Tool.IsClosed(spine)
+        is_closed = BRep_Tool.IsClosed_s(spine)
 
         start_point = wire_adaptor.Value(first_param)
         tangent_vec = gp_Vec()
@@ -129,36 +129,26 @@ class OccSketch3D(Sketch3D):
             end_profile_wire = BRepBuilderAPI_MakeWire(end_profile_edge).Wire()
             end_cap_face = BRepBuilderAPI_MakeFace(end_profile_wire).Face()
 
-            fuse_op = BRepAlgoAPI_Fuse(result_shape, start_cap_face)
-            fuse_op.Build()
-            if fuse_op.IsDone():
-                result_shape = fuse_op.Shape()
+            fuse_start = BRepAlgoAPI_Fuse(result_shape, start_cap_face)
+            fuse_start.Build()
+            if fuse_start.IsDone():
+                result_shape = fuse_start.Shape()
 
-            fuse_op2 = BRepAlgoAPI_Fuse(result_shape, end_cap_face)
-            fuse_op2.Build()
-            if fuse_op2.IsDone():
-                result_shape = fuse_op2.Shape()
+            fuse_end = BRepAlgoAPI_Fuse(result_shape, end_cap_face)
+            fuse_end.Build()
+            if fuse_end.IsDone():
+                result_shape = fuse_end.Shape()
 
         return OccShape(obj=result_shape, app=self.app)
 
     def sweep(
         self,
-        profile: "Any",
+        profile: Any,
         make_solid: bool = True,
         is_frenet: bool = True,
         transition_mode: str = "right",
         auto_align_profile: bool = False,
     ):
-        """Sweep a closed 2D OCC profile sketch along this 3D spine."""
-
-        from OCC.Core.BRepOffsetAPI import BRepOffsetAPI_MakePipeShell
-        from OCC.Core.BRepAdaptor import BRepAdaptor_CompCurve
-        from OCC.Core.gp import gp_Ax2, gp_Ax3, gp_Dir, gp_Pnt, gp_Vec
-        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_Transform
-        from OCC.Core.gp import gp_Trsf
-        from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_TransitionMode
-        from typing import cast
-
         from .shape import OccShape
 
         spine = self.wire()

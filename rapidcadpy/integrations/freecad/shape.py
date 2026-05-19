@@ -4,7 +4,7 @@ FreeCAD Shape – wraps a Part.Shape and implements the Shape ABC.
 
 import os
 import tempfile
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Any
 
 from ...shape import Shape
 
@@ -12,11 +12,66 @@ from ...shape import Shape
 class FreeCADShape(Shape):
     """
     Concrete Shape backed by a FreeCAD ``Part.Shape`` object stored in
-    ``self.obj``.
+    ``self.obj``. Maintains a feature tree in the FreeCAD document.
+
+    self.obj: The computed OCC shape (for Python operations)
+    self._doc: Reference to the FreeCAD document (to add features)
+    self._current_feature: The Part::Feature or derived object that holds this shape
     """
 
-    def __init__(self, obj, app) -> None:  # type: ignore[override]
+    def __init__(self, obj, app, doc=None, current_feature=None) -> None:  # type: ignore[override]
         super().__init__(obj, app)
+        self._doc = doc
+        self._current_feature = current_feature
+        self._feature_counter = 0
+
+    def _doc_get_next_index(self) -> int:
+        """Get next feature index for naming."""
+        self._feature_counter += 1
+        return self._feature_counter
+
+    def _store_result_shape(self, result_shape, prefix: str) -> None:
+        """Update ``self.obj`` and mirror the result into the FreeCAD document."""
+        self.obj = result_shape
+        if self._doc and self._current_feature:
+            feature = self._doc.addObject(
+                "Part::Feature", f"{prefix}_{self._doc_get_next_index()}"
+            )
+            feature.Shape = result_shape
+            self._doc.recompute()
+            self._current_feature = feature
+
+    def _raw_edges(self) -> List[Any]:
+        return list(self.obj.Edges)
+
+    def _is_linear_edge(self, edge) -> bool:
+        return len(edge.Vertexes) >= 2
+
+    def _edge_direction_vector(self, edge) -> tuple:
+        start = edge.Vertexes[0].Point
+        end = edge.Vertexes[-1].Point
+        return (
+            float(end.x - start.x),
+            float(end.y - start.y),
+            float(end.z - start.z),
+        )
+
+    def _apply_fillet_to_edges(
+        self, edges: List[Any], radius: float, selector: Optional[str] = None
+    ) -> None:
+        # Compute the filleted shape
+        try:
+            filleted = self.obj.makeFillet(float(radius), edges)
+        except Exception:
+            # Per-edge fallback
+            filleted = self.obj
+            for edge in edges:
+                try:
+                    filleted = filleted.makeFillet(float(radius), [edge])
+                except Exception:
+                    continue
+
+        self._store_result_shape(filleted, "Fillet")
 
     # ------------------------------------------------------------------
     # Abstract implementations
@@ -30,11 +85,30 @@ class FreeCADShape(Shape):
         """Export shape to an ASCII or binary STL file."""
         self.obj.exportStl(file_name)
 
+    def to_fcstd(self, file_name: str) -> None:
+        """Export this shape to a FreeCAD .FCStd file.
+
+        If this shape was created with a document, the entire feature tree
+        (Pad, Boolean, Fillet, etc.) is saved. Otherwise, just the geometry
+        is realized as a Part::Feature.
+        """
+        import FreeCAD
+
+        if self._doc:
+            # Save the existing feature tree
+            self._doc.saveAs(file_name)
+        else:
+            # No doc: create a minimal one with just this shape
+            doc = FreeCAD.newDocument("export")
+            feature = doc.addObject("Part::Feature", "Shape")
+            feature.Shape = self.obj
+            doc.recompute()
+            doc.saveAs(file_name)
+            FreeCAD.closeDocument(doc.Name)
+
     def to_step(self, file_name: str) -> None:
         """Export shape to a STEP file."""
-        import Part
-
-        Part.export([self.obj], file_name)
+        self.obj.exportStep(file_name)
 
     def to_png(
         self,
@@ -61,17 +135,21 @@ class FreeCADShape(Shape):
                 os.remove(tmp_stl)
 
     def cut(self, other: "FreeCADShape") -> "FreeCADShape":
-        """Boolean subtraction – modifies this shape in-place."""
-        self.obj = self.obj.cut(other.obj)
+        """Boolean subtraction – modifies this shape and mirrors the result into the doc."""
+        self._store_result_shape(self.obj.cut(other.obj), "Cut")
+        self._clear_edge_selection()
         return self
 
     def union(
         self, other: Union["FreeCADShape", List["FreeCADShape"]]
     ) -> "FreeCADShape":
-        """Boolean union – modifies this shape in-place."""
+        """Boolean union – modifies this shape and mirrors the result into the doc."""
         others = [other] if not isinstance(other, list) else other
+
         for s in others:
-            self.obj = self.obj.fuse(s.obj)
+            self._store_result_shape(self.obj.fuse(s.obj), "Fuse")
+
+        self._clear_edge_selection()
         return self
 
     # ------------------------------------------------------------------
@@ -86,6 +164,7 @@ class FreeCADShape(Shape):
 
         vec = FreeCAD.Vector(x, y, z)
         self.obj.translate(vec)
+        self._clear_edge_selection()
         return self
 
 

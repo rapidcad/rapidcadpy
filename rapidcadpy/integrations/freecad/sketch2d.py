@@ -3,8 +3,7 @@ FreeCAD Sketch2D – builds Part.Wire / Part.Face from 2D primitives and
 supports extrude, pipe, and sweep operations.
 """
 
-import math
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from ...sketch2d import Sketch2D
 from ...primitives import Arc, Circle, Line
@@ -138,6 +137,70 @@ class FreeCADSketch2D(Sketch2D):
                 return None
             raise ValueError(f"Face construction failed: {exc}") from exc
 
+    def _create_editable_sketch(self, doc, name: str):
+        """Create a Sketcher sketch for the stored 2-D primitives."""
+        import FreeCAD
+        import Part
+        import Sketcher  # noqa: F401
+
+        sketch_obj = doc.addObject("Sketcher::SketchObject", name)
+
+        origin_3d = self._workplane._to_3d(0.0, 0.0)
+        n = self._workplane.normal_vector
+        rotation = FreeCAD.Rotation(
+            FreeCAD.Vector(0.0, 0.0, 1.0),
+            FreeCAD.Vector(float(n[0]), float(n[1]), float(n[2])),
+        )
+        sketch_obj.Placement = FreeCAD.Placement(FreeCAD.Vector(*origin_3d), rotation)
+
+        for primitive in self._primitives:
+            if isinstance(primitive, Line):
+                geom = Part.LineSegment(
+                    FreeCAD.Vector(
+                        float(primitive.start[0]),
+                        float(primitive.start[1]),
+                        0.0,
+                    ),
+                    FreeCAD.Vector(
+                        float(primitive.end[0]),
+                        float(primitive.end[1]),
+                        0.0,
+                    ),
+                )
+            elif isinstance(primitive, Circle):
+                geom = Part.Circle(
+                    FreeCAD.Vector(
+                        float(primitive.center[0]),
+                        float(primitive.center[1]),
+                        0.0,
+                    ),
+                    FreeCAD.Vector(0.0, 0.0, 1.0),
+                    float(primitive.radius),
+                )
+            elif isinstance(primitive, Arc):
+                geom = Part.ArcOfCircle(
+                    FreeCAD.Vector(
+                        float(primitive.start[0]),
+                        float(primitive.start[1]),
+                        0.0,
+                    ),
+                    FreeCAD.Vector(
+                        float(primitive.mid[0]),
+                        float(primitive.mid[1]),
+                        0.0,
+                    ),
+                    FreeCAD.Vector(
+                        float(primitive.end[0]),
+                        float(primitive.end[1]),
+                        0.0,
+                    ),
+                )
+            else:
+                continue
+            sketch_obj.addGeometry(geom, False)
+
+        return sketch_obj
+
     # ------------------------------------------------------------------
     # Sketch2D abstract method implementations
     # ------------------------------------------------------------------
@@ -193,7 +256,13 @@ class FreeCADSketch2D(Sketch2D):
                 return None
             raise RuntimeError(f"Extrusion failed: {exc}") from exc
 
-        return self._apply_operation(solid, operation)
+        self._last_extrude_distance = float(distance)
+        self._last_extrude_symmetric = bool(symmetric)
+        try:
+            return self._apply_operation(solid, operation)
+        finally:
+            self._last_extrude_distance = None
+            self._last_extrude_symmetric = None
 
     def pipe(self, diameter: float) -> Optional[FreeCADShape]:
         """
@@ -270,6 +339,10 @@ class FreeCADSketch2D(Sketch2D):
         try:
             # makePipeShell(profiles, make_solid, is_frenet)
             solid = spine.makePipeShell([profile_wire], True, True)
+            if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
+                cast(Any, self.app).mark_history_unsupported(
+                    "Pipe replay not implemented for FreeCAD history export"
+                )
             return FreeCADShape(solid, self.app)
         except Exception as exc:
             if self._silent_fail_enabled():
@@ -303,6 +376,10 @@ class FreeCADSketch2D(Sketch2D):
 
         try:
             solid = path_wire.makePipeShell([profile_wire], make_solid, is_frenet)
+            if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
+                cast(Any, self.app).mark_history_unsupported(
+                    "Sweep replay not implemented for FreeCAD history export"
+                )
             return FreeCADShape(solid, self.app)
         except Exception as exc:
             if self._silent_fail_enabled():
@@ -328,27 +405,77 @@ class FreeCADSketch2D(Sketch2D):
     # Internal operation dispatcher
     # ------------------------------------------------------------------
 
-    def _apply_operation(self, solid, operation: str) -> Optional[FreeCADShape]:
+    def _apply_operation(
+        self,
+        solid,
+        operation: str,
+    ) -> Optional[FreeCADShape]:
         """
         Apply *operation* to *solid* with respect to existing app shapes.
 
         Returns a FreeCADShape (new or modified existing).
         """
+
+        def _make_freecad_shape(obj, app):
+            """Helper to create FreeCADShape with doc and feature if available."""
+            doc = None
+            feat = None
+            if app is not None and hasattr(app, "get_doc"):
+                doc = app.get_doc()
+                feat_idx = app.get_next_feature_index()
+
+                if operation == "NewBodyFeatureOperation" and self._primitives:
+                    try:
+                        sketch = self._create_editable_sketch(doc, f"Sketch_{feat_idx}")
+                        extrusion = doc.addObject(
+                            "Part::Extrusion", f"Extrude_{feat_idx}"
+                        )
+                        extrusion.Base = sketch
+                        extrusion.DirMode = "Normal"
+                        extrusion.Solid = True
+                        extrusion.TaperAngle = 0.0
+                        extrusion.TaperAngleRev = 0.0
+
+                        distance = float(getattr(self, "_last_extrude_distance", 0.0))
+                        symmetric = bool(
+                            getattr(self, "_last_extrude_symmetric", False)
+                        )
+                        if symmetric:
+                            extrusion.LengthFwd = abs(distance) / 2.0
+                            extrusion.LengthRev = abs(distance) / 2.0
+                        elif distance >= 0.0:
+                            extrusion.LengthFwd = distance
+                            extrusion.LengthRev = 0.0
+                        else:
+                            extrusion.LengthFwd = 0.0
+                            extrusion.LengthRev = abs(distance)
+
+                        feat = extrusion
+                    except Exception:
+                        feat = doc.addObject("Part::Feature", f"Feature_{feat_idx}")
+                        feat.Shape = obj
+                else:
+                    feat = doc.addObject("Part::Feature", f"Feature_{feat_idx}")
+                    feat.Shape = obj
+                doc.recompute()
+            return FreeCADShape(obj, app, doc=doc, current_feature=feat)
+
         if operation in ("Cut", "CutOperation"):
             if self.app and self.app._shapes:
                 for shape in self.app._shapes:
+                    freecad_shape = cast(FreeCADShape, shape)
                     if hasattr(shape, "obj"):
-                        shape.obj = shape.obj.cut(solid)
-                return self.app._shapes[-1]
-            return FreeCADShape(solid, self.app)
+                        freecad_shape.obj = freecad_shape.obj.cut(solid)
+                return cast(FreeCADShape, self.app._shapes[-1])
+            return _make_freecad_shape(solid, self.app)
 
         elif operation == "JoinBodyFeatureOperation":
             if self.app and self.app._shapes:
-                last = self.app._shapes[-1]
+                last = cast(FreeCADShape, self.app._shapes[-1])
                 if hasattr(last, "obj"):
                     last.obj = last.obj.fuse(solid)
                     return last
-            return FreeCADShape(solid, self.app)
+            return _make_freecad_shape(solid, self.app)
 
         else:  # NewBodyFeatureOperation (default)
-            return FreeCADShape(solid, self.app)
+            return _make_freecad_shape(solid, self.app)

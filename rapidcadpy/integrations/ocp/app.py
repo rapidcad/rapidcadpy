@@ -49,6 +49,13 @@ ISO_METRIC_THREADS: Dict[str, Tuple[float, float]] = {
 class OpenCascadeOcpApp(App):
 
     @property
+    def sketch_3d(self):
+        """Entry point for building 3D path sketches (wires)."""
+        from .sketch3d import OccSketch3D
+
+        return OccSketch3D(self)
+
+    @property
     def workplane_class(self):
         from .workplane import OccWorkplane
 

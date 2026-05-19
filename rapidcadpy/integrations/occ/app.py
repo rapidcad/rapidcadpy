@@ -10,6 +10,12 @@ class OpenCascadeApp(App):
         super().__init__(OccWorkplane)
 
     @property
+    def workplane_class(self):
+        from .workplane import OccWorkplane
+
+        return OccWorkplane
+
+    @property
     def sketch_class(self):
         from .sketch import OccSketch2D
 
