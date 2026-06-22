@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -16,6 +17,66 @@ if TYPE_CHECKING:
     from .load_case import LoadCase
 
 logger = logging.getLogger(__name__)
+
+# meshio element types that are 1-D/0-D (beams, trusses, connectors, points).
+# These are never the 3-D design mesh and are stripped before handing the deck
+# to meshio — see _sanitize_inp_for_meshio for why.
+_NON_SOLID_MESHIO_TYPES = {"line", "line3", "vertex"}
+
+_P_ELEMENT_TYPE = re.compile(r"TYPE\s*=\s*([A-Za-z0-9]+)", re.IGNORECASE)
+
+
+def _sanitize_inp_for_meshio(path: Path) -> Path:
+    """Strip *ELEMENT blocks that meshio cannot parse, returning a temp file.
+
+    Solver-export tools (HyperMesh, Abaqus/CAE) frequently emit *ELEMENT blocks
+    that mix connectivity widths under a single ``TYPE`` — e.g. rigid-spider
+    ``B31`` blocks containing both 2-node and 3-node rows. meshio assumes a fixed
+    node count per element type and reshapes the flat token stream accordingly,
+    so a mixed-width block silently misaligns and an element ID gets read as a
+    node ID (``KeyError`` in ``point_ids[node]``). Connector/spring/mass element
+    types meshio doesn't know about raise outright instead.
+
+    These blocks are always beams/trusses/connectors — never the 3-D solid design
+    mesh — so we drop any *ELEMENT block whose type is unknown to meshio or maps
+    to a 1-D/0-D type, leaving nodes, solid elements and all sets untouched.
+    """
+    from meshio.abaqus._abaqus import abaqus_to_meshio_type  # noqa: PLC0415
+
+    out_lines: List[str] = []
+    skip_block = False
+    with open(path, "r") as f:
+        for line in f:
+            stripped = line.strip()
+            # Keyword lines start with a single '*'; '**' is an Abaqus comment.
+            if stripped.startswith("*") and not stripped.startswith("**"):
+                keyword = stripped[1:].split(",", 1)[0].strip().upper()
+                if keyword == "ELEMENT":
+                    m = _P_ELEMENT_TYPE.search(stripped)
+                    etype = m.group(1).upper() if m else ""
+                    meshio_type = abaqus_to_meshio_type.get(etype)
+                    skip_block = (
+                        meshio_type is None or meshio_type in _NON_SOLID_MESHIO_TYPES
+                    )
+                    if skip_block:
+                        logger.info(
+                            "Stripping unsupported *ELEMENT block TYPE=%s for meshio",
+                            etype or "<missing>",
+                        )
+                else:
+                    # Any other keyword ends a skipped element block.
+                    skip_block = False
+            if not skip_block:
+                out_lines.append(line)
+
+    tmp = tempfile.NamedTemporaryFile(
+        "w", suffix=".inp", delete=False, encoding="utf-8"
+    )
+    try:
+        tmp.writelines(out_lines)
+    finally:
+        tmp.close()
+    return Path(tmp.name)
 
 
 class LoadCaseFromFreeCadInp:
@@ -45,19 +106,19 @@ class LoadCaseFromFreeCadInp:
 
         # ------------------------------------------------------------------
         # 1. Parse mesh via meshio (nodes, elements, NSETs, ELSETs)
+        #
+        # Beam/connector *ELEMENT blocks (e.g. mixed-width rigid-spider B31s)
+        # break meshio's fixed-width parser, so read from a sanitized copy that
+        # keeps only the solid mesh, nodes and sets.
         # ------------------------------------------------------------------
+        sanitized_path = _sanitize_inp_for_meshio(path)
         try:
-            mesh = meshio.read(str(path))
-        except (Exception, SystemExit) as _meshio_err:
-            logger.debug(
-                "meshio failed to parse %s (%s); falling back to native "
-                "Abaqus parser.",
-                path.name,
-                _meshio_err,
-            )
-            from .abaqus_inp_load_case import AbaqusInpLoadCase  # noqa: PLC0415
-
-            return AbaqusInpLoadCase.from_inp(filepath)
+            mesh = meshio.read(str(sanitized_path))
+        finally:
+            try:
+                sanitized_path.unlink()
+            except OSError:
+                pass
 
         nodes_arr = np.asarray(mesh.points, dtype=np.float64)
         # Ensure 3-D coordinate array even when meshio returns 2-D geometry
@@ -207,6 +268,13 @@ class LoadCaseFromFreeCadInp:
         load_case.mesh_elements = elems_arr.astype(np.int32)
         load_case.mesh_element_type = resolved_elem_type
 
+        # Store per-NSET node coordinates for 3-D visualization in the frontend
+        load_case.node_set_coords = {
+            name: nodes_arr[idx_arr].tolist()
+            for name, idx_arr in point_sets.items()
+            if idx_arr.size > 0
+        }
+
         # ------------------------------------------------------------------
         # 4. Build spatial selectors from NSETs (meshio point_sets)
         #
@@ -343,6 +411,8 @@ class LoadCaseFromFreeCadInp:
                         dofs=dof_lock,
                         tolerance=1,
                     )
+                    bc.region_id = sel_id
+                    bc.nset_name = nset_name
                     load_case.boundary_conditions.append(bc)
             elif nset_name.isdigit():
                 idx = node_id_to_idx.get(int(nset_name))

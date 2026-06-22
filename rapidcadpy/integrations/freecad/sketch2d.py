@@ -145,54 +145,65 @@ class FreeCADSketch2D(Sketch2D):
 
         sketch_obj = doc.addObject("Sketcher::SketchObject", name)
 
-        origin_3d = self._workplane._to_3d(0.0, 0.0)
-        n = self._workplane.normal_vector
-        rotation = FreeCAD.Rotation(
-            FreeCAD.Vector(0.0, 0.0, 1.0),
-            FreeCAD.Vector(float(n[0]), float(n[1]), float(n[2])),
+        # Reconstruct the editable sketch so its world geometry matches `_to_3d`
+        # / `.obj` exactly. Two subtleties:
+        #  * A FreeCAD Placement must be a proper (right-handed) rotation, but the
+        #    workplane's local frame is LEFT-handed for the XZ plane
+        #    (lx x ly = -lz). So we build the placement from a right-handed
+        #    in-plane Y axis ry = lz x lx ...
+        #  * ... and compensate by flipping the sketch's local Y when the
+        #    workplane's stated ly points opposite ry (``y_sign``), so points
+        #    still land at origin + px*lx + py*ly like `_to_3d`.
+        wp = self._workplane
+        ox, oy, oz = wp._to_3d(0.0, 0.0)
+        lx, ly, lz = wp._local_x, wp._local_y, wp._local_z
+        # ry = lz x lx (right-handed with lz as the sketch normal)
+        ry_x = lz.y * lx.z - lz.z * lx.y
+        ry_y = lz.z * lx.x - lz.x * lx.z
+        ry_z = lz.x * lx.y - lz.y * lx.x
+        y_sign = 1.0 if (ly.x * ry_x + ly.y * ry_y + ly.z * ry_z) >= 0 else -1.0
+        matrix = FreeCAD.Matrix(
+            float(lx.x),
+            float(ry_x),
+            float(lz.x),
+            float(ox),
+            float(lx.y),
+            float(ry_y),
+            float(lz.y),
+            float(oy),
+            float(lx.z),
+            float(ry_z),
+            float(lz.z),
+            float(oz),
+            0.0,
+            0.0,
+            0.0,
+            1.0,
         )
-        sketch_obj.Placement = FreeCAD.Placement(FreeCAD.Vector(*origin_3d), rotation)
+        sketch_obj.Placement = FreeCAD.Placement(matrix)
+
+        def _v(px, py):
+            return FreeCAD.Vector(float(px), y_sign * float(py), 0.0)
 
         for primitive in self._primitives:
             if isinstance(primitive, Line):
                 geom = Part.LineSegment(
-                    FreeCAD.Vector(
-                        float(primitive.start[0]),
-                        float(primitive.start[1]),
-                        0.0,
-                    ),
-                    FreeCAD.Vector(
-                        float(primitive.end[0]),
-                        float(primitive.end[1]),
-                        0.0,
-                    ),
+                    _v(primitive.start[0], primitive.start[1]),
+                    _v(primitive.end[0], primitive.end[1]),
                 )
             elif isinstance(primitive, Circle):
                 geom = Part.Circle(
-                    FreeCAD.Vector(
-                        float(primitive.center[0]),
-                        float(primitive.center[1]),
-                        0.0,
-                    ),
+                    _v(primitive.center[0], primitive.center[1]),
                     FreeCAD.Vector(0.0, 0.0, 1.0),
                     float(primitive.radius),
                 )
             elif isinstance(primitive, Arc):
                 geom = Part.ArcOfCircle(
-                    FreeCAD.Vector(
-                        float(primitive.start[0]),
-                        float(primitive.start[1]),
-                        0.0,
-                    ),
-                    FreeCAD.Vector(
-                        float(primitive.mid[0]),
-                        float(primitive.mid[1]),
-                        0.0,
-                    ),
-                    FreeCAD.Vector(
-                        float(primitive.end[0]),
-                        float(primitive.end[1]),
-                        0.0,
+                    _v(primitive.start[0], primitive.start[1]),
+                    _v(primitive.mid[0], primitive.mid[1]),
+                    _v(
+                        primitive.end[0],
+                        primitive.end[1],
                     ),
                 )
             else:

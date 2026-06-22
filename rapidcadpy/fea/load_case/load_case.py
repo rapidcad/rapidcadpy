@@ -871,10 +871,23 @@ class LoadCase(LoadCaseFromFreeCadInp):
             location: Any,
             tolerance_scale: float = 1.0,
         ) -> np.ndarray:
-            spans = np.ptp(nodes_arr, axis=0)
-            model_scale = max(float(np.max(spans)), 1.0)
-            base_tol = max(model_scale * 1e-6, 1e-8)
-            tol = base_tol * max(float(tolerance_scale), 1.0)
+            # Use half the mesh spacing as base tolerance so that nodes just
+            # outside a thin selector band (e.g. a 1 mm deck in a 5 mm mesh)
+            # are still captured. Falls back to a model-scale epsilon when
+            # mesh_size is unknown.
+            if mesh_size is not None:
+                base_tol = float(mesh_size) * 0.5
+            else:
+                spans = np.ptp(nodes_arr, axis=0)
+                n_nodes = max(len(nodes_arr), 1)
+                pos_spans = [s for s in spans if s > 0]
+                vol_est = (
+                    float(np.prod(pos_spans))
+                    if len(pos_spans) == 3
+                    else float(np.max(pos_spans or [1.0]))
+                )
+                base_tol = (vol_est / n_nodes) ** (1.0 / max(len(pos_spans), 1)) * 0.5
+            tol = max(base_tol, 1e-8) * max(float(tolerance_scale), 1.0)
             x = nodes_arr[:, 0]
             y = nodes_arr[:, 1]
             z = nodes_arr[:, 2]

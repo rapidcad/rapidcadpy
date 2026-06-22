@@ -1118,6 +1118,8 @@ class AbaqusInpLoadCase:
                         dofs=dof_lock,
                         tolerance=1,
                     )
+                    bc.region_id = sel_id
+                    bc.nset_name = nset_name
                     load_case.boundary_conditions.append(bc)
             elif nset_name.isdigit():
                 idx = node_id_to_idx.get(int(nset_name))
@@ -1371,6 +1373,13 @@ class AbaqusInpLoadCase:
             f"{getattr(ld, 'name', '?')}({getattr(ld, 'direction', '?')},{getattr(ld, 'magnitude_newtons', 0.0):.3g}N)"
             for ld in load_case.loads
         ]
+        # Store per-NSET node coordinates for 3-D visualization in the frontend
+        load_case.node_set_coords = {
+            name: nodes_arr[idx_arr].tolist()
+            for name, idx_arr in point_sets.items()
+            if idx_arr.size > 0
+        }
+
         logger.info(
             "Parsed Abaqus INP (native): %d nodes, %d %s elements, "
             "%d NSETs (%d with selector), %d BCs, %d loads, %d amplitudes\n"

@@ -41,6 +41,43 @@ class FreeCADShape(Shape):
             self._doc.recompute()
             self._current_feature = feature
 
+    def _make_boolean_feature(
+        self, type_id: str, others: List["FreeCADShape"], prefix: str
+    ) -> bool:
+        """Create a parametric FreeCAD boolean referencing operand features.
+
+        ``Part::Cut`` / ``Part::MultiFuse`` / ``Part::MultiCommon`` reference the
+        operand document objects and let FreeCAD recompute the result, so the
+        FCStd export keeps an editable boolean node (with the operand sketches /
+        extrusions nested underneath) instead of a baked solid.
+
+        Returns ``True`` when the parametric feature was created; ``False`` when
+        an operand is not document-backed (caller should fall back to a baked
+        OCC boolean so geometry is still correct).
+        """
+        if not self._doc or self._current_feature is None:
+            return False
+
+        operand_feats = []
+        for s in others:
+            feat = getattr(s, "_current_feature", None)
+            if feat is None or getattr(s, "_doc", None) is not self._doc:
+                return False
+            operand_feats.append(feat)
+
+        doc = self._doc
+        boolean = doc.addObject(type_id, f"{prefix}_{self._doc_get_next_index()}")
+        if type_id == "Part::Cut":
+            boolean.Base = self._current_feature
+            boolean.Tool = operand_feats[0]
+        else:  # Part::MultiFuse / Part::MultiCommon
+            boolean.Shapes = [self._current_feature] + operand_feats
+        doc.recompute()
+
+        self.obj = boolean.Shape
+        self._current_feature = boolean
+        return True
+
     def _raw_edges(self) -> List[Any]:
         return list(self.obj.Edges)
 
@@ -135,19 +172,21 @@ class FreeCADShape(Shape):
                 os.remove(tmp_stl)
 
     def cut(self, other: "FreeCADShape") -> "FreeCADShape":
-        """Boolean subtraction – modifies this shape and mirrors the result into the doc."""
-        self._store_result_shape(self.obj.cut(other.obj), "Cut")
+        """Boolean subtraction as a parametric ``Part::Cut`` (baked fallback)."""
+        if not self._make_boolean_feature("Part::Cut", [other], "Cut"):
+            self._store_result_shape(self.obj.cut(other.obj), "Cut")
         self._clear_edge_selection()
         return self
 
     def union(
         self, other: Union["FreeCADShape", List["FreeCADShape"]]
     ) -> "FreeCADShape":
-        """Boolean union – modifies this shape and mirrors the result into the doc."""
+        """Boolean union as a parametric ``Part::MultiFuse`` (baked fallback)."""
         others = [other] if not isinstance(other, list) else other
 
-        for s in others:
-            self._store_result_shape(self.obj.fuse(s.obj), "Fuse")
+        if not self._make_boolean_feature("Part::MultiFuse", others, "Fuse"):
+            for s in others:
+                self._store_result_shape(self.obj.fuse(s.obj), "Fuse")
 
         self._clear_edge_selection()
         return self
@@ -159,11 +198,25 @@ class FreeCADShape(Shape):
     def translate(
         self, x: float = 0.0, y: float = 0.0, z: float = 0.0
     ) -> "FreeCADShape":
-        """Translate the shape in-place by (x, y, z)."""
+        """Translate the shape in-place by (x, y, z).
+
+        When the shape is document-backed, the feature's ``Placement`` is moved
+        (and ``obj`` re-synced from it) so the document feature stays consistent
+        with ``obj`` — required for parametric booleans that reference it. Falls
+        back to a direct OCC translate otherwise.
+        """
         import FreeCAD
 
         vec = FreeCAD.Vector(x, y, z)
-        self.obj.translate(vec)
+        if self._doc and self._current_feature is not None:
+            feature = self._current_feature
+            feature.Placement = FreeCAD.Placement(vec, FreeCAD.Rotation()).multiply(
+                feature.Placement
+            )
+            self._doc.recompute()
+            self.obj = feature.Shape
+        else:
+            self.obj.translate(vec)
         self._clear_edge_selection()
         return self
 
