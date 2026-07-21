@@ -4,6 +4,7 @@ FreeCAD Shape – wraps a Part.Shape and implements the Shape ABC.
 
 import os
 import tempfile
+from pathlib import Path
 from typing import List, Optional, Union, Any
 
 from ...shape import Shape
@@ -159,7 +160,7 @@ class FreeCADShape(Shape):
         Render the shape to a PNG via a temporary STL export.
 
         Supported rendering back-ends (tried in order when backend='auto'):
-        pyvista, vedo.
+        pillow (software/headless), pyvista, vedo.
         """
         with tempfile.NamedTemporaryFile(suffix=".stl", delete=False) as tmp:
             tmp_stl = tmp.name
@@ -235,12 +236,20 @@ def _render_stl(
     backend: str = "auto",
 ) -> None:
     """Render *stl_file* to *output* (or display interactively if None)."""
-    backends = ["pyvista", "vedo"] if backend == "auto" else [backend]
+    if backend == "auto":
+        backends = (
+            ["pillow", "pyvista", "vedo"] if output else ["pyvista", "vedo"]
+        )
+    else:
+        backends = [backend]
     last_error: Optional[Exception] = None
 
     for name in backends:
         try:
-            if name == "pyvista":
+            if name == "pillow":
+                _render_pillow(stl_file, output, view, width, height)
+                return
+            elif name == "pyvista":
                 _render_pyvista(stl_file, output, view, width, height)
                 return
             elif name == "vedo":
@@ -251,9 +260,124 @@ def _render_stl(
             continue
 
     raise ImportError(
-        "No rendering backend available. Install pyvista or vedo. "
+        "No rendering backend available. Install Pillow, pyvista, or vedo. "
         f"Last error: {last_error}"
     )
+
+
+def _load_stl_triangles(stl_file: str):
+    """Load binary or ASCII STL triangles into an ``(n, 3, 3)`` array."""
+    import numpy as np
+
+    data = Path(stl_file).read_bytes()
+    if len(data) >= 84:
+        triangle_count = int.from_bytes(data[80:84], "little")
+        expected_size = 84 + triangle_count * 50
+        if triangle_count > 0 and expected_size == len(data):
+            record_type = np.dtype(
+                [
+                    ("normal", "<f4", (3,)),
+                    ("vertices", "<f4", (3, 3)),
+                    ("attribute", "<u2"),
+                ]
+            )
+            records = np.frombuffer(
+                data, dtype=record_type, count=triangle_count, offset=84
+            )
+            return records["vertices"].astype(float, copy=True)
+
+    vertices = []
+    for line in data.decode("ascii", errors="ignore").splitlines():
+        parts = line.strip().split()
+        if len(parts) == 4 and parts[0].lower() == "vertex":
+            vertices.append([float(value) for value in parts[1:]])
+    if not vertices or len(vertices) % 3:
+        raise ValueError(f"Could not read STL triangles from {stl_file}")
+    return np.asarray(vertices, dtype=float).reshape((-1, 3, 3))
+
+
+def _render_pillow(
+    stl_file: str, output: Optional[str], view: str, width: int, height: int
+) -> None:
+    """Render STL triangles with Pillow only (no GUI or OpenGL required)."""
+    if not output:
+        raise ValueError("The Pillow renderer requires an output path.")
+
+    import numpy as np
+    from PIL import Image, ImageDraw
+
+    triangles = _load_stl_triangles(stl_file)
+    points = triangles.reshape((-1, 3))
+    center = (points.min(axis=0) + points.max(axis=0)) / 2.0
+    triangles = triangles - center
+
+    view_name = view.lower()
+    if view_name in ("iso", "isometric"):
+        camera = np.asarray((1.0, -1.0, 0.8))
+        up_hint = np.asarray((0.0, 0.0, 1.0))
+    elif view_name in ("front", "y"):
+        camera = np.asarray((0.0, -1.0, 0.0))
+        up_hint = np.asarray((0.0, 0.0, 1.0))
+    elif view_name in ("top", "z"):
+        camera = np.asarray((0.0, 0.0, 1.0))
+        up_hint = np.asarray((0.0, 1.0, 0.0))
+    elif view_name in ("right", "x"):
+        camera = np.asarray((1.0, 0.0, 0.0))
+        up_hint = np.asarray((0.0, 0.0, 1.0))
+    else:
+        raise ValueError(
+            f"Unsupported view '{view}'. Use iso, front, top, or right."
+        )
+
+    camera = camera / np.linalg.norm(camera)
+    screen_right = np.cross(camera, up_hint)
+    screen_right = screen_right / np.linalg.norm(screen_right)
+    screen_up = np.cross(screen_right, camera)
+
+    projected_x = triangles @ screen_right
+    projected_y = triangles @ screen_up
+    depth = triangles @ camera
+    x_min, x_max = float(projected_x.min()), float(projected_x.max())
+    y_min, y_max = float(projected_y.min()), float(projected_y.max())
+    x_span = max(x_max - x_min, 1e-9)
+    y_span = max(y_max - y_min, 1e-9)
+    margin = 0.08
+    scale = min(
+        width * (1.0 - 2.0 * margin) / x_span,
+        height * (1.0 - 2.0 * margin) / y_span,
+    )
+    x_offset = (width - x_span * scale) / 2.0 - x_min * scale
+    y_offset = (height - y_span * scale) / 2.0 + y_max * scale
+
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    face_vectors_1 = triangles[:, 1] - triangles[:, 0]
+    face_vectors_2 = triangles[:, 2] - triangles[:, 0]
+    normals = np.cross(face_vectors_1, face_vectors_2)
+    normal_lengths = np.linalg.norm(normals, axis=1)
+    normal_lengths[normal_lengths == 0] = 1.0
+    normals = normals / normal_lengths[:, None]
+    light = np.asarray((0.4, -0.6, 1.0))
+    light = light / np.linalg.norm(light)
+    brightness = 0.35 + 0.65 * np.abs(normals @ light)
+
+    # Cull back-facing triangles, then draw far faces before near faces.
+    visible = np.flatnonzero((normals @ camera) > 1e-8)
+    if not len(visible):
+        visible = np.arange(len(triangles))
+    draw_order = visible[np.argsort(depth.mean(axis=1)[visible])]
+    for index in draw_order:
+        polygon = [
+            (
+                float(projected_x[index, vertex] * scale + x_offset),
+                float(y_offset - projected_y[index, vertex] * scale),
+            )
+            for vertex in range(3)
+        ]
+        shade = int(105 + 125 * float(brightness[index]))
+        draw.polygon(polygon, fill=(shade, shade, shade))
+
+    image.save(output, format="PNG")
 
 
 def _render_pyvista(
