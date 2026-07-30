@@ -371,6 +371,36 @@ class LoadCaseFromFreeCadInp:
             ids = _find_selectors(target)
             return ids[0] if ids else None
 
+        visible_node_indices = (
+            np.unique(elems_arr.reshape(-1))
+            if elems_arr.size > 0
+            else np.arange(len(nodes_arr), dtype=np.int64)
+        )
+        visible_node_indices = visible_node_indices[
+            (visible_node_indices >= 0) & (visible_node_indices < len(nodes_arr))
+        ]
+        visible_node_index_set = {int(idx) for idx in visible_node_indices.tolist()}
+        visible_coords = nodes_arr[visible_node_indices]
+
+        def _visual_points_for_nset(name: str) -> List[List[float]]:
+            idx_arr = point_sets.get(name)
+            if idx_arr is None or idx_arr.size == 0:
+                return []
+            if visible_coords.size == 0:
+                return nodes_arr[idx_arr].astype(float).tolist()
+
+            visual_points: List[List[float]] = []
+            for idx in idx_arr:
+                idx_int = int(idx)
+                if idx_int in visible_node_index_set:
+                    coord = nodes_arr[idx_int]
+                else:
+                    source = nodes_arr[idx_int]
+                    nearest = int(np.argmin(np.sum((visible_coords - source) ** 2, axis=1)))
+                    coord = visible_coords[nearest]
+                visual_points.append([float(coord[0]), float(coord[1]), float(coord[2])])
+            return visual_points
+
         # ------------------------------------------------------------------
         # 5. Parse *BOUNDARY → FixedConstraints
         #
@@ -600,6 +630,119 @@ class LoadCaseFromFreeCadInp:
             load.direction = axis_agg
             load.magnitude_newtons = abs(total_mag)
             load_case.loads.append(load)
+
+        # HyperMesh/Abaqus decks may include semantic NSETs such as
+        # "boundary_nodes" and "load_*" without solver *BOUNDARY/*CLOAD cards.
+        # Keep those node groups visible in FE views, but mark inferred loads
+        # as marker-only because no physical magnitude is present in the deck.
+        inferred_constraint_nsets: List[str] = []
+        inferred_load_nsets: List[str] = []
+
+        def _semantic_nset_kind(name: str) -> Optional[str]:
+            normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+            tokens = {tok for tok in normalized.split("_") if tok}
+            if tokens & {"load", "loads", "force", "forces", "cload", "dload"}:
+                return "load"
+            if tokens & {
+                "boundary",
+                "boundaries",
+                "constraint",
+                "constraints",
+                "constrained",
+                "fixed",
+                "fix",
+                "support",
+                "supports",
+            }:
+                return "constraint"
+            return None
+
+        if not load_case.boundary_conditions:
+            for nset_name in sorted(point_sets.keys()):
+                if _semantic_nset_kind(nset_name) != "constraint":
+                    continue
+                for sel_id in _find_selectors(nset_name):
+                    bc = FixedConstraint(
+                        location=load_case.selectors[sel_id].query,
+                        dofs=(True, True, True),
+                        tolerance=1,
+                    )
+                    bc.region_id = sel_id
+                    bc.nset_name = nset_name
+                    bc.inferred_from_nset_name = True
+                    load_case.boundary_conditions.append(bc)
+                    inferred_constraint_nsets.append(nset_name)
+
+        if not load_case.loads:
+            for nset_name in sorted(point_sets.keys()):
+                if _semantic_nset_kind(nset_name) != "load":
+                    continue
+                visual_points = _visual_points_for_nset(nset_name)
+                if visual_points:
+                    visual_coords = np.asarray(visual_points, dtype=np.float64)
+                    marker_point = (
+                        float(visual_coords[:, 0].mean()),
+                        float(visual_coords[:, 1].mean()),
+                        float(visual_coords[:, 2].mean()),
+                    )
+                else:
+                    marker_point = None
+                for sel_id in _find_selectors(nset_name):
+                    query = load_case.selectors[sel_id].query
+                    cx = query.get(
+                        "x",
+                        (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2,
+                    )
+                    cy = query.get(
+                        "y",
+                        (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2,
+                    )
+                    cz = query.get(
+                        "z",
+                        (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2,
+                    )
+                    rx = query.get("rx", min_radius)
+                    ry = query.get("ry", min_radius)
+                    rz = query.get("rz", min_radius)
+                    original_point = (float(cx), float(cy), float(cz))
+                    visual_direction = None
+                    if marker_point is not None:
+                        visual_direction = (
+                            original_point[0] - marker_point[0],
+                            original_point[1] - marker_point[1],
+                            original_point[2] - marker_point[2],
+                        )
+                    load = PointLoad(
+                        point=marker_point
+                        if marker_point is not None
+                        else original_point,
+                        force=(0.0, 0.0, 0.0),
+                        direction=None,
+                        tolerance=1,
+                        search_radius=(float(rx), float(ry), float(rz)),
+                    )
+                    load.name = f"INFERRED_LOAD_MARKER_{nset_name}"
+                    load.region_id = sel_id
+                    load.nset_name = nset_name
+                    load.vector_newtons = {"x": 0.0, "y": 0.0, "z": 0.0}
+                    load.magnitude_newtons = 0.0
+                    load.inferred_from_nset_name = True
+                    load.marker_only = True
+                    load.visual_points = visual_points
+                    load.original_point = original_point
+                    load.visual_direction = visual_direction
+                    load_case.loads.append(load)
+                    inferred_load_nsets.append(nset_name)
+
+        load_case.meta["inferred_constraint_nsets"] = sorted(
+            set(inferred_constraint_nsets)
+        )
+        load_case.meta["inferred_load_nsets"] = sorted(set(inferred_load_nsets))
+        if inferred_load_nsets:
+            load_case.meta["inferred_load_note"] = (
+                "Load node sets were inferred from NSET names only; no *CLOAD "
+                "magnitudes were present, so these loads are marker-only."
+            )
 
         # ------------------------------------------------------------------
         # 7. Parse *DLOAD → AccelerationLoads

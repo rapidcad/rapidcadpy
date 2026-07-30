@@ -1147,3 +1147,37 @@ class TestParseSummaryDetail:
         )
         assert "RAMP" in text
         assert "STEP_AMP" in text
+
+
+@pytest.mark.parametrize(
+    "parser",
+    [AbaqusInpLoadCase, LoadCaseFromFreeCadInp],
+)
+def test_semantic_node_sets_create_marker_only_conditions(tmp_path, parser):
+    """Named node sets remain visible when solver load cards are absent."""
+    inp = """\
+*HEADING
+semantic node sets
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 0.0, 1.0, 0.0
+4, 0.0, 0.0, 1.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*NSET, NSET=boundary_nodes
+1, 2
+*NSET, NSET=load_tip
+3, 4
+"""
+    path = tmp_path / "semantic_nsets.inp"
+    path.write_text(inp, encoding="utf-8")
+
+    load_case = parser.from_inp(str(path))
+
+    assert load_case.meta["inferred_constraint_nsets"] == ["boundary_nodes"]
+    assert load_case.meta["inferred_load_nsets"] == ["load_tip"]
+    assert load_case.boundary_conditions[0].inferred_from_nset_name is True
+    assert load_case.loads[0].inferred_from_nset_name is True
+    assert load_case.loads[0].marker_only is True
+    assert load_case.loads[0].magnitude_newtons == 0.0
