@@ -1,0 +1,175 @@
+---
+title: Importing .inp Files
+description: Load FreeCAD- and Abaqus-exported meshes into RapidCAD-Py for FEA.
+---
+
+import { Callout } from 'fumadocs-ui/components/callout';
+import { Tab, Tabs } from 'fumadocs-ui/components/tabs';
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+RapidCAD-Py can import Abaqus `.inp` files exported by **FreeCAD/CalculiX** or by
+**Abaqus** itself.  Mesh topology is parsed via [meshio](https://github.com/nschloe/meshio);
+boundary conditions and loads are extracted with a dedicated custom parser because
+meshio does not interpret FEA solver directives.
+
+## Quick Start
+
+```python
+from rapidcadpy.fea import LoadCase, FEAAnalyzer
+
+load_case = LoadCase.from_inp("my_model.inp")
+
+analyzer = FEAAnalyzer(
+    load_case=load_case,
+    kernel="torch-fem",
+    device="cpu",
+)
+
+results = analyzer.solve()
+results.show()
+```
+
+<Callout type="info">
+`LoadCase.from_inp()` returns a fully-populated `LoadCase` including mesh, spatial
+selectors built from NSETs, constraints from `*BOUNDARY` cards, and point loads from
+`*CLOAD` cards.
+</Callout>
+
+---
+
+## FreeCAD `.inp` Files
+
+FreeCAD's FEM workbench exports CalculiX-flavoured Abaqus `.inp` files.  The format is
+supported natively — just pass the path directly:
+
+```python
+load_case = LoadCase.from_inp("freecad_export.inp")
+```
+
+The importer handles the two common FreeCAD node-set naming conventions:
+
+* **Face-based sets** — e.g. `Face1`, `Face2` — one set per selected face.
+* **Surface sets** — e.g. `Surf1` — CalculiX surface definitions that reference face
+  node sets.
+
+<Callout type="warn">
+FreeCAD sometimes writes `*BOUNDARY` entries with one line per degree of freedom rather
+than a single line covering a DOF range.  Both styles are handled automatically.
+</Callout>
+
+---
+
+## Abaqus `.inp` Files
+
+Standard Abaqus input decks are parsed the same way.  A minimal deck must contain at
+least a `*NODE` section and one `*ELEMENT` section:
+
+```
+*HEADING
+My model
+
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+...
+
+*ELEMENT, TYPE=C3D4, ELSET=Eall
+1, 1, 2, 3, 4
+...
+
+*NSET, NSET=fixed_face
+1, 2, 3
+
+*BOUNDARY
+fixed_face, 1, 3
+
+*CLOAD
+10, 3, -1000.0
+```
+
+```python
+load_case = LoadCase.from_inp("abaqus_model.inp")
+```
+
+---
+
+## Supported Element Types
+
+Mesh parsing is delegated to meshio.  The table below lists the Abaqus element keywords
+that are recognised and the internal type they map to.
+
+### 3-D Solid Elements
+
+| Abaqus keyword(s) | meshio type | Internal type | Description |
+|---|---|---|---|
+| `C3D4` | `tetra` | `tet4` | Linear tetrahedron |
+| `C3D10`, `C3D10H`, `C3D10I`, `C3D10M`, `C3D10MH` | `tetra10` | `tet10` | Quadratic tetrahedron |
+| `C3D8`, `C3D8H`, `C3D8I`, `C3D8R`, `C3D8RH` | `hexahedron` | `hex8` | Linear hexahedron |
+| `C3D20`, `C3D20H`, `C3D20R`, `C3D20RH` | `hexahedron20` | `hex20` | Quadratic hexahedron |
+| `C3D6` | `wedge` | — | Linear wedge (parsed, not yet solver-mapped) |
+
+### 2-D Shell / Membrane Elements
+
+| Abaqus keyword(s) | meshio type | Internal type | Description |
+|---|---|---|---|
+| `S4`, `S4R`, `S4RS`, `S4RSW`, `S4R5`, `CPS4`, `CPS4R` | `quad` | `quad4` | 4-node quadrilateral shell |
+| `S8R`, `S8R5` | `quad8` | `quad8` | 8-node quadrilateral shell |
+| `S3`, `S3R`, `S3RS`, `CPS3`, `STRI3`, `R3D3` | `triangle` | `tri3` | 3-node triangular shell |
+| `STRI65` | `triangle6` | `tri6` | 6-node triangular shell |
+
+<Callout type="warn">
+Temperature-coupled shell elements (`S4T`, `S4RT`, `S8RT`) are **not** in the meshio
+element map and will raise a `ReadError` at import time.  Use the non-thermal variants
+(`S4`, `S4R`, `S8R`) instead.
+</Callout>
+
+---
+
+## What Gets Imported
+
+| `.inp` construct | How it is imported |
+|---|---|
+| `*NODE` | Node coordinate array |
+| `*ELEMENT` | Element connectivity; primary block selected by dimension (3-D preferred) |
+| `*NSET` | `SpatialSelector` objects keyed by set name |
+| `*ELSET` | Cell sets (available on the returned `LoadCase`) |
+| `*BOUNDARY` | `FixedConstraint` per constrained DOF group |
+| `*CLOAD` | `PointLoad` per loaded node |
+| `*INCLUDE` | Resolved and merged recursively (meshio built-in) |
+
+<Callout type="info">
+`*MATERIAL`, `*ELASTIC`, `*STEP`, and other solver directives are silently skipped.
+If your file defines a material you want to use, pass it explicitly via
+`load_case.material = Material.STEEL` after import.
+</Callout>
+
+---
+
+## Choosing a Test File
+
+When validating the import pipeline with example Abaqus shell test decks, prefer files
+using element types that meshio supports:
+
+| File | Element | Supported |
+|---|---|---|
+| `ese4scsi.inp` | S4 | ✅ → `quad4` |
+| `esf4scsi.inp` | S4R | ✅ → `quad4` |
+| `es68scsi.inp` | S8R | ✅ → `quad8` |
+| `es34tcsi.inp` | S4T | ❌ not supported |
+| `es4rtcsi.inp` | S4RT | ❌ not supported |
+| `es38tcsi.inp` | S8RT | ❌ not supported |
+
+`ese4scsi.inp` (S4 elements) is the recommended starting point for basic import testing.
+
+---
+
+## Limitations
+
+* Only a single primary element block is used for analysis; mixed-topology meshes
+  (e.g. a tet bulk with a quad shell skin) use the highest-dimensional block.
+* `*BOUNDARY` entries that reference node set names resolve correctly; entries that
+  reference individual node IDs also work via the 1-based → 0-based ID map built
+  during parsing.
+* `*SURFACE` definitions and contact pairs are not parsed.
+* 2-D plane-stress / plane-strain element keywords (`CPE3`, `CPE4`, `CPS6`, etc.) are
+  parsed by meshio but are not yet mapped to a solver kernel element type.

@@ -113,7 +113,18 @@ class LoadCaseFromFreeCadInp:
         # ------------------------------------------------------------------
         sanitized_path = _sanitize_inp_for_meshio(path)
         try:
-            mesh = meshio.read(str(sanitized_path))
+            try:
+                mesh = meshio.read(str(sanitized_path))
+            except (Exception, SystemExit) as meshio_error:
+                logger.debug(
+                    "meshio failed to parse %s (%s); falling back to native "
+                    "Abaqus parser.",
+                    path.name,
+                    meshio_error,
+                )
+                from .abaqus_inp_load_case import AbaqusInpLoadCase  # noqa: PLC0415
+
+                return AbaqusInpLoadCase.from_inp(filepath)
         finally:
             try:
                 sanitized_path.unlink()

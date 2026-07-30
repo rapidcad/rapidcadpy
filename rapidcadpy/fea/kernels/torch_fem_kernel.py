@@ -1218,9 +1218,22 @@ class TorchFEMKernel(FEAKernel):
             IsotropicElasticity3D(E=210000.0, nu=0.3),
         )
 
-        # Step 3: Apply boundary conditions
+        # Step 3: Apply boundary conditions.
+        # When the shape was a pre-loaded mesh (meshio.Mesh) the caller's
+        # mesh_size is the GMSH planning value — unrelated to the actual mesh
+        # density.  Re-derive the characteristic element size from the node
+        # cloud so that constraint tolerances are scaled to the real mesh
+        # resolution instead of the coarse planning value.
+        bc_mesh_size = mesh_size
+        if self._is_meshio_mesh(shape):
+            n = nodes.shape[0]
+            if n > 1:
+                ranges = nodes.max(dim=0).values - nodes.min(dim=0).values
+                volume = float(ranges[0] * ranges[1] * ranges[2])
+                if volume > 0:
+                    bc_mesh_size = max(float((volume / n) ** (1.0 / 3.0)), 1e-3)
         self._apply_boundary_conditions(
-            model, nodes, elements, loads, constraints, mesh_size=mesh_size
+            model, nodes, elements, loads, constraints, mesh_size=bc_mesh_size
         )
 
         # Step 4: Create PyVista mesh

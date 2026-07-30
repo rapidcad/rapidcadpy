@@ -1,0 +1,150 @@
+---
+title: REST API
+description: HTTP endpoints for triggering agentic CAD runs and managing load cases.
+---
+
+# REST API
+
+The backend Django server exposes a REST API for uploading `.inp` load-case files and
+triggering the LangGraph-based agentic CAD pipeline.
+
+---
+
+## `POST /api/design/orm`
+
+Start an agentic CAD run and return a persisted `OptimizationRun` record.
+
+The agent pipeline is launched in the background via the LangGraph / Agent Server.
+You can poll the returned `optimization_run_id` against
+`GET /api/runs/{run_id}/status` to track progress.
+
+### Request
+
+Content-Type: `multipart/form-data`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `inp_file` | File | one of | Abaqus `.inp` mesh file. A `requirement` is auto-derived from the file if not supplied. |
+| `load_case_file` | string | one of | Path to an already-stored file, relative to `data/` (e.g. `load_cases/bracket.inp`). |
+| `requirement` | string | no | Plain-English design requirement. Auto-generated from the `.inp` if omitted. |
+| `max_iterations` | integer | no | Maximum agent iterations (defaults to `Config.MAX_ITERATIONS`). |
+| `model_override` | string | no | Override the LLM model used by the agent (e.g. `claude-sonnet-4-5`). |
+
+> Exactly one of `inp_file` or `load_case_file` must be supplied, or a standalone `requirement`.
+
+### Response `200 OK`
+
+```json
+{
+  "optimization_run_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "optimization_run": {
+    "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "run_name": "stream-pending-20260323-120000",
+    "status": "pending",
+    "requirement": "Minimise mass of the bracket under 5 kN vertical load",
+    "config": {
+      "source": "design_orm_view",
+      "thread_id": "...",
+      "max_iterations": 5
+    }
+  }
+}
+```
+
+### Response `400 Bad Request`
+
+Returned when neither `inp_file`, `load_case_file`, nor `requirement` is provided, or
+the `.inp` file cannot be parsed.
+
+```json
+{ "error": "Either 'requirement', 'load_case_file', or 'inp_file' must be provided" }
+```
+
+### Response `502 Bad Gateway`
+
+Returned when the agent / LangGraph server is unreachable.
+
+```json
+{
+  "error": "Could not connect to the Agent Server at http://localhost:8123 ...",
+  "optimization_run_id": "...",
+  "optimization_run": { "status": "error", ... }
+}
+```
+
+### cURL examples
+
+**Upload an `.inp` file and start a run:**
+
+```bash
+curl -X POST http://localhost:8000/api/design/orm \
+  -F "inp_file=@/path/to/bracket.inp"
+```
+
+**Upload with an explicit requirement and iteration limit:**
+
+```bash
+curl -X POST http://localhost:8000/api/design/orm \
+  -F "inp_file=@/path/to/bracket.inp" \
+  -F "requirement=Minimise mass, max displacement 0.5 mm" \
+  -F "max_iterations=8"
+```
+
+**Reference an already-uploaded file by relative path:**
+
+```bash
+curl -X POST http://localhost:8000/api/design/orm \
+  -H "Content-Type: application/json" \
+  -d '{"load_case_file": "load_cases/bracket.inp", "max_iterations": 5}'
+```
+
+---
+
+## `POST /api/upload-load-case`
+
+Upload a `.inp` or `.json` load-case file and receive a parsed mesh preview —
+**without** triggering a CAD run. Use this to validate and visualise a mesh before
+starting an optimisation.
+
+### Request
+
+Content-Type: `multipart/form-data`
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `file` | File | yes | `.inp` or `.json` load-case file. |
+
+### Response `200 OK`
+
+Returns mesh metadata, glTF visualisation data, node/element counts, constraints and
+loads — ready to render in the frontend mesh viewer.
+
+### cURL example
+
+```bash
+curl -X POST http://localhost:8000/api/upload-load-case \
+  -F "file=@/path/to/bracket.inp"
+```
+
+---
+
+## `GET /api/runs/{run_id}/status`
+
+Poll the status of a previously created `OptimizationRun`.
+
+```bash
+curl http://localhost:8000/api/runs/3fa85f64-5717-4562-b3fc-2c963f66afa6/status
+```
+
+Returns a JSON object with `status` (`pending` | `running` | `completed` | `error`),
+iteration counts, and links to output files once complete.
+
+---
+
+## `POST /api/runs/{run_id}/abort`
+
+Abort a running optimisation.
+
+```bash
+curl -X POST http://localhost:8000/api/runs/3fa85f64-5717-4562-b3fc-2c963f66afa6/abort
+```

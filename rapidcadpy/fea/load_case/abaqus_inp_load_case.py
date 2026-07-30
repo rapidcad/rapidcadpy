@@ -655,14 +655,24 @@ class AbaqusInpLoadCase:
                     except (ValueError, IndexError):
                         pass
                 else:
-                    # Direct list (may have trailing comma)
+                    # Direct list (may have trailing comma).
+                    # Tokens may be either integer node IDs or the names of
+                    # other NSETs (Abaqus set-of-sets syntax).  NSET names
+                    # that are encountered before their definition will be
+                    # resolved in the post-processing pass below.
                     for tok in stripped.split(","):
                         tok = tok.strip()
                         if tok:
                             try:
                                 nsets[set_name].append(int(tok))
                             except ValueError:
-                                pass
+                                # Treat as a sub-set name reference
+                                if tok in nsets:
+                                    nsets[set_name].extend(nsets[tok])
+                                else:
+                                    # Forward reference: store name as sentinel
+                                    # (resolved in post-processing step below)
+                                    nsets[set_name].append(tok)
 
             elif section == "ELSET":
                 set_name = section_params.get("NAME", "")
@@ -799,6 +809,38 @@ class AbaqusInpLoadCase:
             _material_unit_confidence,
             _material_unit_basis,
         )
+
+        # ------------------------------------------------------------------
+        # Resolve NSET-of-NSETs (post-processing pass)
+        #
+        # NSET data lines may reference other NSET names (Abaqus set-of-sets
+        # syntax).  Forward references (sets defined after the referencing set)
+        # were stored as string sentinels; resolve them now iteratively.
+        # ------------------------------------------------------------------
+        _changed = True
+        _max_rounds = 10  # guard against circular references
+        while _changed and _max_rounds > 0:
+            _changed = False
+            _max_rounds -= 1
+            for sname, id_list in nsets.items():
+                new_ids: List[int] = []
+                kept_strings: List[str] = []
+                for entry in id_list:
+                    if isinstance(entry, int):
+                        new_ids.append(entry)
+                    elif isinstance(entry, str):
+                        if entry in nsets:
+                            # Resolve: replace the sentinel with all integer IDs
+                            resolved = [v for v in nsets[entry] if isinstance(v, int)]
+                            new_ids.extend(resolved)
+                            _changed = True
+                        else:
+                            kept_strings.append(entry)
+                nsets[sname] = new_ids + kept_strings  # type: ignore[assignment]
+
+        # Strip any remaining unresolvable string sentinels
+        for sname in list(nsets.keys()):
+            nsets[sname] = [v for v in nsets[sname] if isinstance(v, int)]
 
         # ------------------------------------------------------------------
         # Build numpy arrays
@@ -1141,12 +1183,17 @@ class AbaqusInpLoadCase:
         for nset_name, locked_dofs in _bc_dofs_by_target.items():
             dof_lock = tuple(i in locked_dofs for i in (1, 2, 3))
             sel_ids = _find_selectors(nset_name)
+            # Retrieve the exact node coordinates for this NSET (if available)
+            _nset_coords: Optional[np.ndarray] = None
+            if nset_name in point_sets and len(point_sets[nset_name]) > 0:
+                _nset_coords = nodes_arr[point_sets[nset_name]].astype(np.float64)
             if sel_ids:
                 for sel_id in sel_ids:
                     bc = FixedConstraint(
                         location=load_case.selectors[sel_id].query,
                         dofs=dof_lock,
                         tolerance=1,
+                        node_coords=_nset_coords,
                     )
                     bc.region_id = sel_id
                     bc.nset_name = nset_name
@@ -1170,7 +1217,10 @@ class AbaqusInpLoadCase:
                     )
                     load_case.boundary_conditions.append(
                         FixedConstraint(
-                            location=(nx, ny, nz), dofs=dof_lock, tolerance=1
+                            location=(nx, ny, nz),
+                            dofs=dof_lock,
+                            tolerance=1,
+                            node_coords=np.array([[nx, ny, nz]], dtype=np.float64),
                         )
                     )
 

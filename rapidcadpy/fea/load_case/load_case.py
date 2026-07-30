@@ -220,18 +220,69 @@ class LoadCase(LoadCaseFromFreeCadInp):
     def get_fea_analyzer(
         self,
         mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
-        mesh_size: float = 1,
+        mesh_size: Optional[float] = None,
         device: str = "auto",
         kernel: str = "torch-fem",
         log_exports: bool = True,
     ) -> "FEAAnalyzer":
         from ..fea_analyzer import FEAAnalyzer
 
+        # Auto-compute mesh_size from geometry bounds when not supplied.
+        # Target ~3 000 nodes — coarse enough to be fast, fine enough to be
+        # meaningful for both visualisation and lightweight FEA checks.
+        # Falls back to 10.0 if no bounds/domain are available yet.
+        if mesh_size is None:
+            try:
+                mesh_size = self.calc_mesh_size(num_nodes=3000)
+                logger.debug(f"Auto mesh_size={mesh_size:.3f} (target 3000 nodes)")
+            except Exception:
+                mesh_size = 10.0
+                logger.debug("mesh_size defaulted to 10.0 (no bounds available)")
+
         # Create design space geometry and export to STEP
         shape_path = None
 
-        # Prefer new domain object over legacy bounds
-        if self.domain:
+        # First priority: if the LoadCase already carries a pre-loaded mesh
+        # (e.g. imported from .inp / .cdb / .dat), use it directly as a
+        # meshio.Mesh.  This avoids invoking GMSH on a bounding-box STEP that
+        # would produce different node positions from the original mesh,
+        # causing all point-based BC selectors to miss.
+        if self.mesh_nodes is not None and self.mesh_elements is not None:
+            try:
+                import meshio
+
+                _RAPIDCAD_TO_MESHIO: Dict[str, str] = {
+                    "tet4": "tetra",
+                    "tet10": "tetra10",
+                    "hex8": "hexahedron",
+                    "hex20": "hexahedron20",
+                    "wed6": "wedge",
+                    "wed15": "wedge15",
+                    "tri3": "triangle",
+                    "tri6": "triangle6",
+                    "quad4": "quad",
+                    "quad8": "quad8",
+                }
+                cell_type = _RAPIDCAD_TO_MESHIO.get(
+                    self.mesh_element_type or "tet4", "tetra"
+                )
+                shape_path = meshio.Mesh(
+                    points=np.asarray(self.mesh_nodes, dtype=np.float64),
+                    cells=[(cell_type, np.asarray(self.mesh_elements, dtype=np.int64))],
+                )
+                logger.info(
+                    f"Using pre-loaded mesh as shape ({self.mesh_nodes.shape[0]} nodes, "
+                    f"{self.mesh_elements.shape[0]} {cell_type} elements)"
+                )
+            except Exception as e:
+                logger.warning(
+                    f"Failed to build meshio.Mesh from LoadCase mesh data: {e}"
+                )
+                shape_path = None
+
+        # Fallback: build STEP geometry from domain or bounds and let GMSH mesh it.
+        # Only reached when no pre-loaded mesh is available.
+        if shape_path is None and self.domain:
             try:
                 import tempfile
                 import os
@@ -251,7 +302,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 )
                 shape_path = None
 
-        elif self.bounds:
+        if shape_path is None and self.bounds:
             # Legacy: create simple box from bounds
             try:
                 import cadquery as cq
@@ -295,47 +346,6 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 )
                 shape_path = None
 
-        # Last resort: if no STEP geometry is available but the LoadCase
-        # already carries a pre-loaded mesh (e.g. imported from .inp), wrap
-        # it as a meshio.Mesh so that get_visualization_data() can use it
-        # directly without re-meshing.
-        if (
-            shape_path is None
-            and self.mesh_nodes is not None
-            and self.mesh_elements is not None
-        ):
-            try:
-                import meshio
-
-                _RAPIDCAD_TO_MESHIO: Dict[str, str] = {
-                    "tet4": "tetra",
-                    "tet10": "tetra10",
-                    "hex8": "hexahedron",
-                    "hex20": "hexahedron20",
-                    "wed6": "wedge",
-                    "wed15": "wedge15",
-                    "tri3": "triangle",
-                    "tri6": "triangle6",
-                    "quad4": "quad",
-                    "quad8": "quad8",
-                }
-                cell_type = _RAPIDCAD_TO_MESHIO.get(
-                    self.mesh_element_type or "tet4", "tetra"
-                )
-                shape_path = meshio.Mesh(
-                    points=np.asarray(self.mesh_nodes, dtype=np.float64),
-                    cells=[(cell_type, np.asarray(self.mesh_elements, dtype=np.int64))],
-                )
-                logger.info(
-                    f"Using pre-loaded mesh as shape ({self.mesh_nodes.shape[0]} nodes, "
-                    f"{self.mesh_elements.shape[0]} {cell_type} elements)"
-                )
-            except Exception as e:
-                logger.warning(
-                    f"Failed to build meshio.Mesh from LoadCase mesh data: {e}"
-                )
-                shape_path = None
-
         fea = FEAAnalyzer(
             shape=shape_path,
             kernel=kernel,
@@ -349,7 +359,7 @@ class LoadCase(LoadCaseFromFreeCadInp):
     def inspect_boundary_condition_nodes(
         self,
         mesher: "Union[MesherBase, str]" = "gmsh-subprocess",
-        mesh_size: float = 1,
+        mesh_size: Optional[float] = None,
         device: str = "auto",
         log_exports: bool = False,
     ) -> Dict[str, Any]:
@@ -819,7 +829,9 @@ class LoadCase(LoadCaseFromFreeCadInp):
         - RIGHT: .translate((x, y, z))
         """
 
-        return requirement
+        import textwrap
+
+        return textwrap.dedent(requirement).strip()
 
     def to_inp(
         self,

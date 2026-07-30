@@ -18,7 +18,7 @@ interface PythonFunctionProps {
   name: string;
   signature: string;
   description: string;
-  params: Record<string, ParamInfo>;
+  params?: Record<string, ParamInfo>;
   returns?: ReturnInfo;
   source?: string;
 }
@@ -27,7 +27,7 @@ export function PythonFunction({
   name,
   signature,
   description,
-  params,
+  params = {},
   returns,
   source,
 }: PythonFunctionProps) {
@@ -39,7 +39,7 @@ export function PythonFunction({
     default?: string;
   }> = {};
 
-  for (const [paramName, paramInfo] of Object.entries(params)) {
+  for (const [paramName, paramInfo] of Object.entries(params ?? {})) {
     typeTableProps[paramName] = {
       type: paramInfo.type,
       description: paramInfo.description,

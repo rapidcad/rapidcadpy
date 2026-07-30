@@ -1,11 +1,29 @@
 import os
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, Optional, Union
 
 from rapidcadpy.app import App
 from rapidcadpy.cad_types import VectorLike
 
 if TYPE_CHECKING:
     from .workplane import InventorWorkPlane
+
+# ---------------------------------------------------------------------------
+# Unit-string → Inventor kUnitsTypeEnum mapping
+# ---------------------------------------------------------------------------
+_UNIT_MAP: Dict[str, int] = {
+    # Length
+    "mm": 32778,  # kMillimeterLengthUnits
+    "cm": 32777,  # kCentimeterLengthUnits
+    "m": 32776,  # kMeterLengthUnits
+    "in": 32779,  # kInchLengthUnits
+    "ft": 32780,  # kFootLengthUnits
+    # Angle
+    "deg": 32781,  # kDegreeAngleUnits
+    "rad": 32782,  # kRadianAngleUnits
+    # Unitless / count
+    "": 32769,  # kUnitless
+    "ul": 32769,
+}
 
 
 class InventorApp(App):
@@ -280,6 +298,201 @@ class InventorApp(App):
                 self.inventor_document = None  # type: ignore[assignment]
             except Exception:
                 pass
+
+    # ------------------------------------------------------------------
+    # Named Parameter API
+    # ------------------------------------------------------------------
+
+    def _resolve_units_enum(self, units: str) -> int:
+        """Convert a unit string like 'mm', 'in', 'deg' to an Inventor kUnitsTypeEnum int."""
+        key = units.strip().lower()
+        if key in _UNIT_MAP:
+            return _UNIT_MAP[key]
+        # Fall back to the COM constant via win32
+        try:
+            import win32com.client as win32
+
+            attr = f"kMillimeterLengthUnits" if key == "mm" else None
+            if attr and hasattr(win32.constants, attr):
+                return getattr(win32.constants, attr)
+        except Exception:
+            pass
+        raise ValueError(f"Unknown unit '{units}'. Supported: {list(_UNIT_MAP.keys())}")
+
+    def add_parameter(
+        self,
+        name: str,
+        value: float,
+        units: str = "mm",
+        expression: Optional[str] = None,
+    ) -> float:
+        """Create (or overwrite) a named user parameter in the Inventor model.
+
+        Named parameters appear in Inventor's Parameters dialog and drive the model
+        parametrically.  The method returns the numeric value so it can be used
+        directly in Python arithmetic or passed to workplane operations.
+
+        Args:
+            name:       Parameter name (must be a valid Inventor identifier – no spaces).
+            value:      Numeric value in the given units.
+            units:      Unit string: ``"mm"`` (default), ``"cm"``, ``"m"``, ``"in"``,
+                        ``"ft"``, ``"deg"``, ``"rad"``, or ``""``/``"ul"`` (unitless).
+            expression: Optional Inventor expression string (e.g. ``"width * 2"``).
+                        When supplied ``value`` is ignored and the expression is used as-is;
+                        the returned float is evaluated from Inventor after creation.
+
+        Returns:
+            The parameter value as a Python ``float`` (useful for direct arithmetic).
+
+        Raises:
+            RuntimeError: If no document is open or parameter creation fails.
+
+        Example::
+
+            width  = app.add_parameter("width",  50)       # 50 mm → returns 50.0
+            height = app.add_parameter("height", 30)       # 30 mm → returns 30.0
+            thick  = app.add_parameter("thick",  0, expression="width / 10")
+
+            wp = app.work_plane("XY")
+            wp.rect(width, height).extrude(thick)
+        """
+        if not hasattr(self, "comp_def") or self.comp_def is None:
+            raise RuntimeError(
+                "No active document. Call app.new_document() or app.open_document() first."
+            )
+
+        # Validate the unit string early (raises ValueError for unknowns).
+        self._resolve_units_enum(units)
+        # AddByExpression expects the UnitsSpecifier as a *string* (e.g. "mm"),
+        # NOT the numeric kUnitsTypeEnum integer.  Passing the integer causes
+        # COM error -2147467259.
+        units_str = units.strip() if units.strip() else "ul"
+        user_params = self.comp_def.Parameters.UserParameters
+
+        # If a parameter with this name already exists, update it.
+        existing = self._find_parameter(name)
+        if existing is not None:
+            try:
+                if expression is not None:
+                    existing.Expression = expression
+                else:
+                    existing.Expression = f"{value} {units_str}".strip()
+                return float(existing.Value)
+            except Exception as e:
+                raise RuntimeError(f"Failed to update existing parameter '{name}': {e}")
+
+        # Create a new user parameter.
+        # NOTE: Do NOT include the unit suffix in the expression string.
+        # AddByExpression takes the expression and the units specifier as separate
+        # arguments; putting both produces a COM error (-2147467259).
+        expr_str = expression if expression is not None else str(value)
+        try:
+            param = user_params.AddByExpression(name, expr_str, units_str)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to create Inventor parameter '{name}' = '{expr_str}': {e}"
+            )
+
+        try:
+            return float(param.Value)
+        except Exception:
+            return float(value)
+
+    def get_parameter(self, name: str) -> float:
+        """Return the current value of a named parameter.
+
+        Args:
+            name: Parameter name (user or model parameter).
+
+        Returns:
+            Current numeric value in Inventor's internal units (cm).
+            Multiply by 10 to convert to mm if needed.
+
+        Raises:
+            KeyError: If no parameter with that name exists.
+        """
+        param = self._find_parameter(name)
+        if param is None:
+            raise KeyError(f"Parameter '{name}' not found in Inventor model.")
+        return float(param.Value)
+
+    def set_parameter(self, name: str, value: float, units: str = "mm") -> None:
+        """Update the value of an existing named parameter.
+
+        Args:
+            name:   Parameter name.
+            value:  New numeric value.
+            units:  Unit string (default ``"mm"``).
+
+        Raises:
+            KeyError:       If the parameter does not exist.
+            RuntimeError:   If the update fails.
+
+        Example::
+
+            app.set_parameter("width", 80)   # change width to 80 mm
+        """
+        param = self._find_parameter(name)
+        if param is None:
+            raise KeyError(
+                f"Parameter '{name}' not found. Use add_parameter() to create it first."
+            )
+        try:
+            param.Expression = f"{value} {units}".strip()
+        except Exception as e:
+            raise RuntimeError(f"Failed to set parameter '{name}' to {value}: {e}")
+
+    def list_parameters(self) -> Dict[str, float]:
+        """Return all user parameters as a ``{name: value}`` dictionary.
+
+        Returns:
+            Dictionary mapping parameter name → current float value.
+
+        Example::
+
+            params = app.list_parameters()
+            print(params)
+            # {'width': 50.0, 'height': 30.0, 'thick': 5.0}
+        """
+        if not hasattr(self, "comp_def") or self.comp_def is None:
+            return {}
+
+        result: Dict[str, float] = {}
+        try:
+            user_params = self.comp_def.Parameters.UserParameters
+            for i in range(1, user_params.Count + 1):
+                p = user_params.Item(i)
+                try:
+                    result[p.Name] = float(p.Value)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return result
+
+    def _find_parameter(self, name: str):
+        """Internal helper: find a parameter (user or model) by name, or return None."""
+        if not hasattr(self, "comp_def") or self.comp_def is None:
+            return None
+        try:
+            # Check user parameters first
+            user_params = self.comp_def.Parameters.UserParameters
+            for i in range(1, user_params.Count + 1):
+                p = user_params.Item(i)
+                if p.Name == name:
+                    return p
+        except Exception:
+            pass
+        try:
+            # Fall back to model parameters (driven dimensions, etc.)
+            model_params = self.comp_def.Parameters.ModelParameters
+            for i in range(1, model_params.Count + 1):
+                p = model_params.Item(i)
+                if p.Name == name:
+                    return p
+        except Exception:
+            pass
+        return None
 
     def chamfer_edge(
         self,
