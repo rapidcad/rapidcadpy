@@ -10,6 +10,10 @@ netgen-mesher
 plotly>=5.0.0
 matplotlib>=3.5.0
 seaborn
+pyvista
+trame
+trame-vtk
+trame-vuetify
 
 # Image processing
 Pillow>=8.0.0
@@ -17,6 +21,10 @@ Pillow>=8.0.0
 # Progress bars and utilities
 tqdm>=4.60.0
 strenum
+
+# Print-ready drawing PDF conversion and validation
+pypdf>=5.0.0
+weasyprint>=62.0; python_version>="3.9"
 
 # Development dependencies (optional)
 pytest>=6.0.0

@@ -16,6 +16,23 @@ except ImportError:
 
 # Core geometry types for fluent API
 from .cad_types import Vector, Vertex
+from .cad_objects import (
+    CadAdapter,
+    CadDocument,
+    CadFeature,
+    CadObject,
+    CadParameter,
+    ParameterBinding,
+)
+from .cad_session import CadSession
+from .drawing import (
+    DrawingBackend,
+    DrawingBackendFactory,
+    DrawingResult,
+    create_drawing_backend,
+    finalize_vector_pdf,
+    validate_print_ready_pdf,
+)
 
 # Core shape and sketch classes
 from .shape import Shape
@@ -26,7 +43,7 @@ from .sketch3d import Sketch3D
 from .components import profiles
 
 # Optional integrations are loaded lazily so importing rapidcadpy does not
-# require FreeCAD/OCP/Inventor runtimes or emit warnings in MCP stdio mode.
+# require FreeCAD/OCP/Inventor runtimes or emit warnings during lightweight imports.
 _OPTIONAL_INTEGRATIONS = {
     "OpenCascadeApp": ".integrations.occ.app",
     "OpenCascadeOcpApp": ".integrations.ocp.app",
@@ -66,6 +83,19 @@ __all__ = [
     "App",
     "Workplane",
     "Shape",
+    "CadAdapter",
+    "CadDocument",
+    "CadObject",
+    "CadFeature",
+    "CadParameter",
+    "ParameterBinding",
+    "CadSession",
+    "DrawingBackend",
+    "DrawingBackendFactory",
+    "DrawingResult",
+    "create_drawing_backend",
+    "finalize_vector_pdf",
+    "validate_print_ready_pdf",
     "Sketch2D",
     "Sketch3D",
     # Components
