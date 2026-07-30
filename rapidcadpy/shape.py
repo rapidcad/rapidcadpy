@@ -5,20 +5,74 @@ from .selectors import filter_linear_edges_by_selector
 
 if TYPE_CHECKING:
     from .app import App
+    from .cad_objects import CadDocument, CadFeature
     from .fea.boundary_conditions import BoundaryCondition, Load
     from .fea.materials import MaterialProperties
     from .fea.results import FEAResults
 
 
 class Shape(ABC):
-    def __init__(self, obj, app: Optional["App"]) -> None:
+    def __init__(
+        self,
+        obj,
+        app: Optional["App"],
+        document: Optional["CadDocument"] = None,
+        feature: Optional["CadFeature"] = None,
+    ) -> None:
+        if feature is not None and document is not feature.document:
+            raise ValueError("Shape document must own the bound feature.")
         self.obj = obj
         self.app = app
+        self._document = document
+        self._feature = feature
         self.material: Optional[Union["MaterialProperties", str]] = "STEEL"
         self._selected_edges: Optional[List[Any]] = None
         self._selected_edge_selector: Optional[str] = None
         if app is not None:
             app.register_shape(self)
+
+    @property
+    def document(self) -> Optional["CadDocument"]:
+        """Backend-neutral reference to the owning native document."""
+        return self._document
+
+    @property
+    def feature(self) -> Optional["CadFeature"]:
+        """Backend-neutral reference to the native feature producing this shape."""
+        return self._feature
+
+    @property
+    def is_parametric(self) -> bool:
+        """Whether this shape is still connected to a live native feature."""
+        return (
+            self._document is not None
+            and self._feature is not None
+            and self._feature.is_parametric
+        )
+
+    def bind_native(
+        self,
+        document: Optional["CadDocument"],
+        feature: Optional["CadFeature"],
+    ) -> None:
+        """Bind this shape to a native document and feature."""
+        if feature is not None and document is not feature.document:
+            raise ValueError("Shape document must own the bound feature.")
+        self._document = document
+        self._feature = feature
+
+    def refresh_from_feature(self) -> bool:
+        """Refresh ``obj`` from the bound native feature's current result.
+
+        Returns ``True`` when a live feature shape was available.
+        """
+        if self._feature is None:
+            return False
+        native_shape = self._feature.shape
+        if native_shape is None:
+            return False
+        self.obj = native_shape
+        return True
 
     @abstractmethod
     def volume(self) -> float:
@@ -71,7 +125,12 @@ class Shape(ABC):
         ...
 
     @abstractmethod
-    def _apply_fillet_to_edges(self, edges: List[Any], radius: float) -> None:
+    def _apply_fillet_to_edges(
+        self,
+        edges: List[Any],
+        radius: float,
+        selector: Optional[str] = None,
+    ) -> None:
         """Apply fillets of *radius* to *edges*, updating ``self.obj`` in-place."""
         ...
 
@@ -113,6 +172,26 @@ class Shape(ABC):
 
         self._apply_fillet_to_edges(edges_to_fillet, radius, selector)
         return self
+
+    def export(self, file_name: str) -> None:
+        """Export using the format implied by *file_name*.
+
+        This compatibility entry point is documented by RapidCADPy and keeps
+        callers independent of the backend-specific ``to_*`` methods.
+        """
+
+        suffix = file_name.lower().rsplit(".", 1)[-1] if "." in file_name else ""
+        if suffix in {"step", "stp"}:
+            self.to_step(file_name)
+        elif suffix == "stl":
+            self.to_stl(file_name)
+        elif suffix == "png":
+            self.to_png(file_name)
+        else:
+            raise ValueError(
+                f"Unsupported export format for {file_name!r}; "
+                "expected .step, .stp, .stl, or .png"
+            )
 
     def analyze(
         self,
@@ -189,6 +268,3 @@ class Shape(ABC):
 
         # Solve
         return analyzer.solve()
-
-    @abstractmethod
-    def volume(self) -> float: ...

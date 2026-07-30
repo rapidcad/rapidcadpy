@@ -7,7 +7,8 @@ import sys
 from typing import Any, Optional, Tuple, Union
 
 from ...app import App
-from ...primitives import Arc, Circle, Line
+from ...cad_objects import CadDocument
+from .cad_adapter import FreeCADAdapter
 
 VectorLike = Union[Tuple[float, float, float], Tuple[float, float]]
 
@@ -43,27 +44,121 @@ class FreeCADApp(App):
     """
     FreeCAD implementation of the App base class.
 
-    Creates and owns a headless FreeCAD document.  All shapes live as
-    Part.Shape objects (stored in FreeCADShape.obj) and are independent of
-    the document tree – the document is kept mostly as a namespace so that
-    FreeCAD's internal bookkeeping stays happy in headless mode.
+    Creates and owns a headless FreeCAD document. Document-backed shapes retain
+    backend-neutral references to their native FreeCAD features, while
+    operations unsupported by native history can still use standalone
+    ``Part.Shape`` geometry.
     """
 
     def __init__(
         self,
         doc_name: str = "RapidCADPy_Doc",
         silent_geometry_failures: bool = False,
+        *,
+        instance_id: Optional[str] = None,
     ):
         super().__init__(silent_geometry_failures=silent_geometry_failures)
+        self._gui_connection = None
+        if doc_name == "attach":
+            from .gui_connection import FreeCADGuiConnection
+
+            self._gui_connection = FreeCADGuiConnection.attach(instance_id=instance_id)
+            self._fc_doc = None
+            self._cad_adapter = FreeCADAdapter()
+            self._cad_document = None
+            self._feature_counter = 0
+            return
+
         ensure_freecad_python_path()
         import FreeCAD
 
         self._fc_doc = FreeCAD.newDocument(doc_name)
+        self._cad_adapter = FreeCADAdapter()
+        self._cad_document = self._wrap_document(self._fc_doc)
         self._feature_counter = 0
+
+    @classmethod
+    def from_document(
+        cls,
+        document: Any,
+        silent_geometry_failures: bool = False,
+    ) -> "FreeCADApp":
+        """Bind to an existing native document without creating a scratch one."""
+        instance = cls.__new__(cls)
+        App.__init__(
+            instance,
+            silent_geometry_failures=silent_geometry_failures,
+        )
+        instance._gui_connection = None
+        instance._fc_doc = document
+        instance._cad_adapter = FreeCADAdapter()
+        instance._cad_document = instance._wrap_document(document)
+        instance._feature_counter = 0
+        return instance
+
+    @staticmethod
+    def list_instances():
+        """List running FreeCAD GUIs with an active RapidCADPy connector."""
+        from .gui_connection import FreeCADGuiConnection
+
+        return FreeCADGuiConnection.list_instances()
+
+    @property
+    def is_remote(self) -> bool:
+        """Return whether this app is attached through the GUI bridge."""
+        return self._gui_connection is not None
+
+    @property
+    def connection(self):
+        """Return the remote GUI connection for ``FreeCADApp('attach')``."""
+        return self._gui_connection
+
+    def call(self, method: str, **params):
+        """Call a RapidCADPy session method in an attached FreeCAD GUI."""
+        if self._gui_connection is None:
+            raise RuntimeError("This FreeCADApp is not attached to a GUI bridge.")
+        return self._gui_connection.call(method, params)
 
     def get_doc(self):
         """Get the underlying FreeCAD document."""
+        if self._fc_doc is None:
+            raise RuntimeError(
+                "A remotely attached FreeCAD document has no in-process native "
+                "handle. Use call() or CadSession instead."
+            )
         return self._fc_doc
+
+    @property
+    def cad_document(self) -> CadDocument:
+        """Get the backend-neutral reference to the live FreeCAD document."""
+        if self._cad_document is None:
+            raise RuntimeError(
+                "Remote FreeCADApp documents are represented in the bridge process."
+            )
+        return self._cad_document
+
+    def get_cad_document(self) -> CadDocument:
+        """Compatibility method for code that cannot use properties."""
+        return self.cad_document
+
+    def bind_document(self, document) -> CadDocument:
+        """Replace the active native document and refresh its public binding."""
+        self._fc_doc = document
+        self._cad_document = self._wrap_document(document)
+        self._feature_counter = 0
+        self._shapes.clear()
+        self._workplanes.clear()
+        return self._cad_document
+
+    def _wrap_document(self, document) -> CadDocument:
+        return CadDocument(
+            backend=self._cad_adapter.backend_name,
+            native_handle=document,
+            adapter=self._cad_adapter,
+            name=str(getattr(document, "Name", "")),
+            label=str(getattr(document, "Label", "")),
+            file_name=str(getattr(document, "FileName", "")),
+        )
 
     def get_next_feature_index(self) -> int:
         """Get next feature index for naming."""
@@ -116,9 +211,7 @@ class FreeCADApp(App):
         import FreeCAD
 
         FreeCAD.closeDocument(self._fc_doc.Name)
-        self._fc_doc = FreeCAD.newDocument("RapidCADPy_Doc")
-        self._shapes.clear()
-        self._workplanes.clear()
+        self.bind_document(FreeCAD.newDocument("RapidCADPy_Doc"))
 
     def _make_feature_name(self, prefix: str, index: int) -> str:
         return f"{prefix}{index}"
@@ -204,10 +297,9 @@ class FreeCADApp(App):
         # If single shape with its own doc, save that directly
         if (
             len(target_shapes) == 1
-            and hasattr(target_shapes[0], "_doc")
-            and target_shapes[0]._doc
+            and getattr(target_shapes[0], "document", None) is not None
         ):
-            target_shapes[0]._doc.saveAs(file_name)
+            target_shapes[0].document.save(file_name)
             return
 
         # Otherwise, add shapes to app doc

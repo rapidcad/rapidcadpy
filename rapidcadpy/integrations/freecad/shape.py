@@ -7,7 +7,9 @@ import tempfile
 from pathlib import Path
 from typing import List, Optional, Union, Any
 
+from ...cad_objects import CadDocument, CadFeature
 from ...shape import Shape
+from .cad_adapter import FreeCADAdapter
 
 
 class FreeCADShape(Shape):
@@ -16,15 +18,97 @@ class FreeCADShape(Shape):
     ``self.obj``. Maintains a feature tree in the FreeCAD document.
 
     self.obj: The computed OCC shape (for Python operations)
-    self._doc: Reference to the FreeCAD document (to add features)
-    self._current_feature: The Part::Feature or derived object that holds this shape
+    ``document`` and ``feature`` publicly expose backend-neutral references to
+    the live FreeCAD document and feature.
     """
 
-    def __init__(self, obj, app, doc=None, current_feature=None) -> None:  # type: ignore[override]
-        super().__init__(obj, app)
-        self._doc = doc
-        self._current_feature = current_feature
+    def __init__(
+        self,
+        obj,
+        app,
+        doc=None,
+        current_feature=None,
+        *,
+        document: Optional[CadDocument] = None,
+        feature: Optional[CadFeature] = None,
+    ) -> None:  # type: ignore[override]
+        cad_document = document or (feature.document if feature is not None else None)
+        if cad_document is None:
+            cad_document = self._resolve_document(app, doc)
+        cad_feature = feature or self._wrap_feature(cad_document, current_feature)
+        super().__init__(
+            obj,
+            app,
+            document=cad_document,
+            feature=cad_feature,
+        )
         self._feature_counter = 0
+
+    @staticmethod
+    def _resolve_document(app, native_document) -> Optional[CadDocument]:
+        if native_document is None:
+            return None
+        if app is not None and hasattr(app, "get_cad_document"):
+            cad_document = app.get_cad_document()
+            if cad_document.native_handle is native_document:
+                return cad_document
+        adapter = FreeCADAdapter()
+        return CadDocument(
+            backend=adapter.backend_name,
+            native_handle=native_document,
+            adapter=adapter,
+            name=str(getattr(native_document, "Name", "")),
+            label=str(getattr(native_document, "Label", "")),
+            file_name=str(getattr(native_document, "FileName", "")),
+        )
+
+    @staticmethod
+    def _wrap_feature(
+        document: Optional[CadDocument],
+        native_feature,
+        preferred_id: Optional[str] = None,
+    ) -> Optional[CadFeature]:
+        if document is None or native_feature is None:
+            return None
+        native_name = str(getattr(native_feature, "Name", ""))
+        native_type = str(getattr(native_feature, "TypeId", ""))
+        if preferred_id is None:
+            rapidcad_id = document.object_id(native_name)
+        else:
+            rapidcad_id = document.bind_object_id(native_name, preferred_id)
+        capabilities = {"geometry", "get_properties", "set_properties"}
+        if native_type not in {"Part::Feature", "PartDesign::Feature"}:
+            capabilities.add("feature_history")
+        return CadFeature(
+            id=rapidcad_id,
+            document=document,
+            native_handle=native_feature,
+            native_name=native_name,
+            native_type=native_type,
+            label=str(getattr(native_feature, "Label", native_name)),
+            capabilities=frozenset(capabilities),
+        )
+
+    def _bind_feature(self, native_feature) -> None:
+        preferred_id = self.feature.id if self.feature is not None else None
+        self.bind_native(
+            self.document,
+            self._wrap_feature(
+                self.document,
+                native_feature,
+                preferred_id=preferred_id,
+            ),
+        )
+
+    @property
+    def _doc(self):
+        """Deprecated raw FreeCAD document alias; use ``document``."""
+        return self.document.native_handle if self.document is not None else None
+
+    @property
+    def _current_feature(self):
+        """Deprecated raw FreeCAD feature alias; use ``feature``."""
+        return self.feature.native_handle if self.feature is not None else None
 
     def _doc_get_next_index(self) -> int:
         """Get next feature index for naming."""
@@ -34,13 +118,14 @@ class FreeCADShape(Shape):
     def _store_result_shape(self, result_shape, prefix: str) -> None:
         """Update ``self.obj`` and mirror the result into the FreeCAD document."""
         self.obj = result_shape
-        if self._doc and self._current_feature:
-            feature = self._doc.addObject(
+        if self.document is not None and self.feature is not None:
+            native_document = self.document.native_handle
+            feature = native_document.addObject(
                 "Part::Feature", f"{prefix}_{self._doc_get_next_index()}"
             )
             feature.Shape = result_shape
-            self._doc.recompute()
-            self._current_feature = feature
+            self.document.recompute()
+            self._bind_feature(feature)
 
     def _make_boolean_feature(
         self, type_id: str, others: List["FreeCADShape"], prefix: str
@@ -56,30 +141,34 @@ class FreeCADShape(Shape):
         an operand is not document-backed (caller should fall back to a baked
         OCC boolean so geometry is still correct).
         """
-        if not self._doc or self._current_feature is None:
+        if self.document is None or self.feature is None:
             return False
 
         operand_feats = []
         for s in others:
-            feat = getattr(s, "_current_feature", None)
-            if feat is None or getattr(s, "_doc", None) is not self._doc:
+            if (
+                s.feature is None
+                or s.document is None
+                or s.document.native_handle is not self.document.native_handle
+            ):
                 return False
-            operand_feats.append(feat)
+            operand_feats.append(s.feature.native_handle)
 
-        doc = self._doc
+        doc = self.document.native_handle
         boolean = doc.addObject(type_id, f"{prefix}_{self._doc_get_next_index()}")
         if type_id == "Part::Cut":
-            boolean.Base = self._current_feature
+            boolean.Base = self.feature.native_handle
             boolean.Tool = operand_feats[0]
         else:  # Part::MultiFuse / Part::MultiCommon
-            boolean.Shapes = [self._current_feature] + operand_feats
-        doc.recompute()
+            boolean.Shapes = [self.feature.native_handle] + operand_feats
+        self.document.recompute()
 
         self.obj = boolean.Shape
-        self._current_feature = boolean
+        self._bind_feature(boolean)
         return True
 
     def _raw_edges(self) -> List[Any]:
+        self.refresh_from_feature()
         return list(self.obj.Edges)
 
     def _is_linear_edge(self, edge) -> bool:
@@ -117,10 +206,12 @@ class FreeCADShape(Shape):
 
     def volume(self) -> float:
         """Return the volume of the shape (model units³)."""
+        self.refresh_from_feature()
         return float(self.obj.Volume)
 
     def to_stl(self, file_name: str) -> None:
         """Export shape to an ASCII or binary STL file."""
+        self.refresh_from_feature()
         self.obj.exportStl(file_name)
 
     def to_fcstd(self, file_name: str) -> None:
@@ -132,9 +223,9 @@ class FreeCADShape(Shape):
         """
         import FreeCAD
 
-        if self._doc:
+        if self.document is not None:
             # Save the existing feature tree
-            self._doc.saveAs(file_name)
+            self.document.save(file_name)
         else:
             # No doc: create a minimal one with just this shape
             doc = FreeCAD.newDocument("export")
@@ -146,6 +237,7 @@ class FreeCADShape(Shape):
 
     def to_step(self, file_name: str) -> None:
         """Export shape to a STEP file."""
+        self.refresh_from_feature()
         self.obj.exportStep(file_name)
 
     def to_png(
@@ -175,6 +267,8 @@ class FreeCADShape(Shape):
     def cut(self, other: "FreeCADShape") -> "FreeCADShape":
         """Boolean subtraction as a parametric ``Part::Cut`` (baked fallback)."""
         if not self._make_boolean_feature("Part::Cut", [other], "Cut"):
+            self.refresh_from_feature()
+            other.refresh_from_feature()
             self._store_result_shape(self.obj.cut(other.obj), "Cut")
         self._clear_edge_selection()
         return self
@@ -186,7 +280,9 @@ class FreeCADShape(Shape):
         others = [other] if not isinstance(other, list) else other
 
         if not self._make_boolean_feature("Part::MultiFuse", others, "Fuse"):
+            self.refresh_from_feature()
             for s in others:
+                s.refresh_from_feature()
                 self._store_result_shape(self.obj.fuse(s.obj), "Fuse")
 
         self._clear_edge_selection()
@@ -209,12 +305,12 @@ class FreeCADShape(Shape):
         import FreeCAD
 
         vec = FreeCAD.Vector(x, y, z)
-        if self._doc and self._current_feature is not None:
-            feature = self._current_feature
+        if self.document is not None and self.feature is not None:
+            feature = self.feature.native_handle
             feature.Placement = FreeCAD.Placement(vec, FreeCAD.Rotation()).multiply(
                 feature.Placement
             )
-            self._doc.recompute()
+            self.document.recompute()
             self.obj = feature.Shape
         else:
             self.obj.translate(vec)
@@ -237,9 +333,7 @@ def _render_stl(
 ) -> None:
     """Render *stl_file* to *output* (or display interactively if None)."""
     if backend == "auto":
-        backends = (
-            ["pillow", "pyvista", "vedo"] if output else ["pyvista", "vedo"]
-        )
+        backends = ["pillow", "pyvista", "vedo"] if output else ["pyvista", "vedo"]
     else:
         backends = [backend]
     last_error: Optional[Exception] = None
@@ -325,9 +419,7 @@ def _render_pillow(
         camera = np.asarray((1.0, 0.0, 0.0))
         up_hint = np.asarray((0.0, 0.0, 1.0))
     else:
-        raise ValueError(
-            f"Unsupported view '{view}'. Use iso, front, top, or right."
-        )
+        raise ValueError(f"Unsupported view '{view}'. Use iso, front, top, or right.")
 
     camera = camera / np.linalg.norm(camera)
     screen_right = np.cross(camera, up_hint)
