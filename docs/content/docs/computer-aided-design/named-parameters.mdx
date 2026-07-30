@@ -1,0 +1,122 @@
+---
+title: Named parameters
+description: Create persistent typed dimensions and bind them to native CAD features.
+---
+
+# Named parameters
+
+RapidCADPy can store typed parameters in a native CAD document and bind them to
+editable feature properties. The current implementation targets FreeCAD and
+preserves native expressions and feature history.
+
+## Start a session
+
+Create or attach to a FreeCAD document through `CadSession`:
+
+```python
+from rapidcadpy import CadSession
+
+session = CadSession()
+session.setup_backend("freecad", document_name="ParametricBracket")
+
+session.work_plane("XY")
+session.rect(40, 20)
+extrusion = session.extrude(10)
+```
+
+Session operations return dictionaries with an `ok` flag, a summary, the
+identifiers for affected objects, and—after hydration or a parameter
+mutation—the current document revision.
+
+## Create a parameter
+
+```python
+created = session.create_parameter(
+    name="height",
+    parameter_type="length",
+    value=30,
+    unit="mm",
+)
+
+height = created["parameter"]
+```
+
+Supported parameter types are `length`, `angle`, `number`, `integer`,
+`boolean`, and `string`. Names must start with a letter or underscore and may
+contain letters, numbers, and underscores.
+
+In FreeCAD, parameters are stored as typed native properties on the
+`RapidCAD Parameters` document object. They remain visible and persist when
+the `.FCStd` document is saved and reopened.
+
+## Bind a feature property
+
+Use the object ID returned by a modeling or document operation. Property names
+are backend-neutral; supported bindings are advertised through object
+capabilities such as `parameter.bind:length`.
+
+```python
+wall = session.create_parameter(
+    name="wall_thickness",
+    parameter_type="length",
+    value=2,
+    unit="mm",
+    expected_revision=created["document_revision"],
+)
+
+binding = session.bind_parameter(
+    parameter_id=height["id"],
+    object_id=extrusion["object_id"],
+    property_name="length",
+    expected_revision=wall["document_revision"],
+)
+```
+
+For example, generic `length` maps to `LengthFwd` on a FreeCAD
+`Part::Extrusion` and to `Length` on a Part Design pad. The binding is stored
+as a native expression rather than replacing the feature with baked geometry.
+
+Expressions can combine several named parameters:
+
+```python
+binding = session.bind_parameter(
+    parameter_id=height["id"],
+    object_id=extrusion["object_id"],
+    property_name="length",
+    expression="height / 2",
+    expected_revision=binding["document_revision"],
+)
+```
+
+Expressions support named parameters, numeric literals, parentheses, and
+arithmetic operators.
+
+## Update parameters atomically
+
+Use the newest revision returned by the previous operation:
+
+```python
+updated = session.set_parameters(
+    updates=[
+        {"name": "height", "value": 45, "unit": "mm"},
+    ],
+    expected_revision=binding["document_revision"],
+)
+```
+
+Alternatively, batch related changes in one call so the native document is
+recomputed once:
+
+```python
+updated = session.set_parameters(
+    updates=[
+        {"name": "height", "value": 45, "unit": "mm"},
+        {"name": "wall_thickness", "value": 3, "unit": "mm"},
+    ],
+    expected_revision=binding["document_revision"],
+)
+```
+
+The response contains the new revision, changed parameters, affected object
+IDs, and the rehydrated feature tree. Use `session.list_parameters()` to
+inspect current values, units, expressions, and dependent features.
