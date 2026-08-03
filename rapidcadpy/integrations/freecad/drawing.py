@@ -9,7 +9,14 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from ...cad_objects import CadDocument, CadObject
-from ...drawing import DrawingBackend, DrawingBackendFactory, DrawingResult
+from ...drawing import (
+    DrawingBackend,
+    DrawingBackendFactory,
+    DrawingResult,
+    normalize_projection_angle,
+    projected_view_layout,
+    select_drawing_scale,
+)
 
 _TEMPLATES = {
     ("ISO", "A3", None): "A3_Landscape_ISO5457_advanced.svg",
@@ -46,6 +53,7 @@ class FreeCADDrawingBackend(DrawingBackend):
         objects: Sequence[CadObject],
         standard: str,
         sheet_size: str,
+        projection_angle: str,
         template_id: Optional[str],
         output_directory: Path,
         part_name: str,
@@ -54,6 +62,7 @@ class FreeCADDrawingBackend(DrawingBackend):
     ) -> DrawingResult:
         normalized_standard = standard.strip().upper()
         normalized_sheet = sheet_size.strip().upper()
+        normalized_projection = normalize_projection_angle(projection_angle)
         normalized_template = template_id.strip().lower() if template_id else None
         template_filename = _TEMPLATES.get(
             (normalized_standard, normalized_sheet, normalized_template)
@@ -96,23 +105,22 @@ class FreeCADDrawingBackend(DrawingBackend):
 
         scale = self._drawing_scale(sources)
         created_names = [page.Name, template.Name]
-        view_specs = (
-            ("RapidCADFront", (0.0, -1.0, 0.0), 90.0, 135.0),
-            ("RapidCADTop", (0.0, 0.0, 1.0), 90.0, 225.0),
-            ("RapidCADRight", (1.0, 0.0, 0.0), 190.0, 135.0),
-            ("RapidCADIsometric", (1.0, -1.0, 1.0), 285.0, 150.0),
+        view_specs = projected_view_layout(
+            normalized_projection,
+            sheet_size=normalized_sheet,
         )
         views = []
-        for name, direction, x, y in view_specs:
-            view = native_document.addObject("TechDraw::DrawViewPart", name)
+        for spec in view_specs:
+            native_name = f"RapidCAD{spec.name.title()}"
+            view = native_document.addObject("TechDraw::DrawViewPart", native_name)
             view.Source = list(sources)
-            view.Direction = App.Vector(*direction)
+            view.Direction = App.Vector(*spec.direction)
             if hasattr(view, "ScaleType"):
                 view.ScaleType = "Custom"
             view.Scale = scale
             page.addView(view)
-            view.X = x
-            view.Y = y
+            view.X = spec.x_mm
+            view.Y = spec.y_mm
             views.append(view)
             created_names.append(view.Name)
 
@@ -123,7 +131,7 @@ class FreeCADDrawingBackend(DrawingBackend):
         if hasattr(dimensions, "TextSize"):
             dimensions.TextSize = 3.5
         page.addView(dimensions)
-        dimensions.X = 165.0
+        dimensions.X = 300.0
         dimensions.Y = 65.0
         created_names.append(dimensions.Name)
 
@@ -141,6 +149,11 @@ class FreeCADDrawingBackend(DrawingBackend):
         native_document.recompute()
 
         self._validate_views(views)
+        self._validate_layout(
+            [*views, dimensions],
+            page_width_mm=420.0,
+            page_height_mm=297.0,
+        )
         safe_part = self._safe_component(part_name, "drawing")
         safe_run = self._safe_component(run_id, "run")
         pdf_path = output_directory / (
@@ -191,7 +204,9 @@ class FreeCADDrawingBackend(DrawingBackend):
                 "page_width_mm": 420,
                 "page_height_mm": 297,
                 "template_id": normalized_template or "iso-a3-v1",
+                "projection_angle": normalized_projection,
                 "scale": scale,
+                "views": [spec.to_dict() for spec in view_specs],
                 "vector_export": True,
                 "minimum_text_height_mm": 3.5,
                 "parametric_link_preserved": True,
@@ -248,22 +263,13 @@ class FreeCADDrawingBackend(DrawingBackend):
 
     @staticmethod
     def _drawing_scale(sources: Sequence[Any]) -> float:
-        largest = max(
-            *(
-                dimension
-                for source in sources
-                for dimension in (
-                    float(source.Shape.BoundBox.XLength),
-                    float(source.Shape.BoundBox.YLength),
-                    float(source.Shape.BoundBox.ZLength),
-                )
-            ),
-            1.0,
-        )
-        target = 75.0
-        raw = target / largest
-        scales = (10.0, 5.0, 2.0, 1.0, 0.5, 0.2, 0.1, 0.05, 0.02, 0.01)
-        return next((value for value in scales if value <= raw), 0.01)
+        x_min = min(float(item.Shape.BoundBox.XMin) for item in sources)
+        x_max = max(float(item.Shape.BoundBox.XMax) for item in sources)
+        y_min = min(float(item.Shape.BoundBox.YMin) for item in sources)
+        y_max = max(float(item.Shape.BoundBox.YMax) for item in sources)
+        z_min = min(float(item.Shape.BoundBox.ZMin) for item in sources)
+        z_max = max(float(item.Shape.BoundBox.ZMax) for item in sources)
+        return select_drawing_scale((x_max - x_min, y_max - y_min, z_max - z_min))
 
     @staticmethod
     def _overall_dimension_lines(sources: Sequence[Any]) -> list[str]:
@@ -343,6 +349,54 @@ class FreeCADDrawingBackend(DrawingBackend):
             raise RuntimeError(
                 "TechDraw produced no visible projected geometry; PDF export aborted."
             )
+
+    @staticmethod
+    def _validate_layout(
+        views: Sequence[Any],
+        *,
+        page_width_mm: float,
+        page_height_mm: float,
+    ) -> None:
+        """Reject projected views that TechDraw reports outside or overlapping."""
+
+        boxes: list[tuple[str, float, float, float, float]] = []
+        for view in views:
+            try:
+                width = float(view.Width)
+                height = float(view.Height)
+                x = float(view.X)
+                y = float(view.Y)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if width <= 0 or height <= 0:
+                continue
+            box = (
+                str(getattr(view, "Name", "view")),
+                x - width / 2.0,
+                y - height / 2.0,
+                x + width / 2.0,
+                y + height / 2.0,
+            )
+            if (
+                box[1] < 0
+                or box[2] < 0
+                or box[3] > page_width_mm
+                or box[4] > page_height_mm
+            ):
+                raise RuntimeError(f"Projected view {box[0]} falls outside the sheet.")
+            boxes.append(box)
+        for index, first in enumerate(boxes):
+            for second in boxes[index + 1 :]:
+                separated = (
+                    first[3] + 2.0 <= second[1]
+                    or second[3] + 2.0 <= first[1]
+                    or first[4] + 2.0 <= second[2]
+                    or second[4] + 2.0 <= first[2]
+                )
+                if not separated:
+                    raise RuntimeError(
+                        f"Projected views {first[0]} and {second[0]} overlap."
+                    )
 
     @staticmethod
     def _validate_pdf(path: Path) -> None:

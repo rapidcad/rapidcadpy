@@ -7,9 +7,107 @@ from dataclasses import dataclass, field
 import math
 from pathlib import Path
 import re
-from typing import Dict, Optional, Sequence, Type
+from typing import Dict, Literal, Optional, Sequence, Type
 
 from .cad_objects import CadDocument, CadObject
+
+
+ProjectionAngle = Literal["first", "third"]
+
+
+@dataclass(frozen=True)
+class DrawingViewSpec:
+    """Backend-neutral placement and camera direction for one drawing view."""
+
+    name: str
+    direction: tuple[float, float, float]
+    x_mm: float
+    y_mm: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "direction": list(self.direction),
+            "x_mm": self.x_mm,
+            "y_mm": self.y_mm,
+        }
+
+
+def normalize_projection_angle(value: str) -> ProjectionAngle:
+    """Validate a public projection-angle value without backend terminology."""
+
+    normalized = value.strip().lower().replace("_", "-")
+    aliases: dict[str, ProjectionAngle] = {
+        "first": "first",
+        "first-angle": "first",
+        "third": "third",
+        "third-angle": "third",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError("projection_angle must be 'first' or 'third'.") from exc
+
+
+def projected_view_layout(
+    projection_angle: str,
+    *,
+    sheet_size: str = "A3",
+) -> tuple[DrawingViewSpec, ...]:
+    """Return the standard four-view layout for a drawing sheet.
+
+    First-angle projection places the top view below the front view and the
+    right-side view to its left. Third-angle projection reverses those two
+    placements. Coordinates are expressed in sheet millimetres so adapters do
+    not leak native coordinate objects through the public contract.
+    """
+
+    if sheet_size.strip().upper() != "A3":
+        raise ValueError("Projected-view layout currently supports A3 sheets only.")
+    angle = normalize_projection_angle(projection_angle)
+    if angle == "first":
+        positions = {
+            "front": (170.0, 170.0),
+            "top": (170.0, 65.0),
+            "right": (60.0, 170.0),
+            "isometric": (315.0, 175.0),
+        }
+    else:
+        positions = {
+            "front": (105.0, 120.0),
+            "top": (105.0, 225.0),
+            "right": (215.0, 120.0),
+            "isometric": (315.0, 185.0),
+        }
+    directions = {
+        "front": (0.0, -1.0, 0.0),
+        "top": (0.0, 0.0, 1.0),
+        "right": (1.0, 0.0, 0.0),
+        "isometric": (1.0, -1.0, 1.0),
+    }
+    return tuple(
+        DrawingViewSpec(
+            name=name,
+            direction=directions[name],
+            x_mm=positions[name][0],
+            y_mm=positions[name][1],
+        )
+        for name in ("front", "top", "right", "isometric")
+    )
+
+
+def select_drawing_scale(extents_mm: Sequence[float]) -> float:
+    """Select the largest RAP-50 engineering scale that fits an A3 layout."""
+
+    if len(extents_mm) != 3 or any(value <= 0 for value in extents_mm):
+        raise ValueError("extents_mm must contain three positive dimensions.")
+    largest = max(float(value) for value in extents_mm)
+    for scale in (2.0, 1.0, 0.5, 0.2):
+        if largest * scale <= 100.0:
+            return scale
+    raise ValueError(
+        "The selected geometry does not fit the A3 four-view layout at 1:5 scale."
+    )
 
 
 @dataclass(frozen=True)
@@ -57,6 +155,7 @@ class DrawingBackend(ABC):
         objects: Sequence[CadObject],
         standard: str,
         sheet_size: str,
+        projection_angle: str,
         template_id: Optional[str],
         output_directory: Path,
         part_name: str,
@@ -321,8 +420,13 @@ __all__ = [
     "DrawingBackend",
     "DrawingBackendFactory",
     "DrawingResult",
+    "DrawingViewSpec",
+    "ProjectionAngle",
     "create_drawing_backend",
     "finalize_vector_pdf",
+    "normalize_projection_angle",
+    "projected_view_layout",
     "register_drawing_backend",
+    "select_drawing_scale",
     "validate_print_ready_pdf",
 ]

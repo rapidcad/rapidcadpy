@@ -1608,6 +1608,7 @@ class CadSession:
         object_ids: Optional[list[str]] = None,
         standard: str = "ISO",
         sheet_size: str = "A3",
+        projection_angle: str = "first",
         template_id: Optional[str] = None,
         output_directory: Optional[str] = None,
         part_name: Optional[str] = None,
@@ -1624,6 +1625,7 @@ class CadSession:
             "object_ids": object_ids,
             "standard": standard,
             "sheet_size": sheet_size,
+            "projection_angle": projection_angle,
             "template_id": template_id,
             "output_directory": output_directory,
             "part_name": part_name,
@@ -1672,6 +1674,7 @@ class CadSession:
                 objects=drawing_objects,
                 standard=standard,
                 sheet_size=sheet_size,
+                projection_angle=projection_angle,
                 template_id=template_id,
                 output_directory=resolved_output,
                 part_name=resolved_part_name,
@@ -1707,7 +1710,11 @@ class CadSession:
         result.update(
             {
                 "ok": True,
-                "summary": f"Created ISO A3 technical drawing for {resolved_part_name}",
+                "summary": (
+                    f"Created {standard.strip().upper()} "
+                    f"{sheet_size.strip().upper()} {projection_angle.strip().lower()}-angle "
+                    f"technical drawing for {resolved_part_name}"
+                ),
                 "run_id": resolved_run_id,
                 "created_object_ids": created_object_ids,
                 "document_revision": self.document_revision,
