@@ -56,6 +56,10 @@ docs/node_modules
 *.step
 *.stp
 *.stl
+*.fcstd
+*.FCStd
+*.FCBak
+outputs/
 
 # Debug and test output files
 *_debug*.py

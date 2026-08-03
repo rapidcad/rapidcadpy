@@ -118,6 +118,7 @@ def mesh_step_file(
     except Exception as e:
         print(f"Error meshing STEP file {step_path}: {e}", file=sys.stderr)
         import traceback
+
         print(traceback.format_exc(), file=sys.stderr)
         return None
 
@@ -395,9 +396,12 @@ def write_calculix_inp(
 
             # Calculate average node spacing as proxy for area per node
             node_coords = mesh.points[[n for n in node_set]]
-            mesh_density = num_nodes / (
-                np.max(node_coords, axis=0) - np.min(node_coords, axis=0) + 1e-9
-            ).prod()
+            mesh_density = (
+                num_nodes
+                / (
+                    np.max(node_coords, axis=0) - np.min(node_coords, axis=0) + 1e-9
+                ).prod()
+            )
             area_per_node = 1.0 / (mesh_density ** (2 / 3) + 1e-9)
 
             # Force per node = pressure * area_per_node
@@ -446,7 +450,7 @@ def write_debug_visualization(
 
     # Create node type array
     node_type = np.zeros(num_nodes, dtype=np.int32)
-    
+
     # Mark constraint nodes (type 1)
     for _, nodes in constraint_node_sets:
         for node_id in nodes:
@@ -464,7 +468,7 @@ def write_debug_visualization(
 
     # Add node type as scalar field
     mesh["node_type"] = node_type
-    
+
     # Add individual constraint sets
     for set_name, nodes in constraint_node_sets:
         field = np.zeros(num_nodes, dtype=np.int32)
@@ -586,9 +590,7 @@ def process_step_file_to_inp(
                 )
                 continue
 
-            set_name = (
-                f"constraint_{i}" if len(constraint_faces) > 1 else "constraint"
-            )
+            set_name = f"constraint_{i}" if len(constraint_faces) > 1 else "constraint"
             constraint_node_sets.append((set_name, constraint_nodes))
 
         if not constraint_node_sets:
@@ -596,9 +598,7 @@ def process_step_file_to_inp(
             return result
 
         # Calculate target number of loads
-        total_faces = (
-            len(load_faces) + len(cylindrical_faces) + len(constraint_faces)
-        )
+        total_faces = len(load_faces) + len(cylindrical_faces) + len(constraint_faces)
         if total_faces >= 40:
             target_total_loads = 3
         elif total_faces >= 20:
@@ -622,10 +622,10 @@ def process_step_file_to_inp(
         for i, cyl_face in enumerate(cylindrical_faces[:num_pressure_loads], 1):
             # Select nodes on cylinder surface
             cyl_axis = determine_cylinder_axis(cyl_face.cylinder_axis)
-            
+
             # Use tighter tolerance - fraction of radius, not just mesh size
             tolerance = min(mesh_size * 0.3, cyl_face.cylinder_radius * 0.15)
-            
+
             cyl_nodes = select_nodes_on_cylinder(
                 mesh,
                 cyl_face.cylinder_location,
@@ -640,14 +640,10 @@ def process_step_file_to_inp(
             )
 
             if not cyl_nodes:
-                print(
-                    f"  Warning: No nodes found on cylinder {i}", file=sys.stderr
-                )
+                print(f"  Warning: No nodes found on cylinder {i}", file=sys.stderr)
                 continue
 
-            set_name = (
-                f"pressure_{i}" if len(cylindrical_faces) > 1 else "pressure"
-            )
+            set_name = f"pressure_{i}" if len(cylindrical_faces) > 1 else "pressure"
             direction = "inward" if random.random() < 0.7 else "outward"
             pressure_loads.append((set_name, cyl_nodes, direction, pressure_mpa))
 
@@ -664,9 +660,7 @@ def process_step_file_to_inp(
             load_nodes = select_nodes_in_box(mesh, load_selector)
 
             if not load_nodes:
-                print(
-                    f"  Warning: No nodes found in load region {i}", file=sys.stderr
-                )
+                print(f"  Warning: No nodes found in load region {i}", file=sys.stderr)
                 continue
 
             set_name = f"load_{i}" if len(load_faces) > 1 else "load"
@@ -858,9 +852,7 @@ def main():
         results.append(result)
 
         if result["success"]:
-            print(
-                f"  ✓ Written: {Path(result['inp_file']).name} + debug VTU"
-            )
+            print(f"  ✓ Written: {Path(result['inp_file']).name} + debug VTU")
             print(
                 f"    Mesh: {result['num_nodes']} nodes, {result['num_elements']} elements"
             )
