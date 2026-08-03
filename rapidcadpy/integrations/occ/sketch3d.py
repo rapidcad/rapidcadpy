@@ -10,7 +10,7 @@ from typing import Any
 from OCC.Core.BRepBuilderAPI import BRepBuilderAPI_MakeEdge, BRepBuilderAPI_MakeWire
 from OCC.Core.gp import gp_Pnt
 
-from .sketch3d import Polyline3D, Sketch3D
+from ...sketch3d import Polyline3D, Sketch3D
 
 
 class OccSketch3D(Sketch3D):

@@ -57,6 +57,10 @@ setup(
             "myst-parser>=0.18.0",
             "sphinx-autodoc-typehints>=1.12.0",
         ],
+        "drawing": [
+            "pypdf>=5.0.0",
+            "weasyprint>=62.0; python_version>='3.9'",
+        ],
     },
     classifiers=[
         "Development Status :: 3 - Alpha",

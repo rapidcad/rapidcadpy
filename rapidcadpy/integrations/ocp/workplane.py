@@ -1,5 +1,5 @@
 from math import degrees, pi
-from typing import Any, Optional
+from typing import Any, List, Optional, Union
 
 
 from ...app import App
@@ -20,6 +20,7 @@ class OccWorkplane(Workplane):
         """Set the workplane to the XY plane."""
         wp = cls(app=app)
         wp.normal_vector = Vector(0, 0, 1)
+        wp._offset = float(offset) if offset is not None else 0.0
         app.register_workplane(wp)
         wp._setup_coordinate_system()
         return wp
@@ -389,3 +390,60 @@ class OccWorkplane(Workplane):
     ):
         """Alias for chamfer_edge to match Inventor's chamfer method name."""
         return self.app.chamfer_edge(x, radius, angle, distance, tol)
+
+    def loft(
+        self,
+        profiles: Union["OccWorkplane", List["OccWorkplane"]],
+        make_solid: bool = True,
+        ruled: bool = False,
+    ) -> "OccShape":
+        """Loft through this workplane's profile and one or more additional profiles.
+
+        Args:
+            profiles: One or more profile workplanes in loft order (after self).
+            make_solid: Create a solid (True) or shell (False).
+            ruled: Use ruled faces instead of smooth transitions.
+
+        Returns:
+            OccShape wrapping the lofted shape.
+        """
+        from OCP.BRepOffsetAPI import BRepOffsetAPI_ThruSections
+        from .sketch2d import OccSketch2D
+        from .shape import OccShape
+
+        profile_wps = [profiles] if not isinstance(profiles, list) else profiles
+        all_wps = [self] + profile_wps
+
+        def _consume_primitives(wp: "OccWorkplane"):
+            if getattr(wp, "_pending_shapes", None):
+                prims = list(wp._pending_shapes)
+                wp._pending_shapes = []
+                wp._current_position = Vertex(0, 0)
+                wp._loop_start = None
+                return prims
+            loops = getattr(wp, "_accumulated_loops", None)
+            if loops:
+                return loops.pop()
+            raise ValueError("Loft profile has no sketch primitives.")
+
+        loft_builder = BRepOffsetAPI_ThruSections(make_solid, ruled)
+
+        for wp in all_wps:
+            prims = _consume_primitives(wp)
+            sketch = OccSketch2D(primitives=prims, workplane=wp, app=wp.app)
+            wire = sketch._make_wire()
+            if wire is None:
+                if getattr(self.app, "silent_geometry_failures", False):
+                    return None  # type: ignore[return-value]
+                raise ValueError("Failed to build loft profile wire.")
+            loft_builder.AddWire(wire)
+
+        loft_builder.Build()
+
+        if not loft_builder.IsDone():
+            if getattr(self.app, "silent_geometry_failures", False):
+                return None  # type: ignore[return-value]
+            raise RuntimeError("Loft operation failed.")
+
+        self._clear_pending_shapes()
+        return OccShape(obj=loft_builder.Shape(), app=self.app)

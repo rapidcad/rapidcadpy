@@ -1,35 +1,39 @@
-"""
-FreeCAD integration for rapidcadpy.
+"""FreeCAD integration for RapidCADPy.
 
-Requires FreeCAD Python modules to be importable. If FreeCAD is not installed
-as a standard Python package, point FREECAD_LIB_PATH to the directory that
-contains FreeCAD.so / FreeCAD.pyd (e.g. /usr/lib/freecad/lib or the Mod
-directory from a conda-forge freecad install).
+FreeCAD's Python modules are loaded lazily so discovery and connector
+installation remain usable from a normal Python interpreter.
 """
 
-import os
-import sys
+from __future__ import annotations
 
-# Attempt to load FreeCAD modules from the optional env-var path
-_freecad_lib_path = os.environ.get("FREECAD_LIB_PATH")
-if _freecad_lib_path and _freecad_lib_path not in sys.path:
-    sys.path.insert(0, _freecad_lib_path)
+import importlib
 
-try:
-    import FreeCAD  # noqa: F401
-    import Part  # noqa: F401
-except ImportError as _e:
-    import logging as _logging
+_EXPORTS = {
+    "FreeCADApp": (".app", "FreeCADApp"),
+    "ensure_freecad_python_path": (".app", "ensure_freecad_python_path"),
+    "FreeCADGuiConnection": (".gui_connection", "FreeCADGuiConnection"),
+    "FreeCADShape": (".shape", "FreeCADShape"),
+    "FreeCADSketch2D": (".sketch2d", "FreeCADSketch2D"),
+    "FreeCADWorkplane": (".workplane", "FreeCADWorkplane"),
+    "discover_freecad_user_mod_dir": (
+        ".connector_addon",
+        "discover_freecad_user_mod_dir",
+    ),
+    "install_freecad_connector": (
+        ".connector_addon",
+        "install_freecad_connector",
+    ),
+}
 
-    _logging.warning(
-        f"FreeCAD integration: could not import FreeCAD/Part ({_e}). "
-        "Set the FREECAD_LIB_PATH environment variable to the directory "
-        "containing FreeCAD.so / FreeCAD.pyd."
-    )
 
-from .app import FreeCADApp
-from .shape import FreeCADShape
-from .sketch2d import FreeCADSketch2D
-from .workplane import FreeCADWorkplane
+def __getattr__(name):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module_name, attribute_name = _EXPORTS[name]
+    module = importlib.import_module(module_name, __name__)
+    value = getattr(module, attribute_name)
+    globals()[name] = value
+    return value
 
-__all__ = ["FreeCADApp", "FreeCADShape", "FreeCADSketch2D", "FreeCADWorkplane"]
+
+__all__ = list(_EXPORTS)

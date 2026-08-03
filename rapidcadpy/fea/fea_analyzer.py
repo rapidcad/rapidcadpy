@@ -149,6 +149,33 @@ class FEAAnalyzer:
         self.load_case.constraints.append(constraint)
         return self
 
+    def save(self, path: str) -> None:
+        """Pickle this FEAAnalyzer to *path* so it can be reloaded later.
+
+        Usage::
+
+            fea.save("my_run/fea_analyzer.pkl")
+            fea2 = FEAAnalyzer.load("my_run/fea_analyzer.pkl")
+        """
+        import pickle, pathlib
+
+        pathlib.Path(path).parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+        logger.info(f"FEAAnalyzer saved to {path}")
+
+    @classmethod
+    def load(cls, path: str) -> "FEAAnalyzer":
+        """Load a previously saved FEAAnalyzer from *path*."""
+        import pickle
+
+        with open(path, "rb") as f:
+            obj = pickle.load(f)
+        if not isinstance(obj, cls):
+            raise TypeError(f"Expected FEAAnalyzer, got {type(obj).__name__}")
+        logger.info(f"FEAAnalyzer loaded from {path}")
+        return obj
+
     def solve(self) -> "FEAResults":
         """
         Run FEA analysis and return results.
@@ -390,13 +417,20 @@ class FEAAnalyzer:
         loads: List["Load"],
         constraints: List["BoundaryCondition"],
         mesh_size: float,
-    ) -> EmptyKernel:
+    ):
         """Apply BCs/loads to a lightweight model without invoking torchfem."""
+        import types
         import warnings
+
+        import torch
 
         from .utils import get_geometry_info
 
-        model = self.kernel
+        n_nodes = nodes.shape[0]
+        model = types.SimpleNamespace(
+            constraints=torch.zeros((n_nodes, 3), dtype=torch.bool),
+            forces=torch.zeros((n_nodes, 3), dtype=torch.float64),
+        )
         geometry_info = get_geometry_info(nodes)
 
         selected_loaded = 0
@@ -857,6 +891,155 @@ class FEAAnalyzer:
             # If we can't check connectivity, assume it's invalid
             return False
 
+    def show_cad(
+        self,
+        color: str = "lightblue",
+        opacity: float = 1.0,
+        show_edges: bool = False,
+        interactive: bool = True,
+        window_size: Tuple[int, int] = (1200, 800),
+        mesh_deflection: float = 0.01,
+        show_conditions: bool = False,
+        point_size: float = 12.0,
+    ):
+        """
+        Display the CAD geometry (STEP file) as a 3D solid in the notebook.
+
+        Works directly on the ``FEAAnalyzer`` before calling ``solve()``.
+        Delegates to a temporary ``FEAResults.show_cad()`` call seeded with
+        the analyzer's shape path so the same rendering pipeline is reused.
+
+        The *shape* passed to this analyzer must be a STEP file path (``str``)
+        or a :class:`~rapidcadpy.shape.Shape` with a ``to_step`` method.
+
+        Args:
+            color: Surface colour (any PyVista / matplotlib colour string).
+            opacity: Surface opacity (0 = transparent, 1 = opaque).
+            show_edges: Show tessellation edges.
+            interactive: Use interactive trame viewer (False = off-screen).
+            window_size: Viewer width × height in pixels.
+            mesh_deflection: Tessellation quality — smaller = finer.
+            show_conditions: Overlay loads and boundary conditions from the
+                attached ``load_case``.  Fixed/constrained nodes are shown as
+                red spheres; loaded nodes as green spheres with force arrows.
+                A lightweight mesh is generated internally — no prior call to
+                ``solve()`` is required.
+
+        Returns:
+            PyVista plotter object.
+        """
+        import tempfile, os as _os
+        import torch
+
+        from .results import FEAResults
+
+        # Resolve shape → STEP path
+        if isinstance(self.shape, str):
+            step_path = self.shape
+            _tmp_step = None
+        elif hasattr(self.shape, "to_step"):
+            _tmp_fd, step_path = tempfile.mkstemp(suffix="_cad_preview.step")
+            _os.close(_tmp_fd)
+            _tmp_step = step_path
+            self.shape.to_step(step_path)
+        else:
+            raise TypeError(
+                f"Cannot show CAD for shape type {type(self.shape).__name__!r}. "
+                "Expected a STEP file path (str) or a Shape with to_step()."
+            )
+
+        try:
+            if show_conditions:
+                # Mesh the shape and apply the load_case's BCs so that
+                # model.constraints / model.forces are populated.
+                # Resolve the mesher from Config.MESHER so the system-wide
+                # setting is respected (e.g. "gmsh-subprocess" avoids the
+                # netgen.occ / OCP binding conflict in the same process).
+                try:
+                    from config.settings import Config as _Config
+
+                    _mesher_name = _Config.MESHER
+                except Exception:
+                    _mesher_name = "gmsh-subprocess"
+
+                from .mesher import (
+                    GmshMesher,
+                    GmshSubprocessMesher,
+                    IsolatedGmshMesher,
+                    NetgenMesher,
+                    NetgenSubprocessMesher,
+                )
+
+                _mesher_map = {
+                    "gmsh": GmshMesher,
+                    "gmsh-subprocess": GmshSubprocessMesher,
+                    "gmsh-isolated": IsolatedGmshMesher,
+                    "netgen": NetgenMesher,
+                    "netgen-subprocess": NetgenSubprocessMesher,
+                }
+                _mesher_cls = _mesher_map.get(_mesher_name, GmshSubprocessMesher)
+                _cad_mesher = _mesher_cls()
+                nodes, elements = _cad_mesher.generate_mesh(
+                    step_path,
+                    mesh_size=self.mesh_size,
+                    element_type="tet4",
+                    dim=3,
+                )
+                nodes = nodes.to(torch.float64)
+                _resolved_step = step_path
+                model = self._apply_visualization_boundary_conditions(
+                    nodes,
+                    elements,
+                    self.load_case.loads,
+                    self.load_case.constraints,
+                    mesh_size=self.mesh_size,
+                )
+                n = nodes.shape[0]
+                _dummy = FEAResults(
+                    material=self.load_case.material,
+                    mesh_size=self.mesh_size,
+                    element_type=self.element_type,
+                    nodes=nodes,
+                    elements=elements,
+                    displacement=torch.zeros((n, 3), dtype=torch.float64),
+                    stress=torch.zeros((n, 3, 3), dtype=torch.float64),
+                    von_mises_stress=torch.zeros(n, dtype=torch.float64),
+                    bounding_box={},
+                    volume=0.0,
+                    mass=0.0,
+                    step_path=step_path,
+                    model=model,
+                )
+            else:
+                _dummy = FEAResults(
+                    material=self.load_case.material,
+                    mesh_size=self.mesh_size,
+                    element_type=self.element_type,
+                    nodes=torch.zeros((1, 3), dtype=torch.float64),
+                    elements=torch.zeros((1, 4), dtype=torch.int64),
+                    displacement=torch.zeros((1, 3), dtype=torch.float64),
+                    stress=torch.zeros((1, 3, 3), dtype=torch.float64),
+                    von_mises_stress=torch.zeros(1, dtype=torch.float64),
+                    bounding_box={},
+                    volume=0.0,
+                    mass=0.0,
+                    step_path=step_path,
+                )
+
+            return _dummy.show_cad(
+                color=color,
+                opacity=opacity,
+                show_edges=show_edges,
+                interactive=interactive,
+                window_size=window_size,
+                mesh_deflection=mesh_deflection,
+                show_conditions=show_conditions,
+                point_size=point_size,
+            )
+        finally:
+            if _tmp_step and _os.path.exists(_tmp_step):
+                _os.unlink(_tmp_step)
+
     def show(
         self,
         interactive: bool = True,
@@ -931,9 +1114,9 @@ class FEAAnalyzer:
             plotter.add_mesh(
                 design_box,
                 style="wireframe",
-                color="green",
-                line_width=3,
-                opacity=1.0,
+                color="steelblue",
+                line_width=2,
+                opacity=0.8,
             )
             return True
 
@@ -1159,7 +1342,30 @@ class FEAAnalyzer:
             plt.close(fig)
             return
 
-        # ── conditions / mesh modes: requires meshing ─────────────────────────
+        # ── conditions mode: strict publication visualizer, no silent fallback ─
+        if display == "conditions":
+            from .load_case.visualize_load_case import visualize_load_case
+            import matplotlib.pyplot as plt
+
+            try:
+                fig = visualize_load_case(
+                    data=self, output_png=filename if filename else None, iso_only=True
+                )
+            except Exception as exc:
+                raise ValueError(
+                    "Failed to render display='conditions' with the publication visualizer. "
+                    "No PyVista fallback is enabled."
+                ) from exc
+
+            if filename:
+                plt.close(fig)
+                return
+            if interactive:
+                plt.show()
+                plt.close(fig)
+                return
+            return fig
+
         # Configure for headless/non-interactive mode if needed
         if filename:
             interactive = False
@@ -1209,9 +1415,7 @@ class FEAAnalyzer:
                 pv_mesh,
                 color="lightblue",
                 opacity=0.3,
-                show_edges=True,
-                edge_color="gray",
-                line_width=0.5,
+                show_edges=False,
             )
 
         if display == "conditions":
@@ -1225,7 +1429,7 @@ class FEAAnalyzer:
                 plotter.add_mesh(
                     fixed_points,
                     color="red",
-                    point_size=15,
+                    point_size=5,
                     render_points_as_spheres=True,
                     label="Fixed Nodes",
                 )
@@ -1238,16 +1442,15 @@ class FEAAnalyzer:
                 load_points = pv.PolyData(loaded_nodes)
                 plotter.add_mesh(
                     load_points,
-                    color="green",
-                    point_size=15,
+                    color="limegreen",
+                    point_size=5,
                     render_points_as_spheres=True,
                     label="Loaded Nodes",
                 )
                 has_legend_entries = True
 
-                # Add force arrows
-                # Scale arrows for visibility
-                arrow_scale = (nodes[:, 0].max() - nodes[:, 0].min()) * 0.05
+                # Add force arrows — scaled to 25 % of the mesh X-span for readability
+                arrow_scale = (nodes[:, 0].max() - nodes[:, 0].min()) * 0.25
                 force_magnitude = np.linalg.norm(force_vectors, axis=1, keepdims=True)
                 force_directions = force_vectors / (force_magnitude + 1e-10)
                 scaled_vectors = force_directions * arrow_scale
@@ -1256,7 +1459,7 @@ class FEAAnalyzer:
                     loaded_nodes,
                     scaled_vectors,
                     mag=1.0,
-                    color="darkgreen",
+                    color="limegreen",
                     label="Force Vectors",
                 )
                 has_legend_entries = True

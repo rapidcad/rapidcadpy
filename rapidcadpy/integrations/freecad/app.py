@@ -2,36 +2,179 @@
 FreeCAD App – top-level document manager and App implementation.
 """
 
-from typing import Optional, Tuple, Union
+import os
+import sys
+from typing import Any, Optional, Tuple, Union
 
 from ...app import App
+from ...cad_objects import CadDocument
+from .cad_adapter import FreeCADAdapter
 
 VectorLike = Union[Tuple[float, float, float], Tuple[float, float]]
+
+
+def ensure_freecad_python_path() -> str | None:
+    """Add FreeCAD module directory to ``sys.path`` when discoverable."""
+    candidates = [
+        os.environ.get("FREECAD_LIB_PATH", "").strip(),
+        "/Applications/FreeCAD.app/Contents/Resources/lib",
+        "/usr/lib/freecad/lib",
+        "/usr/lib64/freecad/lib",
+    ]
+
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate:
+            continue
+
+        normalized = os.path.abspath(candidate)
+        if normalized in seen or not os.path.exists(normalized):
+            continue
+        seen.add(normalized)
+
+        os.environ.setdefault("FREECAD_LIB_PATH", normalized)
+        if normalized not in sys.path:
+            sys.path.insert(0, normalized)
+        return normalized
+
+    return None
 
 
 class FreeCADApp(App):
     """
     FreeCAD implementation of the App base class.
 
-    Creates and owns a headless FreeCAD document.  All shapes live as
-    Part.Shape objects (stored in FreeCADShape.obj) and are independent of
-    the document tree – the document is kept mostly as a namespace so that
-    FreeCAD's internal bookkeeping stays happy in headless mode.
+    Creates and owns a headless FreeCAD document. Document-backed shapes retain
+    backend-neutral references to their native FreeCAD features, while
+    operations unsupported by native history can still use standalone
+    ``Part.Shape`` geometry.
     """
 
     def __init__(
         self,
         doc_name: str = "RapidCADPy_Doc",
         silent_geometry_failures: bool = False,
+        *,
+        instance_id: Optional[str] = None,
     ):
         super().__init__(silent_geometry_failures=silent_geometry_failures)
+        self._gui_connection = None
+        if doc_name == "attach":
+            from .gui_connection import FreeCADGuiConnection
+
+            self._gui_connection = FreeCADGuiConnection.attach(instance_id=instance_id)
+            self._fc_doc = None
+            self._cad_adapter = FreeCADAdapter()
+            self._cad_document = None
+            self._feature_counter = 0
+            return
+
+        ensure_freecad_python_path()
         import FreeCAD
 
         self._fc_doc = FreeCAD.newDocument(doc_name)
+        self._cad_adapter = FreeCADAdapter()
+        self._cad_document = self._wrap_document(self._fc_doc)
+        self._feature_counter = 0
+
+    @classmethod
+    def from_document(
+        cls,
+        document: Any,
+        silent_geometry_failures: bool = False,
+    ) -> "FreeCADApp":
+        """Bind to an existing native document without creating a scratch one."""
+        instance = cls.__new__(cls)
+        App.__init__(
+            instance,
+            silent_geometry_failures=silent_geometry_failures,
+        )
+        instance._gui_connection = None
+        instance._fc_doc = document
+        instance._cad_adapter = FreeCADAdapter()
+        instance._cad_document = instance._wrap_document(document)
+        instance._feature_counter = 0
+        return instance
+
+    @staticmethod
+    def list_instances():
+        """List running FreeCAD GUIs with an active RapidCADPy connector."""
+        from .gui_connection import FreeCADGuiConnection
+
+        return FreeCADGuiConnection.list_instances()
+
+    @property
+    def is_remote(self) -> bool:
+        """Return whether this app is attached through the GUI bridge."""
+        return self._gui_connection is not None
+
+    @property
+    def connection(self):
+        """Return the remote GUI connection for ``FreeCADApp('attach')``."""
+        return self._gui_connection
+
+    def call(self, method: str, **params):
+        """Call a RapidCADPy session method in an attached FreeCAD GUI."""
+        if self._gui_connection is None:
+            raise RuntimeError("This FreeCADApp is not attached to a GUI bridge.")
+        return self._gui_connection.call(method, params)
+
+    def get_doc(self):
+        """Get the underlying FreeCAD document."""
+        if self._fc_doc is None:
+            raise RuntimeError(
+                "A remotely attached FreeCAD document has no in-process native "
+                "handle. Use call() or CadSession instead."
+            )
+        return self._fc_doc
+
+    @property
+    def cad_document(self) -> CadDocument:
+        """Get the backend-neutral reference to the live FreeCAD document."""
+        if self._cad_document is None:
+            raise RuntimeError(
+                "Remote FreeCADApp documents are represented in the bridge process."
+            )
+        return self._cad_document
+
+    def get_cad_document(self) -> CadDocument:
+        """Compatibility method for code that cannot use properties."""
+        return self.cad_document
+
+    def bind_document(self, document) -> CadDocument:
+        """Replace the active native document and refresh its public binding."""
+        self._fc_doc = document
+        self._cad_document = self._wrap_document(document)
+        self._feature_counter = 0
+        self._shapes.clear()
+        self._workplanes.clear()
+        return self._cad_document
+
+    def _wrap_document(self, document) -> CadDocument:
+        return CadDocument(
+            backend=self._cad_adapter.backend_name,
+            native_handle=document,
+            adapter=self._cad_adapter,
+            name=str(getattr(document, "Name", "")),
+            label=str(getattr(document, "Label", "")),
+            file_name=str(getattr(document, "FileName", "")),
+        )
+
+    def get_next_feature_index(self) -> int:
+        """Get next feature index for naming."""
+        self._feature_counter += 1
+        return self._feature_counter
 
     # ------------------------------------------------------------------
     # Abstract property implementations
     # ------------------------------------------------------------------
+
+    @property
+    def sketch_3d(self):
+        """Entry point for building 3D path sketches (wires)."""
+        from .sketch3d import FreeCADSketch3D
+
+        return FreeCADSketch3D(self)
 
     @property
     def workplane_class(self):
@@ -68,22 +211,53 @@ class FreeCADApp(App):
         import FreeCAD
 
         FreeCAD.closeDocument(self._fc_doc.Name)
-        self._fc_doc = FreeCAD.newDocument("RapidCADPy_Doc")
-        self._shapes.clear()
-        self._workplanes.clear()
+        self.bind_document(FreeCAD.newDocument("RapidCADPy_Doc"))
+
+    def _make_feature_name(self, prefix: str, index: int) -> str:
+        return f"{prefix}{index}"
 
     # ------------------------------------------------------------------
     # Bulk export helpers
     # ------------------------------------------------------------------
 
+    def _upsert_doc_shapes(self, shapes, feature_name_prefix: str = "Shape"):
+        doc = self._fc_doc
+        existing = {obj.Name: obj for obj in doc.Objects}
+        features = []
+
+        for i, shape in enumerate(shapes):
+            if not hasattr(shape, "obj"):
+                continue
+
+            feature_name = (
+                feature_name_prefix if len(shapes) == 1 else f"{feature_name_prefix}{i}"
+            )
+            feature = existing.get(feature_name)
+            if feature is None:
+                feature = doc.addObject("Part::Feature", feature_name)
+            feature.Label = feature_name
+            feature.Shape = shape.obj
+            features.append(feature)
+
+        if not features:
+            raise ValueError("No valid shapes to export")
+
+        doc.recompute()
+        return features
+
     def to_step(self, file_name: str) -> None:
         """Export all registered shapes to a single STEP file."""
         if not self._shapes:
             raise ValueError("No shapes to export")
+
+        if len(self._shapes) == 1:
+            self._shapes[0].to_step(file_name)
+            return
+
         import Part
 
-        objs = [s.obj for s in self._shapes if hasattr(s, "obj")]
-        Part.export(objs, file_name)
+        features = self._upsert_doc_shapes(self._shapes, feature_name_prefix="Shape")
+        Part.export(features, file_name)
 
     def to_stl(self, file_name: str) -> None:
         """Export all registered shapes to a single STL file."""
@@ -100,36 +274,34 @@ class FreeCADApp(App):
                     combined = combined.fuse(s.obj)
             combined.exportStl(file_name)
 
-    def to_fcstd(self, file_name: str) -> None:
-        """
-        Save the document in FreeCAD's native .FCStd format.
+    def to_fcstd(
+        self,
+        file_name: str,
+        shapes=None,
+        feature_name_prefix: str = "Shape",
+    ) -> None:
+        """Save the document in FreeCAD's native .FCStd format.
 
-        Each registered shape is added to the document as a named
-        ``Part::Feature`` object so that the full shape tree is visible
-        and editable when the file is reopened in FreeCAD.  The document
-        is then serialised with ``Document.saveAs()``, which writes a
-        compressed archive containing the shape BRep data and the XML
-        model description – preserving the sequence of operations as
-        separate features in the tree.
+        If a single shape with its own document is provided, saves that document's
+        feature tree. Otherwise, writes all registered shapes as Part::Feature objects.
+        Geometry is eager — all features are realized immediately as the
+        shapes are built.
 
         Args:
             file_name: Destination path (should end in ``.FCStd``).
+            shapes: Optional explicit shapes to write instead of the full app registry.
+            feature_name_prefix: Base object name to use in the document tree.
         """
-        import FreeCAD
+        target_shapes = self._shapes if shapes is None else shapes
 
-        doc = self._fc_doc
+        # If single shape with its own doc, save that directly
+        if (
+            len(target_shapes) == 1
+            and getattr(target_shapes[0], "document", None) is not None
+        ):
+            target_shapes[0].document.save(file_name)
+            return
 
-        for i, shape in enumerate(self._shapes):
-            if not hasattr(shape, "obj"):
-                continue
-            feature_name = f"Shape{i}"
-            # Reuse an existing feature of the same name if present (idempotent
-            # on repeated calls), otherwise create a new one.
-            if feature_name in [o.Name for o in doc.Objects]:
-                feature = doc.getObject(feature_name)
-            else:
-                feature = doc.addObject("Part::Feature", feature_name)
-            feature.Shape = shape.obj
-
-        doc.recompute()
-        doc.saveAs(file_name)
+        # Otherwise, add shapes to app doc
+        self._upsert_doc_shapes(target_shapes, feature_name_prefix=feature_name_prefix)
+        self._fc_doc.saveAs(file_name)

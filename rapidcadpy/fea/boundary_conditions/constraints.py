@@ -124,16 +124,35 @@ class FixedConstraint(BoundaryCondition):
             # Fall through to bounding-box if nothing matched
         # ── Bounding-box / string / point path (original logic) ───────────────
         if isinstance(self.location, dict):
-            constrained_nodes = find_nodes_in_box(
-                nodes,
-                xmin=self.location.get("x_min"),
-                xmax=self.location.get("x_max"),
-                ymin=self.location.get("y_min"),
-                ymax=self.location.get("y_max"),
-                zmin=self.location.get("z_min"),
-                zmax=self.location.get("z_max"),
-                tolerance=self.tolerance * mesh_size,
-            )
+            loc = self.location
+            # Point-like selector: has centroid x/y/z but no min/max ranges.
+            # This arises from per-node point selectors built by the INP parser.
+            # Without this branch all bounds are None → find_nodes_in_box returns
+            # every node in the mesh.
+            if all(k in loc for k in ("x", "y", "z")) and not any(
+                k in loc for k in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+            ):
+                constrained_nodes = find_nodes_in_box(
+                    nodes,
+                    xmin=loc["x"],
+                    xmax=loc["x"],
+                    ymin=loc["y"],
+                    ymax=loc["y"],
+                    zmin=loc["z"],
+                    zmax=loc["z"],
+                    tolerance=self.tolerance * mesh_size,
+                )
+            else:
+                constrained_nodes = find_nodes_in_box(
+                    nodes,
+                    xmin=loc.get("x_min"),
+                    xmax=loc.get("x_max"),
+                    ymin=loc.get("y_min"),
+                    ymax=loc.get("y_max"),
+                    zmin=loc.get("z_min"),
+                    zmax=loc.get("z_max"),
+                    tolerance=self.tolerance * mesh_size,
+                )
         elif isinstance(self.location, str):
             loc = self.location.lower()
             if loc in ["end_1", "x_min"]:

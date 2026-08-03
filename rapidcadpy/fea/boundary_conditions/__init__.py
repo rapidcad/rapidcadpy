@@ -16,7 +16,8 @@ boundary_conditions/
     ├── pressure.py         PressureLoad
     ├── concentrated.py     ConcentratedLoad
     ├── linear_distributed.py  LinearDistributedLoad
-    └── acceleration.py     AccelerationLoad
+    ├── acceleration.py     AccelerationLoad
+    └── moment.py           MomentLoad
 
 All names are re-exported here so existing code that does::
 
@@ -43,6 +44,7 @@ from .loads import (
     ConcentratedLoad,
     LinearDistributedLoad,
     AccelerationLoad,
+    MomentLoad,
 )
 
 # Visualization
@@ -63,6 +65,7 @@ __all__ = [
     "ConcentratedLoad",
     "LinearDistributedLoad",
     "AccelerationLoad",
+    "MomentLoad",
     # visualization
     "visualize_boundary_conditions",
 ]

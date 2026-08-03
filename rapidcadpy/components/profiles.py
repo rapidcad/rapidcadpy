@@ -7,8 +7,8 @@ Intended usage:
 
 from __future__ import annotations
 
-from .sections.ipe import list_ipe
-from .sections.ipn import list_ipn
+from .sections.ipe import ipe, list_ipe
+from .sections.ipn import ipn, list_ipn
 
 
 def list_profiles() -> dict[str, list[str]]:

@@ -11,6 +11,7 @@ from .pressure import PressureLoad
 from .concentrated import ConcentratedLoad
 from .linear_distributed import LinearDistributedLoad
 from .acceleration import AccelerationLoad
+from .moment import MomentLoad
 
 __all__ = [
     "Load",
@@ -20,4 +21,5 @@ __all__ = [
     "ConcentratedLoad",
     "LinearDistributedLoad",
     "AccelerationLoad",
+    "MomentLoad",
 ]

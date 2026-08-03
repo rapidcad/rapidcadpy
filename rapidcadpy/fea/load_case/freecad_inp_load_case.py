@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -16,6 +17,66 @@ if TYPE_CHECKING:
     from .load_case import LoadCase
 
 logger = logging.getLogger(__name__)
+
+# meshio element types that are 1-D/0-D (beams, trusses, connectors, points).
+# These are never the 3-D design mesh and are stripped before handing the deck
+# to meshio — see _sanitize_inp_for_meshio for why.
+_NON_SOLID_MESHIO_TYPES = {"line", "line3", "vertex"}
+
+_P_ELEMENT_TYPE = re.compile(r"TYPE\s*=\s*([A-Za-z0-9]+)", re.IGNORECASE)
+
+
+def _sanitize_inp_for_meshio(path: Path) -> Path:
+    """Strip *ELEMENT blocks that meshio cannot parse, returning a temp file.
+
+    Solver-export tools (HyperMesh, Abaqus/CAE) frequently emit *ELEMENT blocks
+    that mix connectivity widths under a single ``TYPE`` — e.g. rigid-spider
+    ``B31`` blocks containing both 2-node and 3-node rows. meshio assumes a fixed
+    node count per element type and reshapes the flat token stream accordingly,
+    so a mixed-width block silently misaligns and an element ID gets read as a
+    node ID (``KeyError`` in ``point_ids[node]``). Connector/spring/mass element
+    types meshio doesn't know about raise outright instead.
+
+    These blocks are always beams/trusses/connectors — never the 3-D solid design
+    mesh — so we drop any *ELEMENT block whose type is unknown to meshio or maps
+    to a 1-D/0-D type, leaving nodes, solid elements and all sets untouched.
+    """
+    from meshio.abaqus._abaqus import abaqus_to_meshio_type  # noqa: PLC0415
+
+    out_lines: List[str] = []
+    skip_block = False
+    with open(path, "r") as f:
+        for line in f:
+            stripped = line.strip()
+            # Keyword lines start with a single '*'; '**' is an Abaqus comment.
+            if stripped.startswith("*") and not stripped.startswith("**"):
+                keyword = stripped[1:].split(",", 1)[0].strip().upper()
+                if keyword == "ELEMENT":
+                    m = _P_ELEMENT_TYPE.search(stripped)
+                    etype = m.group(1).upper() if m else ""
+                    meshio_type = abaqus_to_meshio_type.get(etype)
+                    skip_block = (
+                        meshio_type is None or meshio_type in _NON_SOLID_MESHIO_TYPES
+                    )
+                    if skip_block:
+                        logger.info(
+                            "Stripping unsupported *ELEMENT block TYPE=%s for meshio",
+                            etype or "<missing>",
+                        )
+                else:
+                    # Any other keyword ends a skipped element block.
+                    skip_block = False
+            if not skip_block:
+                out_lines.append(line)
+
+    tmp = tempfile.NamedTemporaryFile(
+        "w", suffix=".inp", delete=False, encoding="utf-8"
+    )
+    try:
+        tmp.writelines(out_lines)
+    finally:
+        tmp.close()
+    return Path(tmp.name)
 
 
 class LoadCaseFromFreeCadInp:
@@ -45,19 +106,30 @@ class LoadCaseFromFreeCadInp:
 
         # ------------------------------------------------------------------
         # 1. Parse mesh via meshio (nodes, elements, NSETs, ELSETs)
+        #
+        # Beam/connector *ELEMENT blocks (e.g. mixed-width rigid-spider B31s)
+        # break meshio's fixed-width parser, so read from a sanitized copy that
+        # keeps only the solid mesh, nodes and sets.
         # ------------------------------------------------------------------
+        sanitized_path = _sanitize_inp_for_meshio(path)
         try:
-            mesh = meshio.read(str(path))
-        except (Exception, SystemExit) as _meshio_err:
-            logger.debug(
-                "meshio failed to parse %s (%s); falling back to native "
-                "Abaqus parser.",
-                path.name,
-                _meshio_err,
-            )
-            from .abaqus_inp_load_case import AbaqusInpLoadCase  # noqa: PLC0415
+            try:
+                mesh = meshio.read(str(sanitized_path))
+            except (Exception, SystemExit) as meshio_error:
+                logger.debug(
+                    "meshio failed to parse %s (%s); falling back to native "
+                    "Abaqus parser.",
+                    path.name,
+                    meshio_error,
+                )
+                from .abaqus_inp_load_case import AbaqusInpLoadCase  # noqa: PLC0415
 
-            return AbaqusInpLoadCase.from_inp(filepath)
+                return AbaqusInpLoadCase.from_inp(filepath)
+        finally:
+            try:
+                sanitized_path.unlink()
+            except OSError:
+                pass
 
         nodes_arr = np.asarray(mesh.points, dtype=np.float64)
         # Ensure 3-D coordinate array even when meshio returns 2-D geometry
@@ -207,6 +279,13 @@ class LoadCaseFromFreeCadInp:
         load_case.mesh_elements = elems_arr.astype(np.int32)
         load_case.mesh_element_type = resolved_elem_type
 
+        # Store per-NSET node coordinates for 3-D visualization in the frontend
+        load_case.node_set_coords = {
+            name: nodes_arr[idx_arr].tolist()
+            for name, idx_arr in point_sets.items()
+            if idx_arr.size > 0
+        }
+
         # ------------------------------------------------------------------
         # 4. Build spatial selectors from NSETs (meshio point_sets)
         #
@@ -303,6 +382,36 @@ class LoadCaseFromFreeCadInp:
             ids = _find_selectors(target)
             return ids[0] if ids else None
 
+        visible_node_indices = (
+            np.unique(elems_arr.reshape(-1))
+            if elems_arr.size > 0
+            else np.arange(len(nodes_arr), dtype=np.int64)
+        )
+        visible_node_indices = visible_node_indices[
+            (visible_node_indices >= 0) & (visible_node_indices < len(nodes_arr))
+        ]
+        visible_node_index_set = {int(idx) for idx in visible_node_indices.tolist()}
+        visible_coords = nodes_arr[visible_node_indices]
+
+        def _visual_points_for_nset(name: str) -> List[List[float]]:
+            idx_arr = point_sets.get(name)
+            if idx_arr is None or idx_arr.size == 0:
+                return []
+            if visible_coords.size == 0:
+                return nodes_arr[idx_arr].astype(float).tolist()
+
+            visual_points: List[List[float]] = []
+            for idx in idx_arr:
+                idx_int = int(idx)
+                if idx_int in visible_node_index_set:
+                    coord = nodes_arr[idx_int]
+                else:
+                    source = nodes_arr[idx_int]
+                    nearest = int(np.argmin(np.sum((visible_coords - source) ** 2, axis=1)))
+                    coord = visible_coords[nearest]
+                visual_points.append([float(coord[0]), float(coord[1]), float(coord[2])])
+            return visual_points
+
         # ------------------------------------------------------------------
         # 5. Parse *BOUNDARY → FixedConstraints
         #
@@ -343,6 +452,8 @@ class LoadCaseFromFreeCadInp:
                         dofs=dof_lock,
                         tolerance=1,
                     )
+                    bc.region_id = sel_id
+                    bc.nset_name = nset_name
                     load_case.boundary_conditions.append(bc)
             elif nset_name.isdigit():
                 idx = node_id_to_idx.get(int(nset_name))
@@ -530,6 +641,119 @@ class LoadCaseFromFreeCadInp:
             load.direction = axis_agg
             load.magnitude_newtons = abs(total_mag)
             load_case.loads.append(load)
+
+        # HyperMesh/Abaqus decks may include semantic NSETs such as
+        # "boundary_nodes" and "load_*" without solver *BOUNDARY/*CLOAD cards.
+        # Keep those node groups visible in FE views, but mark inferred loads
+        # as marker-only because no physical magnitude is present in the deck.
+        inferred_constraint_nsets: List[str] = []
+        inferred_load_nsets: List[str] = []
+
+        def _semantic_nset_kind(name: str) -> Optional[str]:
+            normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+            tokens = {tok for tok in normalized.split("_") if tok}
+            if tokens & {"load", "loads", "force", "forces", "cload", "dload"}:
+                return "load"
+            if tokens & {
+                "boundary",
+                "boundaries",
+                "constraint",
+                "constraints",
+                "constrained",
+                "fixed",
+                "fix",
+                "support",
+                "supports",
+            }:
+                return "constraint"
+            return None
+
+        if not load_case.boundary_conditions:
+            for nset_name in sorted(point_sets.keys()):
+                if _semantic_nset_kind(nset_name) != "constraint":
+                    continue
+                for sel_id in _find_selectors(nset_name):
+                    bc = FixedConstraint(
+                        location=load_case.selectors[sel_id].query,
+                        dofs=(True, True, True),
+                        tolerance=1,
+                    )
+                    bc.region_id = sel_id
+                    bc.nset_name = nset_name
+                    bc.inferred_from_nset_name = True
+                    load_case.boundary_conditions.append(bc)
+                    inferred_constraint_nsets.append(nset_name)
+
+        if not load_case.loads:
+            for nset_name in sorted(point_sets.keys()):
+                if _semantic_nset_kind(nset_name) != "load":
+                    continue
+                visual_points = _visual_points_for_nset(nset_name)
+                if visual_points:
+                    visual_coords = np.asarray(visual_points, dtype=np.float64)
+                    marker_point = (
+                        float(visual_coords[:, 0].mean()),
+                        float(visual_coords[:, 1].mean()),
+                        float(visual_coords[:, 2].mean()),
+                    )
+                else:
+                    marker_point = None
+                for sel_id in _find_selectors(nset_name):
+                    query = load_case.selectors[sel_id].query
+                    cx = query.get(
+                        "x",
+                        (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2,
+                    )
+                    cy = query.get(
+                        "y",
+                        (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2,
+                    )
+                    cz = query.get(
+                        "z",
+                        (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2,
+                    )
+                    rx = query.get("rx", min_radius)
+                    ry = query.get("ry", min_radius)
+                    rz = query.get("rz", min_radius)
+                    original_point = (float(cx), float(cy), float(cz))
+                    visual_direction = None
+                    if marker_point is not None:
+                        visual_direction = (
+                            original_point[0] - marker_point[0],
+                            original_point[1] - marker_point[1],
+                            original_point[2] - marker_point[2],
+                        )
+                    load = PointLoad(
+                        point=marker_point
+                        if marker_point is not None
+                        else original_point,
+                        force=(0.0, 0.0, 0.0),
+                        direction=None,
+                        tolerance=1,
+                        search_radius=(float(rx), float(ry), float(rz)),
+                    )
+                    load.name = f"INFERRED_LOAD_MARKER_{nset_name}"
+                    load.region_id = sel_id
+                    load.nset_name = nset_name
+                    load.vector_newtons = {"x": 0.0, "y": 0.0, "z": 0.0}
+                    load.magnitude_newtons = 0.0
+                    load.inferred_from_nset_name = True
+                    load.marker_only = True
+                    load.visual_points = visual_points
+                    load.original_point = original_point
+                    load.visual_direction = visual_direction
+                    load_case.loads.append(load)
+                    inferred_load_nsets.append(nset_name)
+
+        load_case.meta["inferred_constraint_nsets"] = sorted(
+            set(inferred_constraint_nsets)
+        )
+        load_case.meta["inferred_load_nsets"] = sorted(set(inferred_load_nsets))
+        if inferred_load_nsets:
+            load_case.meta["inferred_load_note"] = (
+                "Load node sets were inferred from NSET names only; no *CLOAD "
+                "magnitudes were present, so these loads are marker-only."
+            )
 
         # ------------------------------------------------------------------
         # 7. Parse *DLOAD → AccelerationLoads

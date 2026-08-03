@@ -1,9 +1,81 @@
-from .shape import Shape
+from typing import Any, List, Optional
+
+from ...shape import Shape
 
 
 class OccShape(Shape):
     def __init__(self, obj, app) -> None:
         super().__init__(obj, app)
+
+    def _raw_edges(self) -> List[Any]:
+        """Return this shape's edges as concrete pythonocc edge objects."""
+
+        from OCC.Core.TopAbs import TopAbs_EDGE
+        from OCC.Core.TopExp import topexp
+        from OCC.Core.TopTools import TopTools_IndexedMapOfShape
+        from OCC.Core.TopoDS import topods
+
+        edge_map = TopTools_IndexedMapOfShape()
+        topexp.MapShapes(self.obj, TopAbs_EDGE, edge_map)
+        return [
+            topods.Edge(edge_map.FindKey(index))
+            for index in range(1, edge_map.Size() + 1)
+        ]
+
+    def _is_linear_edge(self, edge: Any) -> bool:
+        from OCC.Core.BRep import BRep_Tool
+        from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+        from OCC.Core.GeomAbs import GeomAbs_Line
+
+        if BRep_Tool.Degenerated(edge):
+            return False
+        try:
+            return BRepAdaptor_Curve(edge).GetType() == GeomAbs_Line
+        except Exception:
+            return False
+
+    def _edge_direction_vector(self, edge: Any) -> tuple[float, float, float]:
+        from OCC.Core.BRepAdaptor import BRepAdaptor_Curve
+
+        direction = BRepAdaptor_Curve(edge).Line().Direction()
+        return float(direction.X()), float(direction.Y()), float(direction.Z())
+
+    def _apply_fillet_to_edges(
+        self,
+        edges: List[Any],
+        radius: float,
+        selector: Optional[str] = None,
+    ) -> None:
+        """Fillet selected pythonocc edges and update the shape in place."""
+
+        from OCC.Core.BRepFilletAPI import BRepFilletAPI_MakeFillet
+
+        radius = float(radius)
+        if radius <= 0:
+            raise ValueError("Fillet radius must be positive")
+
+        builder = BRepFilletAPI_MakeFillet(self.obj)
+        added = 0
+        for edge in edges:
+            try:
+                builder.Add(radius, edge)
+                added += 1
+            except Exception:
+                continue
+
+        selector_desc = selector or "all edges"
+        if not added:
+            raise ValueError(
+                f"No edges matched selector {selector_desc!r} could be filleted"
+            )
+
+        builder.Build()
+        if not builder.IsDone():
+            raise RuntimeError(
+                f"Fillet operation failed for selector {selector_desc!r} "
+                f"with radius {radius}"
+            )
+        self.obj = builder.Shape()
 
     def volume(self) -> float:
         """

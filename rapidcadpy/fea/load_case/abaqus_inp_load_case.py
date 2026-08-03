@@ -7,7 +7,7 @@ or other Abaqus-only constructs).
 
 Supported Abaqus keywords
 --------------------------
-*HEADING           – skipped (informational)
+*HEADING           – text lines collected and scanned for unit-system hints
 *INCLUDE           – ``INPUT=file`` resolved relative to the including file;
                      the included file's lines are spliced in-place
                      (recursive, guarded against circular references)
@@ -21,6 +21,8 @@ Supported Abaqus keywords
 *ELSET             – GENERATE and direct lists
 *BOUNDARY          – NSET,dof  or  NSET,first,last[,mag]  and node-ID forms
 *CLOAD             – node_id,dof,mag  and  NSET,dof,mag
+*DLOAD             – parsed and recorded in meta (not converted to PointLoad)
+*AMPLITUDE         – NAME= / tabular data collected and stored in load_case.meta
 *ELCOPY            – skipped
 *TRANSFORM         – skipped
 *EQUATION          – skipped
@@ -90,7 +92,6 @@ _ELEM_TYPE_MAP: Dict[str, Tuple[str, int]] = {
 
 # Keywords whose data lines are consumed but whose content is ignored
 _SKIP_KEYWORDS: Set[str] = {
-    "HEADING",
     "NCOPY",
     "SUBSTRUCTURE PROPERTY",
     "ELCOPY",
@@ -113,10 +114,69 @@ _SKIP_KEYWORDS: Set[str] = {
     "PRINT",
     "END STEP",
     "MPC",
-    "MATERIAL",
-    "ELASTIC",
     "SOLID SECTION",
 }
+
+
+def _parse_float_token(token: str) -> Optional[float]:
+    """Parse Abaqus numeric tokens including Fortran D exponents."""
+    txt = token.strip().strip(",")
+    if not txt:
+        return None
+    # Abaqus decks sometimes use Fortran D exponent format.
+    txt = re.sub(r"([0-9])([dD])([+-]?[0-9]+)", r"\1E\3", txt)
+    try:
+        return float(txt)
+    except ValueError:
+        return None
+
+
+def _infer_units_from_material_magnitudes(
+    elastic_moduli: List[float],
+    densities: List[float],
+) -> Tuple[Optional[str], str, float]:
+    """
+    Infer a likely unit system from typical material magnitudes.
+
+    Returns (label, basis_text, confidence_0_to_1).
+    """
+    scores: Dict[str, float] = {
+        "N-mm-t-s (MPa)": 0.0,
+        "SI (N, m, kg, s)": 0.0,
+        "US customary (lbf, in)": 0.0,
+    }
+    basis: List[str] = []
+
+    if elastic_moduli:
+        e_med = float(np.median(np.array(elastic_moduli, dtype=np.float64)))
+        basis.append(f"median E={e_med:.4g}")
+        if e_med >= 1e9:
+            scores["SI (N, m, kg, s)"] += 2.0
+        elif 1e5 <= e_med < 1e9:
+            scores["N-mm-t-s (MPa)"] += 2.0
+        elif 1e3 <= e_med < 1e5:
+            scores["US customary (lbf, in)"] += 1.0
+            scores["N-mm-t-s (MPa)"] += 0.5
+
+    if densities:
+        rho_med = float(np.median(np.array(densities, dtype=np.float64)))
+        basis.append(f"median density={rho_med:.4g}")
+        if 100.0 <= rho_med <= 30000.0:
+            scores["SI (N, m, kg, s)"] += 1.5
+        elif 1e-12 < rho_med < 1e-3:
+            scores["N-mm-t-s (MPa)"] += 1.5
+        elif 0.01 <= rho_med <= 1.0:
+            scores["US customary (lbf, in)"] += 1.0
+
+    best_label = max(scores, key=lambda k: scores[k])
+    best_score = scores[best_label]
+    total = sum(scores.values())
+    if best_score <= 0.0:
+        return None, "no material-magnitude evidence", 0.0
+
+    confidence = best_score / total if total > 0 else 0.0
+    basis_text = "; ".join(basis) if basis else "material magnitudes"
+    return best_label, basis_text, confidence
 
 
 def _parse_keyword_line(line: str) -> Tuple[str, Dict[str, str]]:
@@ -413,7 +473,15 @@ class AbaqusInpLoadCase:
         elsets: Dict[str, List[int]] = {}  # name → list of 1-based element IDs
 
         raw_bc_lines: List[str] = []
-        raw_cload_lines: List[str] = []
+        raw_cload_lines: List[Tuple[str, Optional[str]]] = []
+        raw_dload_lines: List[Tuple[str, Optional[str]]] = []
+        heading_lines: List[str] = []  # raw text lines from *HEADING blocks
+        amplitudes: Dict[str, List[Tuple[float, float]]] = (
+            {}
+        )  # name → [(time, value), …]
+        material_elastic_rows: List[Dict[str, object]] = []
+        material_density_rows: List[Dict[str, object]] = []
+        current_material_name: Optional[str] = None
 
         # For multi-line element connectivity we accumulate partial token lists
         _pending_elem_tokens: List[str] = []
@@ -499,8 +567,36 @@ class AbaqusInpLoadCase:
                     section = "CLOAD"
                     section_params = params
 
+                elif keyword == "DLOAD":
+                    section = "DLOAD"
+                    section_params = params
+
+                elif keyword == "AMPLITUDE":
+                    amp_name = params.get("NAME", f"_AMP_{len(amplitudes) + 1}")
+                    section = "AMPLITUDE"
+                    section_params = {"NAME": amp_name}
+                    amplitudes.setdefault(amp_name, [])
+
+                elif keyword == "MATERIAL":
+                    section = "MATERIAL"
+                    section_params = params
+                    current_material_name = params.get("NAME", "").strip() or None
+
+                elif keyword == "ELASTIC":
+                    section = "ELASTIC"
+                    section_params = params
+
+                elif keyword == "DENSITY":
+                    section = "DENSITY"
+                    section_params = params
+
+                elif keyword == "HEADING":
+                    section = "HEADING"
+                    section_params = {}
+
                 else:
-                    # Unknown keyword — skip its data lines
+                    # Unknown keyword — log its name then skip its data lines
+                    logger.debug("Skipping unsupported Abaqus keyword %r", keyword)
                     section = "SKIP"
                     section_params = {}
 
@@ -603,7 +699,52 @@ class AbaqusInpLoadCase:
                 raw_bc_lines.append(stripped)
 
             elif section == "CLOAD":
-                raw_cload_lines.append(stripped)
+                raw_cload_lines.append((stripped, section_params.get("AMPLITUDE")))
+
+            elif section == "DLOAD":
+                raw_dload_lines.append((stripped, section_params.get("AMPLITUDE")))
+
+            elif section == "HEADING":
+                if stripped:
+                    heading_lines.append(stripped)
+
+            elif section == "AMPLITUDE":
+                amp_name = section_params.get("NAME", "")
+                if amp_name:
+                    tokens = [t.strip() for t in stripped.split(",") if t.strip()]
+                    # Amplitude data lines: pairs of (time, value)
+                    it = iter(tokens)
+                    for t_val, a_val in zip(it, it):
+                        try:
+                            amplitudes[amp_name].append((float(t_val), float(a_val)))
+                        except ValueError:
+                            pass
+
+            elif section == "ELASTIC":
+                tokens = [t.strip() for t in stripped.split(",") if t.strip()]
+                if not tokens:
+                    continue
+                e_val = _parse_float_token(tokens[0])
+                nu_val = _parse_float_token(tokens[1]) if len(tokens) > 1 else None
+                material_elastic_rows.append(
+                    {
+                        "material": current_material_name,
+                        "youngs_modulus": e_val,
+                        "poisson_ratio": nu_val,
+                    }
+                )
+
+            elif section == "DENSITY":
+                tokens = [t.strip() for t in stripped.split(",") if t.strip()]
+                if not tokens:
+                    continue
+                rho_val = _parse_float_token(tokens[0])
+                material_density_rows.append(
+                    {
+                        "material": current_material_name,
+                        "density": rho_val,
+                    }
+                )
 
         # Flush any remaining pending element
         if (
@@ -612,6 +753,62 @@ class AbaqusInpLoadCase:
             and _pending_elem_tokens
         ):
             _flush_pending_elem()
+
+        # ------------------------------------------------------------------
+        # Unit system detection from *HEADING lines
+        # Abaqus .inp carries no mandatory unit declaration; we scan heading
+        # text for common convention strings so the user gets an informed
+        # warning instead of silently wrong results.
+        # ------------------------------------------------------------------
+        _UNIT_HINTS: List[Tuple[str, str]] = [
+            ("n, mm", "N-mm-t-s (MPa)"),
+            ("n,mm", "N-mm-t-s (MPa)"),
+            ("mpa", "N-mm-t-s (MPa)"),
+            ("newton, millim", "N-mm-t-s (MPa)"),
+            (" si ", "SI (N, m, kg, s)"),
+            ("n, m,", "SI (N, m, kg, s)"),
+            ("n,m,", "SI (N, m, kg, s)"),
+            ("kn", "kN system"),
+            ("kpa", "kN-m-t-s (kPa)"),
+            ("lbf", "US customary (lbf)"),
+            ("lb,", "US customary (lbf/in)"),
+            ("inch", "US customary (in)"),
+        ]
+        _heading_text = " ".join(heading_lines).lower()
+        _detected_unit_hint: Optional[str] = None
+        for _hint, _label in _UNIT_HINTS:
+            if _hint in _heading_text:
+                _detected_unit_hint = _label
+                break
+        _material_e_vals = []
+        for row in material_elastic_rows:
+            _ev = row.get("youngs_modulus")
+            if isinstance(_ev, (int, float)):
+                _material_e_vals.append(float(_ev))
+
+        _material_rho_vals = []
+        for row in material_density_rows:
+            _rv = row.get("density")
+            if isinstance(_rv, (int, float)):
+                _material_rho_vals.append(float(_rv))
+        (
+            _material_unit_hint,
+            _material_unit_basis,
+            _material_unit_confidence,
+        ) = _infer_units_from_material_magnitudes(_material_e_vals, _material_rho_vals)
+
+        _detected_units = _detected_unit_hint or _material_unit_hint or "N-mm-t-s (MPa)"
+        logger.warning(
+            "UNIT DETECTION: Abaqus .inp files carry no mandatory declaration. "
+            "Detected=%s | heading_hint=%s | material_hint=%s (confidence=%.2f, %s). "
+            "No unit hint may be present; verify units manually. "
+            "Correction options: mm (N, mm, t, s) / SI (N, m, kg, s) / US customary (lbf, in).",
+            _detected_units,
+            _detected_unit_hint,
+            _material_unit_hint,
+            _material_unit_confidence,
+            _material_unit_basis,
+        )
 
         # ------------------------------------------------------------------
         # Resolve NSET-of-NSETs (post-processing pass)
@@ -779,6 +976,26 @@ class AbaqusInpLoadCase:
             "node_sets": sorted(nsets.keys()),
             "element_sets": sorted(elsets.keys()),
             "selectors": load_case.selectors,
+            "amplitudes": {name: list(pts) for name, pts in amplitudes.items()},
+            "assumed_units": "mm (N, mm, t, s)",
+            "unit_hint_from_heading": _detected_unit_hint,
+            "unit_hint_from_material_magnitude": _material_unit_hint,
+            "detected_units": _detected_units,
+            "unit_detection_confidence": _material_unit_confidence,
+            "unit_detection_basis": {
+                "heading_hint": _detected_unit_hint,
+                "material_magnitude_basis": _material_unit_basis,
+            },
+            "unit_correction_options": [
+                "mm (N, mm, t, s)",
+                "SI (N, m, kg, s)",
+                "US customary (lbf, in)",
+            ],
+            "unit_override_note": "Set load_case.meta['units_override'] to one of unit_correction_options to override detected units.",
+            "material_properties": {
+                "elastic": list(material_elastic_rows),
+                "density": list(material_density_rows),
+            },
         }
         load_case.domain = DesignDomain(shape_type="box", bounds=bounds, units="mm")
         load_case.bounds = bounds
@@ -853,17 +1070,50 @@ class AbaqusInpLoadCase:
 
             sel_ids: List[str] = []
             if len(primary_faces) > 1:
+                # Nodes span multiple model faces — split per face
                 for fname in primary_faces:
                     face_idx = idx_arr[face_masks[fname]]
                     sel_id = f"SELECTOR_{name}_{fname}"
                     sel = _build_selector(sel_id, nodes_arr[face_idx])
                     load_case.selectors[sel_id] = sel
                     sel_ids.append(sel_id)
-            else:
+            elif len(primary_faces) == 1:
+                # Nodes clearly lie on a single model face — tight box
                 sel_id = f"SELECTOR_{name}"
                 sel = _build_selector(sel_id, coords)
                 load_case.selectors[sel_id] = sel
                 sel_ids.append(sel_id)
+            else:
+                # Nodes are not on any model face (e.g. isolated/scattered
+                # nodes constrained by ID in the .inp).  Use per-node point
+                # selectors for small sets so we don't create a coarse
+                # bounding box that catches unintended mesh nodes.
+                _PT_THRESHOLD = 20
+                if idx_arr.size <= _PT_THRESHOLD:
+                    for _k, _gidx in enumerate(idx_arr):
+                        _nx = float(nodes_arr[_gidx, 0])
+                        _ny = float(nodes_arr[_gidx, 1])
+                        _nz = float(nodes_arr[_gidx, 2])
+                        sel_id = f"SELECTOR_{name}_PT{_k}"
+                        load_case.selectors[sel_id] = SpatialSelector(
+                            id=sel_id,
+                            type="point",
+                            query={"x": _nx, "y": _ny, "z": _nz},
+                        )
+                        sel_ids.append(sel_id)
+                else:
+                    # Large scattered set — fall back to bounding box but warn
+                    logger.warning(
+                        "NSET '%s' has %d scattered nodes with no clear face "
+                        "alignment; using bounding-box selector which may be "
+                        "imprecise.",
+                        name,
+                        idx_arr.size,
+                    )
+                    sel_id = f"SELECTOR_{name}"
+                    sel = _build_selector(sel_id, coords)
+                    load_case.selectors[sel_id] = sel
+                    sel_ids.append(sel_id)
 
             selector_map[name] = sel_ids
 
@@ -879,6 +1129,36 @@ class AbaqusInpLoadCase:
         def _find_selector(target: str) -> Optional[str]:
             ids = _find_selectors(target)
             return ids[0] if ids else None
+
+        visible_node_indices = (
+            np.unique(elems_arr.reshape(-1))
+            if elems_arr.size > 0
+            else np.arange(len(nodes_arr), dtype=np.int64)
+        )
+        visible_node_indices = visible_node_indices[
+            (visible_node_indices >= 0) & (visible_node_indices < len(nodes_arr))
+        ]
+        visible_node_index_set = {int(idx) for idx in visible_node_indices.tolist()}
+        visible_coords = nodes_arr[visible_node_indices]
+
+        def _visual_points_for_nset(name: str) -> List[List[float]]:
+            idx_arr = point_sets.get(name)
+            if idx_arr is None or idx_arr.size == 0:
+                return []
+            if visible_coords.size == 0:
+                return nodes_arr[idx_arr].astype(float).tolist()
+
+            visual_points: List[List[float]] = []
+            for idx in idx_arr:
+                idx_int = int(idx)
+                if idx_int in visible_node_index_set:
+                    coord = nodes_arr[idx_int]
+                else:
+                    source = nodes_arr[idx_int]
+                    nearest = int(np.argmin(np.sum((visible_coords - source) ** 2, axis=1)))
+                    coord = visible_coords[nearest]
+                visual_points.append([float(coord[0]), float(coord[1]), float(coord[2])])
+            return visual_points
 
         # ------------------------------------------------------------------
         # Parse *BOUNDARY → FixedConstraints
@@ -915,6 +1195,8 @@ class AbaqusInpLoadCase:
                         tolerance=1,
                         node_coords=_nset_coords,
                     )
+                    bc.region_id = sel_id
+                    bc.nset_name = nset_name
                     load_case.boundary_conditions.append(bc)
             elif nset_name.isdigit():
                 idx = node_id_to_idx.get(int(nset_name))
@@ -946,8 +1228,11 @@ class AbaqusInpLoadCase:
         # Parse *CLOAD → PointLoads
         # ------------------------------------------------------------------
         _node_cload: Dict[int, List] = {}  # dof → [total_mag, [node_idx,…]]
+        cload_amplitude_refs: List[Dict[str, str]] = []
+        dload_records: List[Dict[str, object]] = []
+        dload_amplitude_refs: List[Dict[str, str]] = []
 
-        for line in raw_cload_lines:
+        for line, amplitude_name in raw_cload_lines:
             parts = [p.strip() for p in line.split(",")]
             if len(parts) < 3:
                 continue
@@ -956,6 +1241,21 @@ class AbaqusInpLoadCase:
                 dof, mag = int(parts[1]), float(parts[2])
             except ValueError:
                 continue
+
+            if amplitude_name:
+                amp_ref = {
+                    "target": target,
+                    "dof": str(dof),
+                    "amplitude": amplitude_name,
+                }
+                cload_amplitude_refs.append(amp_ref)
+                if amplitude_name not in amplitudes:
+                    logger.warning(
+                        "*CLOAD references undefined AMPLITUDE '%s' (target=%s, dof=%d).",
+                        amplitude_name,
+                        target,
+                        dof,
+                    )
 
             vec: Dict[str, float] = {"x": 0.0, "y": 0.0, "z": 0.0}
             axis: Optional[str] = None
@@ -1036,6 +1336,51 @@ class AbaqusInpLoadCase:
                     _node_cload[dof][0] += mag
                     _node_cload[dof][1].append(idx)
 
+        for line, amplitude_name in raw_dload_lines:
+            parts = [p.strip() for p in line.split(",") if p.strip()]
+            if len(parts) < 3:
+                continue
+            target = parts[0]
+            label = parts[1]
+            mag_val = _parse_float_token(parts[2])
+            rec: Dict[str, object] = {
+                "target": target,
+                "label": label,
+                "magnitude": mag_val,
+            }
+            if amplitude_name:
+                rec["amplitude"] = amplitude_name
+                dload_amplitude_refs.append(
+                    {
+                        "target": target,
+                        "label": label,
+                        "amplitude": amplitude_name,
+                    }
+                )
+                if amplitude_name not in amplitudes:
+                    logger.warning(
+                        "*DLOAD references undefined AMPLITUDE '%s' (target=%s, label=%s).",
+                        amplitude_name,
+                        target,
+                        label,
+                    )
+            dload_records.append(rec)
+
+        if cload_amplitude_refs:
+            logger.warning(
+                "Found %d *CLOAD entries with AMPLITUDE references. "
+                "References are captured in meta['cload_amplitude_references']; "
+                "time scaling is not yet applied to PointLoad values.",
+                len(cload_amplitude_refs),
+            )
+
+        if dload_records:
+            logger.warning(
+                "Found %d *DLOAD entries. They are captured in "
+                "meta['dload_entries'] and not converted to PointLoad.",
+                len(dload_records),
+            )
+
         # Aggregate node-based CLOADs into one PointLoad per DOF
         for dof in sorted(_node_cload.keys()):
             total_mag, node_indices = _node_cload[dof]
@@ -1095,9 +1440,145 @@ class AbaqusInpLoadCase:
             load.magnitude_newtons = abs(total_mag)
             load_case.loads.append(load)
 
+        # Some HyperMesh/Abaqus decks carry only semantic node sets such as
+        # "boundary_nodes" or "load_torque_rod_front" and omit the solver
+        # *BOUNDARY/*CLOAD cards.  Preserve those regions as visualization
+        # markers instead of silently showing an unannotated mesh.
+        inferred_constraint_nsets: List[str] = []
+        inferred_load_nsets: List[str] = []
+
+        def _semantic_kind(name: str) -> Optional[str]:
+            normalized = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+            tokens = {tok for tok in normalized.split("_") if tok}
+            if tokens & {"load", "loads", "force", "forces", "cload", "dload"}:
+                return "load"
+            if tokens & {
+                "boundary",
+                "boundaries",
+                "constraint",
+                "constraints",
+                "constrained",
+                "fixed",
+                "fix",
+                "support",
+                "supports",
+            }:
+                return "constraint"
+            return None
+
+        if not load_case.boundary_conditions:
+            for nset_name in sorted(point_sets.keys()):
+                if _semantic_kind(nset_name) != "constraint":
+                    continue
+                for sel_id in _find_selectors(nset_name):
+                    bc = FixedConstraint(
+                        location=load_case.selectors[sel_id].query,
+                        dofs=(True, True, True),
+                        tolerance=1,
+                    )
+                    bc.region_id = sel_id
+                    bc.nset_name = nset_name
+                    bc.inferred_from_nset_name = True
+                    load_case.boundary_conditions.append(bc)
+                    inferred_constraint_nsets.append(nset_name)
+
+        if not load_case.loads:
+            for nset_name in sorted(point_sets.keys()):
+                if _semantic_kind(nset_name) != "load":
+                    continue
+                visual_points = _visual_points_for_nset(nset_name)
+                if visual_points:
+                    visual_coords = np.asarray(visual_points, dtype=np.float64)
+                    marker_point = (
+                        float(visual_coords[:, 0].mean()),
+                        float(visual_coords[:, 1].mean()),
+                        float(visual_coords[:, 2].mean()),
+                    )
+                else:
+                    marker_point = None
+                for sel_id in _find_selectors(nset_name):
+                    query = load_case.selectors[sel_id].query
+                    cx = query.get(
+                        "x",
+                        (query.get("x_min", 0.0) + query.get("x_max", 0.0)) / 2,
+                    )
+                    cy = query.get(
+                        "y",
+                        (query.get("y_min", 0.0) + query.get("y_max", 0.0)) / 2,
+                    )
+                    cz = query.get(
+                        "z",
+                        (query.get("z_min", 0.0) + query.get("z_max", 0.0)) / 2,
+                    )
+                    rx = query.get("rx", min_radius)
+                    ry = query.get("ry", min_radius)
+                    rz = query.get("rz", min_radius)
+                    original_point = (float(cx), float(cy), float(cz))
+                    visual_direction = None
+                    if marker_point is not None:
+                        visual_direction = (
+                            original_point[0] - marker_point[0],
+                            original_point[1] - marker_point[1],
+                            original_point[2] - marker_point[2],
+                        )
+                    load = PointLoad(
+                        point=marker_point
+                        if marker_point is not None
+                        else original_point,
+                        force=(0.0, 0.0, 0.0),
+                        direction=None,
+                        tolerance=1,
+                        search_radius=(float(rx), float(ry), float(rz)),
+                    )
+                    load.name = f"INFERRED_LOAD_MARKER_{nset_name}"
+                    load.region_id = sel_id
+                    load.nset_name = nset_name
+                    load.vector_newtons = {"x": 0.0, "y": 0.0, "z": 0.0}
+                    load.magnitude_newtons = 0.0
+                    load.inferred_from_nset_name = True
+                    load.marker_only = True
+                    load.visual_points = visual_points
+                    load.original_point = original_point
+                    load.visual_direction = visual_direction
+                    load_case.loads.append(load)
+                    inferred_load_nsets.append(nset_name)
+
+        load_case.meta["cload_amplitude_references"] = cload_amplitude_refs
+        load_case.meta["dload_entries"] = dload_records
+        load_case.meta["dload_amplitude_references"] = dload_amplitude_refs
+        load_case.meta["inferred_constraint_nsets"] = sorted(
+            set(inferred_constraint_nsets)
+        )
+        load_case.meta["inferred_load_nsets"] = sorted(set(inferred_load_nsets))
+        if inferred_load_nsets:
+            load_case.meta["inferred_load_note"] = (
+                "Load node sets were inferred from NSET names only; no *CLOAD "
+                "magnitudes were present, so these loads are marker-only."
+            )
+
+        # Field-level parse summary
+        _bc_summary = [
+            f"{nset}→DOFs{sorted(dofs)}"
+            for nset, dofs in sorted(_bc_dofs_by_target.items())
+        ]
+        _load_summary = [
+            f"{getattr(ld, 'name', '?')}({getattr(ld, 'direction', '?')},{getattr(ld, 'magnitude_newtons', 0.0):.3g}N)"
+            for ld in load_case.loads
+        ]
+        # Store per-NSET node coordinates for 3-D visualization in the frontend
+        load_case.node_set_coords = {
+            name: nodes_arr[idx_arr].tolist()
+            for name, idx_arr in point_sets.items()
+            if idx_arr.size > 0
+        }
+
         logger.info(
             "Parsed Abaqus INP (native): %d nodes, %d %s elements, "
-            "%d NSETs (%d with selector), %d BCs, %d loads",
+            "%d NSETs (%d with selector), %d BCs, %d loads, %d amplitudes\n"
+            "  NSETs      : %s\n"
+            "  BCs (DOFs) : %s\n"
+            "  Loads      : %s\n"
+            "  Amplitudes : %s",
             len(nodes_arr),
             len(elems_arr),
             resolved_elem_type,
@@ -1105,6 +1586,11 @@ class AbaqusInpLoadCase:
             len(point_sets),
             len(load_case.boundary_conditions),
             len(load_case.loads),
+            len(amplitudes),
+            sorted(nsets.keys()) or ["none"],
+            _bc_summary or ["none"],
+            _load_summary or ["none"],
+            sorted(amplitudes.keys()) or ["none"],
         )
 
         return load_case

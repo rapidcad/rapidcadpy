@@ -228,7 +228,11 @@ class TestFromInp:
             # was actually loaded.
             assert any(
                 b[mx] > b[mn]
-                for mn, mx in [("x_min", "x_max"), ("y_min", "y_max"), ("z_min", "z_max")]
+                for mn, mx in [
+                    ("x_min", "x_max"),
+                    ("y_min", "y_max"),
+                    ("z_min", "z_max"),
+                ]
             ), "Bounds are all-zero — *INCLUDE expansion likely failed"
             return
         for key in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max"):
@@ -319,9 +323,9 @@ class TestFromInp:
     def test_mesh_nodes_shape(self, load_case, get_inp_file):
         expected = get_inp_file["mesh_nodes_shape"]
         if expected is None:
-            assert load_case.mesh_nodes.shape[0] > 0, (
-                "mesh_nodes is empty — *INCLUDE expansion likely failed"
-            )
+            assert (
+                load_case.mesh_nodes.shape[0] > 0
+            ), "mesh_nodes is empty — *INCLUDE expansion likely failed"
             assert load_case.mesh_nodes.shape[1] == 3
             return
         assert load_case.mesh_nodes.shape == expected
@@ -332,9 +336,9 @@ class TestFromInp:
     def test_mesh_elements_shape(self, load_case, get_inp_file):
         expected = get_inp_file["mesh_elements_shape"]
         if expected is None:
-            assert load_case.mesh_elements.shape[0] > 0, (
-                "mesh_elements is empty — *INCLUDE expansion likely failed"
-            )
+            assert (
+                load_case.mesh_elements.shape[0] > 0
+            ), "mesh_elements is empty — *INCLUDE expansion likely failed"
             return
         assert load_case.mesh_elements.shape == expected
 
@@ -744,3 +748,436 @@ class TestGravityLoadFromInp:
 
     def test_gravity_load_name(self, gravity_load):
         assert gravity_load.name == "DLOAD_GRAV_EALL"
+
+
+# ---------------------------------------------------------------------------
+# Minimal .inp builder used by the unit-test classes below
+# ---------------------------------------------------------------------------
+
+_MINIMAL_INP = """\
+*HEADING
+Units: N, mm, t, s
+*NODE
+1, 0.0, 0.0, 0.0
+2, 10.0, 0.0, 0.0
+3, 0.0, 10.0, 0.0
+4, 0.0, 0.0, 10.0
+*ELEMENT, TYPE=C3D4, ELSET=PART
+1, 1, 2, 3, 4
+*NSET, NSET=FIX
+1,
+*NSET, NSET=LOAD_FACE
+2, 3, 4
+*BOUNDARY
+FIX, 1, 3
+*CLOAD
+LOAD_FACE, 3, -50.0
+"""
+
+_INP_WITH_AMPLITUDE = """\
+*HEADING
+Test amplitude
+*NODE
+1, 0.0, 0.0, 0.0
+2, 5.0, 0.0, 0.0
+3, 0.0, 5.0, 0.0
+4, 0.0, 0.0, 5.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*AMPLITUDE, NAME=RAMP
+0.0, 0.0, 1.0, 1.0
+*AMPLITUDE, NAME=STEP_AMP
+0.0, 0.0, 0.001, 1.0, 1.0, 1.0
+*NSET, NSET=FIX
+1,
+*BOUNDARY
+FIX, 1, 3
+"""
+
+_INP_NO_UNIT_HINT = """\
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 0.0, 1.0, 0.0
+4, 0.0, 0.0, 1.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*NSET, NSET=FIX
+1,
+*BOUNDARY
+FIX, 1, 3
+"""
+
+_INP_UNKNOWN_KEYWORDS = """\
+*HEADING
+Test unknown keywords
+*NODE
+1, 0.0, 0.0, 0.0
+2, 2.0, 0.0, 0.0
+3, 0.0, 2.0, 0.0
+4, 0.0, 0.0, 2.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*SOME_FUTURE_KEYWORD, PARAM=VALUE
+data line 1
+data line 2
+*ANOTHER_UNSUPPORTED
+data
+*NSET, NSET=FIX
+1,
+*BOUNDARY
+FIX, 1, 3
+"""
+
+_INP_WITH_CLOAD_DLOAD_AMPLITUDE = """\
+*HEADING
+Amplitude reference coverage
+*NODE
+1, 0.0, 0.0, 0.0
+2, 10.0, 0.0, 0.0
+3, 0.0, 10.0, 0.0
+4, 0.0, 0.0, 10.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*NSET, NSET=LOADN
+2,
+*AMPLITUDE, NAME=RAMP
+0.0, 0.0, 1.0, 1.0
+*CLOAD, AMPLITUDE=RAMP
+LOADN, 3, -50.0
+*DLOAD, AMPLITUDE=RAMP
+ALL, P3, -1.23
+"""
+
+_INP_WITH_MATERIAL_MAGNITUDE_HINT = """\
+*HEADING
+No explicit unit declaration
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 0.0, 1.0, 0.0
+4, 0.0, 0.0, 1.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*MATERIAL, NAME=STEEL
+*ELASTIC
+210000.0, 0.3
+*DENSITY
+7.8e-09
+*NSET, NSET=FIX
+1,
+*BOUNDARY
+FIX, 1, 3
+"""
+
+
+class TestAmplitudeParsing:
+    """*AMPLITUDE blocks are parsed and stored in meta['amplitudes']."""
+
+    @pytest.fixture
+    def load_case_with_amps(self, tmp_path):
+        p = tmp_path / "amp.inp"
+        p.write_text(_INP_WITH_AMPLITUDE)
+        return AbaqusInpLoadCase.from_inp(str(p))
+
+    def test_meta_has_amplitudes_key(self, load_case_with_amps):
+        assert "amplitudes" in load_case_with_amps.meta
+
+    def test_amplitude_names_present(self, load_case_with_amps):
+        amps = load_case_with_amps.meta["amplitudes"]
+        assert "RAMP" in amps
+        assert "STEP_AMP" in amps
+
+    def test_ramp_amplitude_has_two_points(self, load_case_with_amps):
+        ramp = load_case_with_amps.meta["amplitudes"]["RAMP"]
+        assert len(ramp) == 2
+
+    def test_ramp_amplitude_values(self, load_case_with_amps):
+        ramp = load_case_with_amps.meta["amplitudes"]["RAMP"]
+        assert ramp[0] == pytest.approx((0.0, 0.0))
+        assert ramp[1] == pytest.approx((1.0, 1.0))
+
+    def test_step_amplitude_has_three_points(self, load_case_with_amps):
+        step = load_case_with_amps.meta["amplitudes"]["STEP_AMP"]
+        assert len(step) == 3
+
+    def test_no_amplitudes_returns_empty_dict(self, tmp_path):
+        p = tmp_path / "noamp.inp"
+        p.write_text(_MINIMAL_INP)
+        lc = AbaqusInpLoadCase.from_inp(str(p))
+        assert lc.meta["amplitudes"] == {}
+
+
+class TestUnitDetection:
+    """Unit ambiguity is always warned; heading hint is detected when present."""
+
+    @pytest.fixture
+    def load_case_with_hint(self, tmp_path):
+        p = tmp_path / "with_hint.inp"
+        p.write_text(_MINIMAL_INP)  # heading says "N, mm, t, s"
+        return AbaqusInpLoadCase.from_inp(str(p))
+
+    @pytest.fixture
+    def load_case_no_hint(self, tmp_path):
+        p = tmp_path / "no_hint.inp"
+        p.write_text(_INP_NO_UNIT_HINT)
+        return AbaqusInpLoadCase.from_inp(str(p))
+
+    def test_unit_warning_emitted_with_hint(self, tmp_path, caplog):
+        import logging
+
+        p = tmp_path / "hint.inp"
+        p.write_text(_MINIMAL_INP)
+        with caplog.at_level(
+            logging.WARNING, logger="rapidcadpy.fea.load_case.abaqus_inp_load_case"
+        ):
+            AbaqusInpLoadCase.from_inp(str(p))
+        assert any("unit" in r.message.lower() for r in caplog.records)
+
+    def test_unit_warning_emitted_without_hint(self, tmp_path, caplog):
+        import logging
+
+        p = tmp_path / "nohint.inp"
+        p.write_text(_INP_NO_UNIT_HINT)
+        with caplog.at_level(
+            logging.WARNING, logger="rapidcadpy.fea.load_case.abaqus_inp_load_case"
+        ):
+            AbaqusInpLoadCase.from_inp(str(p))
+        assert any("unit" in r.message.lower() for r in caplog.records)
+
+    def test_no_hint_message_mentions_verify(self, tmp_path, caplog):
+        import logging
+
+        p = tmp_path / "nohint2.inp"
+        p.write_text(_INP_NO_UNIT_HINT)
+        with caplog.at_level(
+            logging.WARNING, logger="rapidcadpy.fea.load_case.abaqus_inp_load_case"
+        ):
+            AbaqusInpLoadCase.from_inp(str(p))
+        msgs = " ".join(r.message for r in caplog.records)
+        assert "verify" in msgs.lower() or "no unit hint" in msgs.lower()
+
+    def test_heading_hint_detected_in_meta(self, load_case_with_hint):
+        hint = load_case_with_hint.meta.get("unit_hint_from_heading")
+        assert hint is not None
+        assert "mm" in hint.lower() or "n-mm" in hint.lower() or "mpa" in hint.lower()
+
+    def test_no_heading_hint_is_none_in_meta(self, load_case_no_hint):
+        assert load_case_no_hint.meta.get("unit_hint_from_heading") is None
+
+    def test_assumed_units_key_present(self, load_case_with_hint):
+        assert "assumed_units" in load_case_with_hint.meta
+
+    def test_assumed_units_mentions_mm(self, load_case_with_hint):
+        assert "mm" in load_case_with_hint.meta["assumed_units"].lower()
+
+
+class TestAmplitudeReferenceFlagging:
+    """Amplitude references on load keywords are captured and explicitly flagged."""
+
+    def test_cload_amplitude_reference_is_captured(self, tmp_path):
+        p = tmp_path / "amp_refs.inp"
+        p.write_text(_INP_WITH_CLOAD_DLOAD_AMPLITUDE)
+        lc = AbaqusInpLoadCase.from_inp(str(p))
+
+        refs = lc.meta.get("cload_amplitude_references", [])
+        assert len(refs) == 1
+        assert refs[0]["amplitude"] == "RAMP"
+        assert refs[0]["target"] == "LOADN"
+
+    def test_dload_entries_and_amplitude_refs_are_captured(self, tmp_path):
+        p = tmp_path / "dload_refs.inp"
+        p.write_text(_INP_WITH_CLOAD_DLOAD_AMPLITUDE)
+        lc = AbaqusInpLoadCase.from_inp(str(p))
+
+        dloads = lc.meta.get("dload_entries", [])
+        assert len(dloads) == 1
+        assert dloads[0]["target"] == "ALL"
+        assert dloads[0]["label"] == "P3"
+
+        dload_refs = lc.meta.get("dload_amplitude_references", [])
+        assert len(dload_refs) == 1
+        assert dload_refs[0]["amplitude"] == "RAMP"
+
+
+class TestMaterialMagnitudeUnitHint:
+    """Material property magnitudes contribute to unit detection metadata."""
+
+    def test_material_hint_present_when_elastic_density_present(self, tmp_path):
+        p = tmp_path / "mat_units.inp"
+        p.write_text(_INP_WITH_MATERIAL_MAGNITUDE_HINT)
+        lc = AbaqusInpLoadCase.from_inp(str(p))
+
+        assert lc.meta.get("unit_hint_from_material_magnitude") is not None
+        assert "detected_units" in lc.meta
+        assert "unit_correction_options" in lc.meta
+        assert len(lc.meta["unit_correction_options"]) >= 3
+
+    def test_material_properties_are_stored_in_meta(self, tmp_path):
+        p = tmp_path / "mat_props.inp"
+        p.write_text(_INP_WITH_MATERIAL_MAGNITUDE_HINT)
+        lc = AbaqusInpLoadCase.from_inp(str(p))
+
+        props = lc.meta.get("material_properties", {})
+        assert "elastic" in props
+        assert "density" in props
+        assert len(props["elastic"]) >= 1
+        assert len(props["density"]) >= 1
+
+
+class TestUnsupportedKeywordWarning:
+    """Unknown keywords produce a named debug log entry, not a crash or silent skip."""
+
+    def test_unknown_keyword_does_not_crash(self, tmp_path):
+        p = tmp_path / "unknown_kw.inp"
+        p.write_text(_INP_UNKNOWN_KEYWORDS)
+        lc = AbaqusInpLoadCase.from_inp(str(p))
+        assert isinstance(lc, LoadCase)
+
+    def test_mesh_still_parsed_despite_unknown_keywords(self, tmp_path):
+        p = tmp_path / "unknown_kw2.inp"
+        p.write_text(_INP_UNKNOWN_KEYWORDS)
+        lc = AbaqusInpLoadCase.from_inp(str(p))
+        assert lc.mesh_nodes is not None
+        assert lc.mesh_nodes.shape == (4, 3)
+
+    def test_unknown_keyword_logged(self, tmp_path, caplog):
+        import logging
+
+        p = tmp_path / "unknown_kw3.inp"
+        p.write_text(_INP_UNKNOWN_KEYWORDS)
+        with caplog.at_level(
+            logging.DEBUG, logger="rapidcadpy.fea.load_case.abaqus_inp_load_case"
+        ):
+            AbaqusInpLoadCase.from_inp(str(p))
+        msgs = " ".join(r.message for r in caplog.records)
+        # Both unknown keywords should appear by name
+        assert "SOME_FUTURE_KEYWORD" in msgs
+        assert "ANOTHER_UNSUPPORTED" in msgs
+
+    def test_known_skip_keywords_do_not_appear_as_unknown(self, tmp_path, caplog):
+        """MATERIAL, STEP etc. are in _SKIP_KEYWORDS and must NOT be logged as unknown."""
+        import logging
+
+        inp = """\
+*HEADING
+bench
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 0.0, 1.0, 0.0
+4, 0.0, 0.0, 1.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*MATERIAL, NAME=STEEL
+*ELASTIC
+200000.0, 0.3
+*SOLID SECTION, ELSET=ALL, MATERIAL=STEEL
+*STEP
+*STATIC
+*END STEP
+"""
+        p = tmp_path / "known_skip.inp"
+        p.write_text(inp)
+        with caplog.at_level(
+            logging.DEBUG, logger="rapidcadpy.fea.load_case.abaqus_inp_load_case"
+        ):
+            AbaqusInpLoadCase.from_inp(str(p))
+        skip_msgs = [
+            r.message for r in caplog.records if "Skipping unsupported" in r.message
+        ]
+        for msg in skip_msgs:
+            assert "MATERIAL" not in msg
+            assert "ELASTIC" not in msg
+            assert "STEP" not in msg
+
+
+class TestParseSummaryDetail:
+    """The parse-summary log contains NSET names, DOF detail, load vectors."""
+
+    @pytest.fixture
+    def caplog_records(self, tmp_path, caplog):
+        import logging
+
+        p = tmp_path / "summary.inp"
+        p.write_text(_MINIMAL_INP)
+        with caplog.at_level(
+            logging.INFO, logger="rapidcadpy.fea.load_case.abaqus_inp_load_case"
+        ):
+            AbaqusInpLoadCase.from_inp(str(p))
+        return caplog.records
+
+    def _summary_text(self, records):
+        return " ".join(r.message for r in records if "Parsed Abaqus" in r.message)
+
+    def test_summary_log_emitted(self, caplog_records):
+        assert any("Parsed Abaqus" in r.message for r in caplog_records)
+
+    def test_nset_names_in_summary(self, caplog_records):
+        text = self._summary_text(caplog_records)
+        assert "FIX" in text
+        assert "LOAD_FACE" in text
+
+    def test_bc_dofs_in_summary(self, caplog_records):
+        text = self._summary_text(caplog_records)
+        # BC for FIX covers DOFs 1-3
+        assert "FIX" in text
+        assert "1" in text and "2" in text and "3" in text
+
+    def test_load_direction_in_summary(self, caplog_records):
+        text = self._summary_text(caplog_records)
+        # CLOAD is DOF 3, magnitude 50 N, direction -z
+        assert "-z" in text or "50" in text
+
+    def test_load_magnitude_in_summary(self, caplog_records):
+        text = self._summary_text(caplog_records)
+        assert "50" in text
+
+    def test_amplitude_count_in_summary(self, tmp_path, caplog):
+        import logging
+
+        p = tmp_path / "amp_summary.inp"
+        p.write_text(_INP_WITH_AMPLITUDE)
+        with caplog.at_level(
+            logging.INFO, logger="rapidcadpy.fea.load_case.abaqus_inp_load_case"
+        ):
+            AbaqusInpLoadCase.from_inp(str(p))
+        text = " ".join(
+            r.message for r in caplog.records if "Parsed Abaqus" in r.message
+        )
+        assert "RAMP" in text
+        assert "STEP_AMP" in text
+
+
+@pytest.mark.parametrize(
+    "parser",
+    [AbaqusInpLoadCase, LoadCaseFromFreeCadInp],
+)
+def test_semantic_node_sets_create_marker_only_conditions(tmp_path, parser):
+    """Named node sets remain visible when solver load cards are absent."""
+    inp = """\
+*HEADING
+semantic node sets
+*NODE
+1, 0.0, 0.0, 0.0
+2, 1.0, 0.0, 0.0
+3, 0.0, 1.0, 0.0
+4, 0.0, 0.0, 1.0
+*ELEMENT, TYPE=C3D4, ELSET=ALL
+1, 1, 2, 3, 4
+*NSET, NSET=boundary_nodes
+1, 2
+*NSET, NSET=load_tip
+3, 4
+"""
+    path = tmp_path / "semantic_nsets.inp"
+    path.write_text(inp, encoding="utf-8")
+
+    load_case = parser.from_inp(str(path))
+
+    assert load_case.meta["inferred_constraint_nsets"] == ["boundary_nodes"]
+    assert load_case.meta["inferred_load_nsets"] == ["load_tip"]
+    assert load_case.boundary_conditions[0].inferred_from_nset_name is True
+    assert load_case.loads[0].inferred_from_nset_name is True
+    assert load_case.loads[0].marker_only is True
+    assert load_case.loads[0].magnitude_newtons == 0.0

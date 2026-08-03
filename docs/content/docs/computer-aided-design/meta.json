@@ -4,6 +4,7 @@
     "shape",
     "sweep",
     "built-in-profiles",
+    "named-parameters",
     "parameters"
   ]
 }

@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 from pathlib import Path
+import json
 import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -59,6 +60,10 @@ class LoadCase(LoadCaseFromFreeCadInp):
     max_n_loaded_nodes: Optional[int] = None
     max_n_constraint_nodes: Optional[int] = None
 
+    # Raw JSON dict this load case was parsed from (set by parsers; used for
+    # publication-quality visualisation via visualize_load_case).
+    source_json: Optional[Dict[str, Any]] = None
+
     @property
     def boundary_conditions(self) -> List[BoundaryCondition]:
         """Backward-compatible alias for `constraints`."""
@@ -78,7 +83,9 @@ class LoadCase(LoadCaseFromFreeCadInp):
         self.constraints.append(constraint)
         return self
 
-    def calc_mesh_size(self, num_nodes: int) -> float:
+    def calc_mesh_size(
+        self, num_nodes: int, bounds_override: Optional[Dict[str, float]] = None
+    ) -> float:
         """
         Recommend a mesh size based on design-space dimensions and a target node count.
 
@@ -91,10 +98,15 @@ class LoadCase(LoadCaseFromFreeCadInp):
             - N is target number of nodes
 
         For very thin domains, the recommendation is clamped to avoid over-coarsening
-        across the smallest dimension.
+        across the smallest dimension (h ≤ min_dim / 3).
 
         Args:
             num_nodes: Target number of mesh nodes (> 0)
+            bounds_override: Optional bounding box dict with keys x_min/x_max/y_min/y_max/
+                z_min/z_max.  When provided, these dimensions are used instead of the
+                load-case domain bounds.  Use this when the geometry to be meshed
+                differs from the original problem domain (e.g. an agent-generated STEP
+                whose bounding box was read from the exported file).
 
         Returns:
             Recommended mesh size in model units (typically mm)
@@ -105,15 +117,19 @@ class LoadCase(LoadCaseFromFreeCadInp):
         if num_nodes <= 0:
             raise ValueError(f"num_nodes must be > 0, got {num_nodes}")
 
-        # Resolve bounds from domain first, then legacy bounds.
-        bounds = None
-        if self.domain is not None and hasattr(self.domain, "get_bounding_box"):
-            try:
-                bounds = self.domain.get_bounding_box()
-            except Exception:
-                bounds = None
-        if bounds is None:
-            bounds = self.bounds
+        # Use caller-supplied bounds when available (e.g. actual STEP geometry bbox);
+        # otherwise fall back to domain → legacy bounds.
+        if bounds_override is not None:
+            bounds = bounds_override
+        else:
+            bounds = None
+            if self.domain is not None and hasattr(self.domain, "get_bounding_box"):
+                try:
+                    bounds = self.domain.get_bounding_box()
+                except Exception:
+                    bounds = None
+            if bounds is None:
+                bounds = self.bounds
 
         if not bounds:
             raise ValueError(
@@ -160,6 +176,11 @@ class LoadCase(LoadCaseFromFreeCadInp):
                 h = max(h_min, (a_max / float(num_nodes)) ** 0.5)
             else:
                 h = max(h_min, sorted_dims[0] / float(num_nodes))
+
+        # Hard cap: never coarser than min_dim/3 so thin walls get ≥1 element layer.
+        # This is critical when bounds_override comes from the actual STEP geometry
+        # rather than a large problem-domain box.
+        h = min(h, min(positive_dims) / 3.0)
 
         return float(h)
 
@@ -351,6 +372,326 @@ class LoadCase(LoadCaseFromFreeCadInp):
         )
         return fea.inspect_bc_node_sets()
 
+    def to_agent_context(self) -> Dict[str, Any]:
+        """Return a structured, JSON-serializable load-case contract for agents."""
+        import math
+
+        def _resolve_bounds() -> Dict[str, float]:
+            if self.domain is not None and hasattr(self.domain, "get_bounding_box"):
+                try:
+                    bounds = self.domain.get_bounding_box()
+                    if bounds:
+                        return dict(bounds)
+                except Exception:
+                    pass
+            return dict(self.bounds or {})
+
+        def _location_payload(location: Any) -> Any:
+            if location is None:
+                return None
+
+            if isinstance(location, dict):
+                payload: Dict[str, Any] = {}
+                for key, value in location.items():
+                    if isinstance(value, (int, float, np.integer, np.floating)):
+                        payload[key] = float(value)
+                    else:
+                        payload[key] = value
+                return payload
+
+            if isinstance(location, (tuple, list)) and len(location) >= 3:
+                return {
+                    "x": float(location[0]),
+                    "y": float(location[1]),
+                    "z": float(location[2]),
+                }
+
+            return str(location)
+
+        def _location_text(location: Any) -> str:
+            payload = _location_payload(location)
+            if payload is None:
+                return "unspecified location"
+
+            if isinstance(payload, str):
+                return payload
+
+            if isinstance(payload, dict):
+                if all(
+                    key in payload
+                    for key in ("x_min", "x_max", "y_min", "y_max", "z_min", "z_max")
+                ):
+                    return (
+                        "box "
+                        f"X[{payload['x_min']}, {payload['x_max']}], "
+                        f"Y[{payload['y_min']}, {payload['y_max']}], "
+                        f"Z[{payload['z_min']}, {payload['z_max']}]"
+                    )
+                if all(key in payload for key in ("x", "y", "z")):
+                    return f"point ({payload['x']}, {payload['y']}, {payload['z']})"
+
+            return str(payload)
+
+        def _resolve_region_location(obj: Any) -> Any:
+            if hasattr(obj, "location"):
+                return getattr(obj, "location", None)
+            if hasattr(obj, "point"):
+                return getattr(obj, "point", None)
+            if hasattr(obj, "center"):
+                return getattr(obj, "center", None)
+
+            region_id = getattr(obj, "region_id", None)
+            selectors = getattr(self, "selectors", None) or {}
+            if not selectors and getattr(self, "meta", None):
+                selectors = self.meta.get("selectors", {})
+
+            if region_id and region_id in selectors:
+                selector = selectors[region_id]
+                query = getattr(selector, "query", None)
+                if query is not None:
+                    return query
+
+            return region_id
+
+        def _force_magnitude(force: Any) -> float:
+            if isinstance(force, (int, float, np.integer, np.floating)):
+                return abs(float(force))
+            if isinstance(force, (tuple, list)) and len(force) >= 3:
+                fx, fy, fz = float(force[0]), float(force[1]), float(force[2])
+                return math.sqrt(fx * fx + fy * fy + fz * fz)
+            return 0.0
+
+        def _vector_direction_text(vec: Tuple[float, float, float]) -> str:
+            fx, fy, fz = vec
+            if abs(fx) >= abs(fy) and abs(fx) >= abs(fz):
+                return "+X" if fx >= 0 else "-X"
+            if abs(fy) >= abs(fz):
+                return "+Y" if fy >= 0 else "-Y"
+            return "+Z" if fz >= 0 else "-Z"
+
+        bounds = _resolve_bounds()
+        x_min = float(bounds.get("x_min", 0.0))
+        x_max = float(bounds.get("x_max", 100.0))
+        y_min = float(bounds.get("y_min", 0.0))
+        y_max = float(bounds.get("y_max", 20.0))
+        z_min = float(bounds.get("z_min", 0.0))
+        z_max = float(bounds.get("z_max", 10.0))
+
+        x_length = x_max - x_min
+        y_span = y_max - y_min
+        z_height = z_max - z_min
+
+        material = getattr(self, "material", None)
+        if material:
+            if hasattr(material, "elastic_modulus_mpa"):
+                elastic_modulus_mpa = float(material.elastic_modulus_mpa)
+                density = float(material.density_g_cm3)
+                yield_strength_mpa = float(material.yield_strength_mpa or 250)
+            else:
+                elastic_modulus_mpa = float(getattr(material, "E", 210000))
+                density = float(getattr(material, "density", 7.85))
+                yield_strength_mpa = float(
+                    getattr(material, "yield_strength", None) or 250
+                )
+
+            if elastic_modulus_mpa > 180000:
+                material_name = "steel"
+            elif elastic_modulus_mpa > 100000:
+                material_name = "titanium"
+            else:
+                material_name = "aluminum"
+        else:
+            material_name = "steel"
+            elastic_modulus_mpa = 210000.0
+            density = 7.85
+            yield_strength_mpa = 250.0
+
+        constraints: List[Dict[str, Any]] = []
+        for constraint in self.boundary_conditions:
+            location = _resolve_region_location(constraint)
+            dofs = getattr(constraint, "dofs", (True, True, True))
+            locked_axes = [
+                axis for axis, locked in zip(["X", "Y", "Z"], dofs) if locked
+            ]
+            constraints.append(
+                {
+                    "type": constraint.__class__.__name__,
+                    "region_id": getattr(constraint, "region_id", None),
+                    "location": _location_payload(location),
+                    "location_text": _location_text(location),
+                    "locked_axes": locked_axes,
+                    "summary": (
+                        f"{constraint.__class__.__name__} at {_location_text(location)}"
+                        + (
+                            f" (DOFs locked: {', '.join(locked_axes)})"
+                            if locked_axes
+                            else ""
+                        )
+                    ),
+                }
+            )
+
+        loads: List[Dict[str, Any]] = []
+        total_applied_force_newtons = 0.0
+        for load in self.loads:
+            location = _resolve_region_location(load)
+            load_type = load.__class__.__name__
+            record: Dict[str, Any] = {
+                "type": load_type,
+                "region_id": getattr(load, "region_id", None),
+                "location": _location_payload(location),
+                "location_text": _location_text(location),
+            }
+
+            if isinstance(load, PointLoad):
+                force = getattr(load, "force", 0.0)
+                magnitude_newtons = _force_magnitude(force)
+                if isinstance(force, (tuple, list)) and len(force) >= 3:
+                    direction = _vector_direction_text(
+                        (float(force[0]), float(force[1]), float(force[2]))
+                    )
+                else:
+                    direction = str(getattr(load, "direction", "unspecified"))
+                record.update(
+                    {
+                        "magnitude_newtons": magnitude_newtons,
+                        "direction": direction,
+                        "summary": f"{load_type} {magnitude_newtons:.0f} N {direction} at {_location_text(location)}",
+                    }
+                )
+                total_applied_force_newtons += magnitude_newtons
+            elif isinstance(load, DistributedLoad):
+                force = getattr(load, "force", 0.0)
+                magnitude_newtons = _force_magnitude(force)
+                direction = str(getattr(load, "direction", "unspecified"))
+                record.update(
+                    {
+                        "magnitude_newtons": magnitude_newtons,
+                        "direction": direction,
+                        "summary": f"{load_type} total {magnitude_newtons:.0f} N ({direction}) over {_location_text(location)}",
+                    }
+                )
+                total_applied_force_newtons += magnitude_newtons
+            elif isinstance(load, PressureLoad):
+                pressure_mpa = float(getattr(load, "pressure", 0.0))
+                radius = float(getattr(load, "radius", 0.0))
+                direction = str(getattr(load, "direction", "unspecified"))
+                normal_axis = str(getattr(load, "normal_axis", "unspecified"))
+                equivalent_force = abs(pressure_mpa) * math.pi * max(radius, 0.0) ** 2
+                record.update(
+                    {
+                        "pressure_mpa": pressure_mpa,
+                        "radius_mm": radius,
+                        "direction": direction,
+                        "normal_axis": normal_axis,
+                        "summary": (
+                            f"{load_type} {pressure_mpa:.3g} MPa ({direction}) on circular area "
+                            f"centered at {_location_text(getattr(load, 'center', None))}, radius {radius:.3g} mm, normal axis {normal_axis}"
+                        ),
+                    }
+                )
+                total_applied_force_newtons += equivalent_force
+            else:
+                magnitude_newtons = getattr(load, "magnitude_newtons", None)
+                vector_newtons = getattr(load, "vector_newtons", None)
+                if vector_newtons:
+                    fx = float(vector_newtons.get("x", 0.0))
+                    fy = float(vector_newtons.get("y", 0.0))
+                    fz = float(vector_newtons.get("z", 0.0))
+                    magnitude_newtons = math.sqrt(fx * fx + fy * fy + fz * fz)
+                    direction = _vector_direction_text((fx, fy, fz))
+                else:
+                    magnitude_newtons = (
+                        float(abs(magnitude_newtons))
+                        if magnitude_newtons is not None
+                        else 0.0
+                    )
+                    direction = str(getattr(load, "direction", "unspecified"))
+                record.update(
+                    {
+                        "magnitude_newtons": magnitude_newtons,
+                        "direction": direction,
+                        "summary": f"{load_type} {magnitude_newtons:.0f} N {direction} at {_location_text(location)}",
+                    }
+                )
+                total_applied_force_newtons += magnitude_newtons
+
+            loads.append(record)
+
+        return {
+            "problem_id": self.problem_id or "load_case",
+            "description": self.description or "",
+            "units": self.units,
+            "coordinate_system": {
+                "x": "length",
+                "y": "span",
+                "z": "height",
+                "vertical_axis": "z",
+            },
+            "design_domain": {
+                "bounds": {
+                    "x_min": x_min,
+                    "x_max": x_max,
+                    "y_min": y_min,
+                    "y_max": y_max,
+                    "z_min": z_min,
+                    "z_max": z_max,
+                },
+                "dimensions": {
+                    "x_length": x_length,
+                    "y_span": y_span,
+                    "z_height": z_height,
+                },
+            },
+            "material": {
+                "name": material_name,
+                "elastic_modulus_mpa": elastic_modulus_mpa,
+                "yield_strength_mpa": yield_strength_mpa,
+                "density": density,
+            },
+            "constraints": constraints,
+            "loads": loads,
+            "total_applied_force_newtons": total_applied_force_newtons,
+            "structural_limits": {
+                "maximum_allowable_stress_mpa": yield_strength_mpa / 2.5,
+                "target_safety_factor": 2.5,
+            },
+        }
+
+    def to_agent_context_prompt(self) -> str:
+        """Return a deterministic prompt block for planner and CAD agents."""
+        context = self.to_agent_context()
+        bounds = context.get("design_domain", {}).get("bounds", {})
+        x_min = bounds.get("x_min", 0.0)
+        x_max = bounds.get("x_max", 0.0)
+        y_min = bounds.get("y_min", 0.0)
+        y_max = bounds.get("y_max", 0.0)
+        z_min = bounds.get("z_min", 0.0)
+        z_max = bounds.get("z_max", 0.0)
+        x_center = (x_min + x_max) / 2.0
+        y_center = (y_min + y_max) / 2.0
+        z_center = (z_min + z_max) / 2.0
+        pre_defined = (
+            "PRE-DEFINED VARIABLES (already in scope — do NOT redefine):\n"
+            f"  x_min, x_max = {x_min}, {x_max}   # design domain X bounds\n"
+            f"  y_min, y_max = {y_min}, {y_max}   # design domain Y bounds\n"
+            f"  z_min, z_max = {z_min}, {z_max}   # design domain Z bounds\n"
+            f"  x_center, y_center, z_center = {x_center}, {y_center}, {z_center}\n"
+            "  L, W, H  (= x_length, y_span, z_height — domain dimensions)\n"
+        )
+        return (
+            "AUTHORITATIVE STRUCTURED LOAD CASE:\n"
+            "Use this structured block as the source of truth for coordinates, bounds, constraints, and loads.\n"
+            "Do not infer alternate axis meanings from prose or images.\n"
+            "- X = length\n"
+            "- Y = span\n"
+            "- Z = height\n"
+            "- Geometry must overlap every constraint and load location described below.\n"
+            "- The design domain is NOT at the origin. Use the pre-defined boundary variables to position geometry.\n\n"
+            f"{pre_defined}\n"
+            f"{json.dumps(context, indent=2, sort_keys=True)}"
+        )
+
     def load_case_to_requirement(self) -> str:
         """
         Convert a parsed LoadCase object into a natural language design requirement.
@@ -358,6 +699,14 @@ class LoadCase(LoadCaseFromFreeCadInp):
         This bridges the structured JSON specification with the LLM-based design agent.
         """
         import math
+
+        context = self.to_agent_context()
+        domain = context["design_domain"]
+        bounds = domain["bounds"]
+        dimensions = domain["dimensions"]
+        material = context["material"]
+        constraints = context["constraints"]
+        loads = context["loads"]
 
         def _fmt_num(value: Any, max_decimals: int = 4) -> str:
             """Format numeric values compactly for prompt readability.
@@ -396,218 +745,27 @@ class LoadCase(LoadCaseFromFreeCadInp):
             except (TypeError, ValueError):
                 return str(value)
 
-        def _fmt_coord(value) -> str:
-            """Format a coordinate value rounded to 1 decimal place."""
-            return _fmt_num(value, max_decimals=1)
+        x_min = bounds.get("x_min", 0.0)
+        x_max = bounds.get("x_max", 100.0)
+        y_min = bounds.get("y_min", 0.0)
+        y_max = bounds.get("y_max", 20.0)
+        z_min = bounds.get("z_min", 0.0)
+        z_max = bounds.get("z_max", 10.0)
 
-        def _format_location(location) -> str:
-            if location is None:
-                return "unspecified location"
+        length = dimensions.get("x_length", x_max - x_min)
+        span = dimensions.get("y_span", y_max - y_min)
+        height = dimensions.get("z_height", z_max - z_min)
 
-            if isinstance(location, str):
-                return location
-
-            if isinstance(location, dict):
-                keys = ["x_min", "x_max", "y_min", "y_max", "z_min", "z_max"]
-                if any(k in location for k in keys):
-                    return (
-                        "box "
-                        f"X[{_fmt_coord(location.get('x_min', '?'))}, {_fmt_coord(location.get('x_max', '?'))}], "
-                        f"Y[{_fmt_coord(location.get('y_min', '?'))}, {_fmt_coord(location.get('y_max', '?'))}], "
-                        f"Z[{_fmt_coord(location.get('z_min', '?'))}, {_fmt_coord(location.get('z_max', '?'))}]"
-                    )
-                if all(k in location for k in ("x", "y", "z")):
-                    return (
-                        f"point ({_fmt_coord(location['x'])}, "
-                        f"{_fmt_coord(location['y'])}, {_fmt_coord(location['z'])})"
-                    )
-                return str(location)
-
-            if isinstance(location, (tuple, list)) and len(location) >= 3:
-                return f"point ({_fmt_coord(location[0])}, {_fmt_coord(location[1])}, {_fmt_coord(location[2])})"
-
-            return str(location)
-
-        def _resolve_region_location(lc, obj) -> str:
-            # 1) Native object location/point
-            if hasattr(obj, "location"):
-                return _format_location(getattr(obj, "location", None))
-            if hasattr(obj, "point"):
-                return _format_location(getattr(obj, "point", None))
-            if hasattr(obj, "center"):
-                return _format_location(getattr(obj, "center", None))
-
-            # 2) Parser compatibility metadata: region_id + selectors
-            region_id = getattr(obj, "region_id", None)
-            selectors = getattr(lc, "selectors", None) or {}
-            if not selectors and getattr(lc, "meta", None):
-                selectors = lc.meta.get("selectors", {})
-
-            if region_id and region_id in selectors:
-                selector = selectors[region_id]
-                query = getattr(selector, "query", None)
-                if query is not None:
-                    return _format_location(query)
-
-            if region_id:
-                return str(region_id)
-
-            return "unspecified location"
-
-        def _force_magnitude(force) -> float:
-            if isinstance(force, (int, float)):
-                return abs(float(force))
-            if isinstance(force, (tuple, list)) and len(force) >= 3:
-                fx, fy, fz = float(force[0]), float(force[1]), float(force[2])
-                return math.sqrt(fx * fx + fy * fy + fz * fz)
-            return 0.0
-
-        def _vector_direction_text(vec) -> str:
-            fx, fy, fz = vec
-            if abs(fy) >= abs(fx) and abs(fy) >= abs(fz):
-                return "downward" if fy < 0 else "upward"
-            if abs(fx) >= abs(fz):
-                return "in X direction" if fx >= 0 else "in -X direction"
-            return "in Z direction" if fz >= 0 else "in -Z direction"
-
-        # Extract bounds from load case
-        bounds = self.bounds or {}
-        x_min = bounds.get("x_min", 0)
-        x_max = bounds.get("x_max", 100)
-        y_min = bounds.get("y_min", 0)
-        y_max = bounds.get("y_max", 20)
-        z_min = bounds.get("z_min", 0)
-        z_max = bounds.get("z_max", 10)
-
-        length = x_max - x_min
-        height = y_max - y_min
-        thickness = z_max - z_min
-
-        # Extract material properties
-        material = getattr(self, "material", None)
-        if material:
-            if hasattr(material, "elastic_modulus_mpa"):
-                # Legacy material definition from JSON parser
-                E_mpa = material.elastic_modulus_mpa
-                _poisson = material.poissons_ratio
-                _density = material.density_g_cm3
-                yield_strength = material.yield_strength_mpa or 250  # Default for steel
-            else:
-                # New FEA LoadCase MaterialProperties signature
-                E_mpa = getattr(material, "E", 210000)
-                _poisson = getattr(material, "nu", 0.3)
-                _density = getattr(material, "density", 7.85)
-                yield_strength = getattr(material, "yield_strength", None) or 250
-
-            # Determine material name from elastic modulus
-            if E_mpa > 180000:
-                material_name = "steel"
-            elif E_mpa > 100000:
-                material_name = "titanium"
-            else:
-                material_name = "aluminum"
-        else:
-            material_name = "steel"
-            E_mpa = 210000
-            yield_strength = 250
-            _density = 7.85
-
-        # Extract boundary conditions
-        bc_descriptions = []
-        for bc in self.boundary_conditions:
-            location = _resolve_region_location(self, bc)
-            bc_type = bc.__class__.__name__
-
-            if isinstance(bc, FixedConstraint):
-                dofs = getattr(bc, "dofs", (True, True, True))
-                constrained_axes = [
-                    ax for ax, locked in zip(["X", "Y", "Z"], dofs) if locked
-                ]
-                dof_text = ", ".join(constrained_axes) if constrained_axes else "none"
-                bc_descriptions.append(
-                    f"{bc_type} at {location} (DOFs locked: {dof_text})"
-                )
-            else:
-                bc_descriptions.append(f"{bc_type} at {location}")
-
-        # Extract loads
-        load_descriptions = []
-        total_force = 0
-        for load in self.loads:
-            location = _resolve_region_location(self, load)
-            load_type = load.__class__.__name__
-
-            if isinstance(load, PointLoad):
-                force = getattr(load, "force", 0.0)
-                force_mag = _force_magnitude(force)
-
-                if isinstance(force, (tuple, list)) and len(force) >= 3:
-                    direction = _vector_direction_text((force[0], force[1], force[2]))
-                    load_descriptions.append(
-                        f"{load_type} {force_mag:.0f} N {direction} at {location}"
-                    )
-                else:
-                    direction = getattr(load, "direction", None)
-                    direction_str = f" in {direction}" if direction else ""
-                    load_descriptions.append(
-                        f"{load_type} {force_mag:.0f} N{direction_str} at {location}"
-                    )
-                total_force += force_mag
-
-            elif isinstance(load, DistributedLoad):
-                force = getattr(load, "force", 0.0)
-                force_mag = _force_magnitude(force)
-                direction = getattr(load, "direction", None)
-                direction_str = f" ({direction})" if direction else ""
-                load_descriptions.append(
-                    f"{load_type} total {force_mag:.0f} N{direction_str} over {location}"
-                )
-                total_force += force_mag
-
-            elif isinstance(load, PressureLoad):
-                pressure = float(getattr(load, "pressure", 0.0))
-                radius = float(getattr(load, "radius", 0.0))
-                center = _format_location(getattr(load, "center", None))
-                normal_axis = getattr(load, "normal_axis", "?")
-                direction = getattr(load, "direction", "?")
-                equivalent_force = abs(pressure) * math.pi * max(radius, 0.0) ** 2
-                load_descriptions.append(
-                    f"{load_type} {pressure:.3g} MPa ({direction}) on circular area "
-                    f"centered at {center}, radius {radius:.3g} mm, normal axis {normal_axis}"
-                )
-                total_force += equivalent_force
-
-            else:
-                # Generic fallback for other Load subclasses and parser-compat objects
-                vector_newtons = getattr(load, "vector_newtons", None)
-                magnitude_newtons = getattr(load, "magnitude_newtons", None)
-
-                if vector_newtons:
-                    fx = vector_newtons.get("x", 0.0)
-                    fy = vector_newtons.get("y", 0.0)
-                    fz = vector_newtons.get("z", 0.0)
-                    force_mag = math.sqrt(fx * fx + fy * fy + fz * fz)
-                    direction = _vector_direction_text((fx, fy, fz))
-                    load_descriptions.append(
-                        f"{load_type} {force_mag:.0f} N {direction} at {location}"
-                    )
-                    total_force += force_mag
-                elif magnitude_newtons is not None:
-                    direction = getattr(load, "direction", None)
-                    direction_str = f" in {direction}" if direction else ""
-                    force_mag = abs(float(magnitude_newtons))
-                    load_descriptions.append(
-                        f"{load_type} {force_mag:.0f} N{direction_str} at {location}"
-                    )
-                    total_force += force_mag
-                else:
-                    load_descriptions.append(f"{load_type} at {location}")
-
-        if not bc_descriptions:
-            bc_descriptions.append("No explicit constraints provided")
-
-        if not load_descriptions:
-            load_descriptions.append("No explicit external loads provided")
+        bc_descriptions = [item["summary"] for item in constraints] or [
+            "No explicit constraints provided"
+        ]
+        load_descriptions = [item["summary"] for item in loads] or [
+            "No explicit external loads provided"
+        ]
+        total_force = context.get("total_applied_force_newtons", 0.0)
+        material_name = material.get("name", "steel")
+        E_mpa = material.get("elastic_modulus_mpa", 210000)
+        yield_strength = material.get("yield_strength_mpa", 250)
 
         # Build the requirement string
         requirement = f"""
@@ -615,9 +773,11 @@ class LoadCase(LoadCaseFromFreeCadInp):
         
         GEOMETRY:
         - Length (X): {_fmt_num(length)} {self.units}
-        - Beam (Y): {_fmt_num(height)} {self.units}
-        - Height (Z): {_fmt_num(thickness)} {self.units}
+        - Span (Y): {_fmt_num(span)} {self.units}
+        - Height (Z): {_fmt_num(height)} {self.units}
         - Design domain: X=[{_fmt_num(x_min)}, {_fmt_num(x_max)}], Y=[{_fmt_num(y_min)}, {_fmt_num(y_max)}], Z=[{_fmt_num(z_min)}, {_fmt_num(z_max)}]
+        - Coordinate system: X=length, Y=span, Z=height
+        - IMPORTANT: Geometry must overlap the exact constraint and load coordinates below.
 
         MATERIAL:
         - Nominal material: {material_name}
@@ -723,10 +883,23 @@ class LoadCase(LoadCaseFromFreeCadInp):
             location: Any,
             tolerance_scale: float = 1.0,
         ) -> np.ndarray:
-            spans = np.ptp(nodes_arr, axis=0)
-            model_scale = max(float(np.max(spans)), 1.0)
-            base_tol = max(model_scale * 1e-6, 1e-8)
-            tol = base_tol * max(float(tolerance_scale), 1.0)
+            # Use half the mesh spacing as base tolerance so that nodes just
+            # outside a thin selector band (e.g. a 1 mm deck in a 5 mm mesh)
+            # are still captured. Falls back to a model-scale epsilon when
+            # mesh_size is unknown.
+            if mesh_size is not None:
+                base_tol = float(mesh_size) * 0.5
+            else:
+                spans = np.ptp(nodes_arr, axis=0)
+                n_nodes = max(len(nodes_arr), 1)
+                pos_spans = [s for s in spans if s > 0]
+                vol_est = (
+                    float(np.prod(pos_spans))
+                    if len(pos_spans) == 3
+                    else float(np.max(pos_spans or [1.0]))
+                )
+                base_tol = (vol_est / n_nodes) ** (1.0 / max(len(pos_spans), 1)) * 0.5
+            tol = max(base_tol, 1e-8) * max(float(tolerance_scale), 1.0)
             x = nodes_arr[:, 0]
             y = nodes_arr[:, 1]
             z = nodes_arr[:, 2]

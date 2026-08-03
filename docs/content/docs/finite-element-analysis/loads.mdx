@@ -96,6 +96,41 @@ PressureLoad(
 )
 ```
 
+#### MomentLoad
+
+Torque applied about a circular cross-section:
+
+```python
+from rapidcadpy.fea.boundary_conditions import MomentLoad
+
+MomentLoad(
+    center=(50.0, 0.0, 0.0),  # Center of the shaft section in mm
+    axis="x",                 # Torque axis: "x", "y", or "z"
+    radius=10.0,              # Cross-section radius in mm
+    magnitude_nm=2500.0,      # Torque magnitude in N·mm
+    direction="cw",           # "cw" or "ccw" looking along +axis
+    tolerance=1.0,
+)
+```
+
+`MomentLoad` applies torque as an equivalent tangential force couple on nodes near a circular cross-section. It is useful for torsional shaft loads, twisting moments on beams, and motor or propeller torque applied through a mount.
+
+<PythonFunction
+  name="MomentLoad"
+  signature="MomentLoad"
+  description="Apply a torque about an axis using an equivalent force couple on a circular cross-section."
+  params={{
+    center: { type: 'Tuple[float, float, float]', description: 'Center of the circular cross-section in model coordinates (mm)' },
+    axis: { type: 'Literal["x", "y", "z"]', description: 'Rotation axis for the applied moment' },
+    radius: { type: 'float', description: 'Radius of the circular cross-section (mm)' },
+    magnitude_nm: { type: 'float', description: 'Torque magnitude in N·mm' },
+    direction: { type: 'Literal["cw", "ccw"]', description: 'Clockwise or counter-clockwise looking along the positive axis', default: '"cw"' },
+    tolerance: { type: 'float', description: 'Node-selection tolerance multiplier applied to mesh_size', default: 1.0 }
+  }}
+  returns="None"
+  returnType="None"
+/>
+
 ### Location Guidance
 
 Boundary conditions and point/distributed loads resolve their placement using the same helper logic as `LoadCase`, so you can mix named faces, explicit coordinates, or parser-generated selectors.
