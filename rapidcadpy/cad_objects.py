@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, FrozenSet, List, Optional, Protocol
+from typing import Any, Callable, Dict, FrozenSet, Iterable, List, Optional, Protocol
 
 
 class CadAdapter(Protocol):
@@ -24,6 +24,12 @@ class CadAdapter(Protocol):
     def set_property(self, obj: Any, name: str, value: Any) -> None: ...
 
     def get_shape(self, obj: Any) -> Any: ...
+
+    def set_boolean_result_visibility(
+        self,
+        result: Any,
+        operands: Iterable[Any],
+    ) -> None: ...
 
 
 @dataclass
@@ -64,6 +70,11 @@ class CadDocument:
     _next_parameter_id: int = field(
         default=0,
         init=False,
+        repr=False,
+        compare=False,
+    )
+    feature_definitions: Dict[str, Dict[str, Any]] = field(
+        default_factory=dict,
         repr=False,
         compare=False,
     )
@@ -148,6 +159,49 @@ class CadDocument:
         """Recompute the native document through its backend adapter."""
         self.adapter.recompute(self.native_handle)
 
+    def register_feature_definition(
+        self,
+        native_name: str,
+        definition: Dict[str, Any],
+    ) -> None:
+        """Persist a serializable semantic feature definition by native name."""
+
+        self.feature_definitions[str(native_name)] = dict(definition)
+
+    def feature_definitions_for_native_names(
+        self,
+        native_names: Iterable[str],
+    ) -> tuple[Dict[str, Any], ...]:
+        """Return authoritative features attached to a native result chain.
+
+        A dependent native feature stores its definition on the result object,
+        while ``target_id`` identifies the input object that existed before the
+        operation. Accepting both identities gives object inspection and
+        drawing generation one shared feature-selection rule.
+        """
+
+        selected_names = {str(name) for name in native_names if str(name)}
+        selected_ids = {
+            object_id
+            for name in selected_names
+            if (object_id := self._object_ids_by_native_name.get(name)) is not None
+        }
+        result: list[Dict[str, Any]] = []
+        seen_ids: set[str] = set()
+        for native_name, definition in self.feature_definitions.items():
+            if (
+                native_name not in selected_names
+                and str(definition.get("target_id", "")) not in selected_ids
+            ):
+                continue
+            feature_id = str(definition.get("id", ""))
+            if feature_id and feature_id in seen_ids:
+                continue
+            result.append(dict(definition))
+            if feature_id:
+                seen_ids.add(feature_id)
+        return tuple(result)
+
     def save(self, path: Optional[str] = None) -> str:
         """Save the native document and return the resulting path."""
         saved_path = self.adapter.save_document(self.native_handle, path)
@@ -163,6 +217,7 @@ class CadDocument:
             "label": self.label,
             "file_name": self.file_name,
             "revision": self.revision,
+            "feature_definitions": dict(self.feature_definitions),
         }
 
 

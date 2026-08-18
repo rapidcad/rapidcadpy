@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import secrets
@@ -43,6 +44,35 @@ _INFO_PATHS: list[Path] = []
 _IPC_DIR: Optional[Path] = None
 _INSTANCE_ID = f"freecad-{os.getpid()}"
 _START_LOCK = threading.Lock()
+_LOG_PATH = Path(
+    os.environ.get("RAPIDCADPY_GUI_BRIDGE_LOG", "/tmp/rapidcadpy_freecad_gui_bridge.log")
+)
+_LOGGER = logging.getLogger("rapidcadpy.freecad.gui_bridge")
+
+
+def _configure_logging() -> None:
+    """Persist minimal bridge lifecycle diagnostics outside transient chat UI."""
+
+    if _LOGGER.handlers:
+        return
+    try:
+        handler = logging.FileHandler(_LOG_PATH, encoding="utf-8")
+    except OSError:
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+    _LOGGER.addHandler(handler)
+    _LOGGER.setLevel(logging.INFO)
+    _LOGGER.propagate = False
+
+
+def _log_request(event: str, method: str, **fields: Any) -> None:
+    _configure_logging()
+    try:
+        _LOGGER.info(
+            json.dumps({"event": event, "method": method, **fields}, default=str)
+        )
+    except Exception:
+        pass
 
 
 def _active_document_info() -> Optional[Dict[str, Any]]:
@@ -118,6 +148,7 @@ def _dispatch(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "new_document",
             "execute_code",
             "extrude",
+            "hole",
             "cut",
             "fillet",
             "generate_drawing",
@@ -132,9 +163,11 @@ def _drain_requests() -> None:
             request = _REQUESTS.get_nowait()
         except queue.Empty:
             break
+        method = str(request["method"])
+        _log_request("dispatch_started", method)
         try:
             request["response"] = _dispatch(
-                str(request["method"]),
+                method,
                 dict(request.get("params") or {}),
             )
         except Exception:
@@ -143,6 +176,11 @@ def _drain_requests() -> None:
                 "error": traceback.format_exc(),
             }
         finally:
+            _log_request(
+                "dispatch_finished",
+                method,
+                ok=bool(request.get("response", {}).get("ok")),
+            )
             request["event"].set()
     _drain_file_requests()
 
@@ -188,6 +226,7 @@ class _BridgeHandler(socketserver.StreamRequestHandler):
             if request.get("token") != _TOKEN:
                 response = {"ok": False, "error": "Invalid bridge token."}
             else:
+                _log_request("request_received", str(request.get("method", "")))
                 pending: Dict[str, Any] = {
                     "method": request.get("method", ""),
                     "params": request.get("params", {}),
@@ -204,6 +243,11 @@ class _BridgeHandler(socketserver.StreamRequestHandler):
                     response = pending["response"]
         except Exception:
             response = {"ok": False, "error": traceback.format_exc()}
+        _log_request(
+            "response_sent",
+            str(request.get("method", "")) if "request" in locals() else "",
+            ok=bool(response.get("ok")),
+        )
         self.wfile.write(json.dumps(response).encode("utf-8") + b"\n")
 
 

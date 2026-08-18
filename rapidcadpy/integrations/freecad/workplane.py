@@ -296,8 +296,8 @@ class FreeCADWorkplane(Workplane):
             FreeCADShape wrapping the solid.
         """
         import FreeCAD
-        import Part
         from .shape import FreeCADShape
+        from .errors import FreeCADNativeFeatureError
 
         if not hasattr(self, "_local_x"):
             self._setup_coordinate_system()
@@ -310,10 +310,6 @@ class FreeCADWorkplane(Workplane):
         else:
             lx, ly, lz = 0.0, 0.0, 0.0
 
-        # Build box at local origin
-        box_shape = Part.makeBox(length, width, height, FreeCAD.Vector(lx, ly, lz))
-
-        # Transform from local to world coordinates using the workplane axes
         center_2d = self._current_position
         cx, cy, cz = self._to_3d(center_2d.x, center_2d.y)
 
@@ -323,27 +319,44 @@ class FreeCADWorkplane(Workplane):
 
         m = FreeCAD.Matrix()
         # Columns are the local x, y, z axes expressed in world space
-        m.A11, m.A12, m.A13, m.A14 = lx_v.x, ly_v.x, lz_v.x, float(cx)
-        m.A21, m.A22, m.A23, m.A24 = lx_v.y, ly_v.y, lz_v.y, float(cy)
-        m.A31, m.A32, m.A33, m.A34 = lx_v.z, ly_v.z, lz_v.z, float(cz)
+        corner_x = float(cx) + lx_v.x * lx + ly_v.x * ly + lz_v.x * lz
+        corner_y = float(cy) + lx_v.y * lx + ly_v.y * ly + lz_v.y * lz
+        corner_z = float(cz) + lx_v.z * lx + ly_v.z * ly + lz_v.z * lz
+        m.A11, m.A12, m.A13, m.A14 = lx_v.x, ly_v.x, lz_v.x, corner_x
+        m.A21, m.A22, m.A23, m.A24 = lx_v.y, ly_v.y, lz_v.y, corner_y
+        m.A31, m.A32, m.A33, m.A34 = lx_v.z, ly_v.z, lz_v.z, corner_z
         m.A41, m.A42, m.A43, m.A44 = 0.0, 0.0, 0.0, 1.0
 
-        box_shape = box_shape.transformGeometry(m)
-        if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
-            cast(Any, self.app).mark_history_unsupported(
-                "Box replay not implemented for FreeCAD history export"
+        if self.app is None or not hasattr(self.app, "get_doc"):
+            raise FreeCADNativeFeatureError(
+                "Native Part::Box creation requires a document-backed FreeCAD app."
             )
 
-        # Create initial Part::Feature in the document if app is FreeCADApp
-        doc = None
+        app_any = cast(Any, self.app)
+        doc = app_any.get_doc()
         feat = None
-        if self.app is not None and hasattr(self.app, "get_doc"):
-            app_any = cast(Any, self.app)
-            doc = app_any.get_doc()
+        try:
             feat_idx = app_any.get_next_feature_index()
-            feat = doc.addObject("Part::Feature", f"Box_{feat_idx}")
-            feat.Shape = box_shape
+            feat = doc.addObject("Part::Box", f"Box_{feat_idx}")
+            feat.Length = float(length)
+            feat.Width = float(width)
+            feat.Height = float(height)
+            feat.Placement = FreeCAD.Placement(m)
             doc.recompute()
+            box_shape = feat.Shape
+            if box_shape is None or box_shape.isNull():
+                raise ValueError("FreeCAD recomputed an empty Part::Box shape.")
+        except Exception as exc:
+            if feat is not None:
+                try:
+                    doc.removeObject(feat.Name)
+                    doc.recompute()
+                except Exception:
+                    pass
+            raise FreeCADNativeFeatureError(
+                "Could not create native Part::Box; refusing to bake the box "
+                "into Part::Feature geometry."
+            ) from exc
 
         return FreeCADShape(box_shape, self.app, doc=doc, current_feature=feat)
 
@@ -365,6 +378,7 @@ class FreeCADWorkplane(Workplane):
             FreeCADShape wrapping the resulting solid.
         """
         import FreeCAD
+        from .errors import FreeCADNativeFeatureError
         from .sketch2d import FreeCADSketch2D
 
         if not self._pending_shapes:
@@ -387,19 +401,62 @@ class FreeCADWorkplane(Workplane):
         revolve_dir = axis_map.get(axis.upper(), FreeCAD.Vector(0, 0, 1))
         angle_deg = math.degrees(angle)
 
-        try:
-            solid = face.revolve(FreeCAD.Vector(0, 0, 0), revolve_dir, angle_deg)
-        except Exception as exc:
-            if getattr(self.app, "silent_geometry_failures", False):
-                return None  # type: ignore[return-value]
-            raise RuntimeError(f"Revolve failed: {exc}") from exc
-
-        if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
-            cast(Any, self.app).mark_history_unsupported(
-                "Revolve replay not implemented for FreeCAD history export"
+        if operation != "NewBodyFeatureOperation":
+            raise FreeCADNativeFeatureError(
+                f"Native FreeCAD revolution operation {operation!r} is not "
+                "implemented. Create a new revolution and apply a linked boolean."
             )
+        if self.app is None or not hasattr(self.app, "get_doc"):
+            raise FreeCADNativeFeatureError(
+                "Native Part::Revolution creation requires a document-backed app."
+            )
+
+        app_any = cast(Any, self.app)
+        doc = app_any.get_doc()
+        created_names = []
+        try:
+            feature_index = app_any.get_next_feature_index()
+            native_sketch = sketch2d._create_editable_sketch(
+                doc, f"Sketch_{feature_index}"
+            )
+            created_names.append(str(native_sketch.Name))
+            revolution = doc.addObject(
+                "Part::Revolution", f"Revolution_{feature_index}"
+            )
+            created_names.append(str(revolution.Name))
+            revolution.Source = native_sketch
+            revolution.Axis = revolve_dir
+            revolution.Base = FreeCAD.Vector(0, 0, 0)
+            revolution.Angle = float(angle_deg)
+            revolution.Solid = True
+            doc.recompute()
+            solid = revolution.Shape
+            if solid is None or solid.isNull():
+                raise ValueError("FreeCAD recomputed an empty Part::Revolution.")
+        except Exception as exc:
+            for name in reversed(created_names):
+                try:
+                    doc.removeObject(name)
+                except Exception:
+                    pass
+            try:
+                doc.recompute()
+            except Exception:
+                pass
+            raise FreeCADNativeFeatureError(
+                "Could not create Sketcher::SketchObject -> Part::Revolution; "
+                "refusing to bake the revolved shape."
+            ) from exc
+
         self._clear_pending_shapes()
-        return cast("FreeCADShape", sketch2d._apply_operation(solid, operation))
+        from .shape import FreeCADShape
+
+        return FreeCADShape(
+            solid,
+            self.app,
+            doc=doc,
+            current_feature=revolution,
+        )
 
     def sweep(
         self,
@@ -472,6 +529,13 @@ class FreeCADWorkplane(Workplane):
         from .sketch2d import FreeCADSketch2D
 
         profile_wps = [profiles] if not isinstance(profiles, list) else profiles
+        if operation != "NewBodyFeatureOperation":
+            from .errors import FreeCADNativeFeatureError
+
+            raise FreeCADNativeFeatureError(
+                f"Native FreeCAD loft operation {operation!r} is not implemented. "
+                "Create a new loft and apply a linked boolean."
+            )
 
         # Build an ordered list of all profile workplanes (self first).
         all_wps = [self] + profile_wps
@@ -517,27 +581,16 @@ class FreeCADWorkplane(Workplane):
                 app_any = cast(Any, self.app)
                 doc = app_any.get_doc()
                 section_objs = []
+                created_names = []
                 for wire, sketch in zip(wires, profile_sketches):
                     section_name = f"LoftSection_{app_any.get_next_feature_index()}"
-
-                    # Build editable section sketches when Sketcher is available.
-                    section_obj = None
-                    if sketch._primitives:
-                        try:
-                            section_obj = sketch._create_editable_sketch(
-                                doc, section_name
-                            )
-                        except Exception:
-                            section_obj = None
-
-                    if section_obj is None:
-                        section_obj = doc.addObject("Part::Feature", section_name)
-                        section_obj.Shape = wire
-
+                    section_obj = sketch._create_editable_sketch(doc, section_name)
+                    created_names.append(str(section_obj.Name))
                     section_objs.append(section_obj)
 
                 loft_name = f"Loft_{app_any.get_next_feature_index()}"
                 loft_obj = doc.addObject("Part::Loft", loft_name)
+                created_names.append(str(loft_obj.Name))
                 loft_obj.Sections = section_objs
                 loft_obj.Solid = bool(make_solid)
                 loft_obj.Ruled = bool(ruled)
@@ -546,6 +599,8 @@ class FreeCADWorkplane(Workplane):
 
                 doc.recompute()
                 solid = loft_obj.Shape
+                if solid is None or solid.isNull():
+                    raise ValueError("FreeCAD recomputed an empty Part::Loft.")
 
                 # Default operation: return the true Loft feature as current feature.
                 if operation == "NewBodyFeatureOperation":
@@ -558,9 +613,23 @@ class FreeCADWorkplane(Workplane):
                         current_feature=loft_obj,
                     )
             except Exception as exc:
+                for name in reversed(locals().get("created_names", [])):
+                    try:
+                        doc.removeObject(name)
+                    except Exception:
+                        pass
+                try:
+                    doc.recompute()
+                except Exception:
+                    pass
                 if getattr(self.app, "silent_geometry_failures", False):
                     return None  # type: ignore[return-value]
-                raise RuntimeError(f"Loft feature creation failed: {exc}") from exc
+                from .errors import FreeCADNativeFeatureError
+
+                raise FreeCADNativeFeatureError(
+                    "Native Part::Loft creation failed; refusing to replace a "
+                    "section or result with Part::Feature geometry."
+                ) from exc
         else:
             try:
                 solid = Part.makeLoft(wires, bool(make_solid), bool(ruled))

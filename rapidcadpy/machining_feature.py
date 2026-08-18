@@ -13,7 +13,12 @@ class MachiningFeature(Feature, ABC):
     Machining features represent subtractive operations like holes, slots, and cuts.
     """
 
-    pass
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        if self.sketch_plane is None:
+            from .workplane import Workplane
+
+            self.sketch_plane = Workplane.xy_plane()
 
 
 @dataclass

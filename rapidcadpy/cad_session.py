@@ -14,9 +14,10 @@ import time
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .cad_objects import CadDocument, CadFeature, CadObject, CadParameter
+from .feature import Feature
 from .integrations.freecad.worker_connection import (
     FreeCADWorkerClient,
 )
@@ -42,6 +43,25 @@ class SemanticObject:
             "confidence": self.confidence,
             **self.metadata,
         }
+
+    def to_summary_dict(self) -> Dict[str, Any]:
+        """Return the fields needed to choose an object for later inspection."""
+        summary = {
+            "id": self.id,
+            "type": self.type,
+            "label": self.label,
+        }
+        for key in (
+            "native_name",
+            "native_type",
+            "backend",
+            "visibility",
+            "capabilities",
+            "geometry",
+        ):
+            if key in self.metadata:
+                summary[key] = self.metadata[key]
+        return summary
 
 
 @dataclass
@@ -76,7 +96,15 @@ class CadSession:
         "sketch.work_plane",
         "sketch.rectangle",
         "sketch.circle",
+        "sketch.line",
+        "sketch.arc",
+        "feature.box",
         "feature.extrude",
+        "feature.loft",
+        "feature.boolean.cut",
+        "feature.boolean.union",
+        "feature.fillet",
+        "feature.hole",
         "object.list",
         "object.inspect",
         "object.set_property",
@@ -85,6 +113,14 @@ class CadSession:
         "parameter.update",
         "parameter.bind",
         "drawing.generate",
+        "drawing.list",
+        "drawing.select",
+        "drawing.inspect",
+        "drawing.dimension.feature",
+        "drawing.annotation.note",
+        "drawing.annotation.leader",
+        "drawing.item.move",
+        "drawing.export",
         "viewport.select",
         "viewport.fit",
     )
@@ -102,9 +138,14 @@ class CadSession:
         self.active_shape_id: Optional[str] = None
         self.objects: Dict[str, SemanticObject] = {}
         self.runtime_objects: Dict[str, Any] = {}
+        # Backend-specific fluent objects are useful for isolated geometry work,
+        # but never constitute the public live-CAD object registry.
+        self._shape_wrappers: Dict[str, Any] = {}
         self.operations: list[OperationRecord] = []
         self.parameters: Dict[str, CadParameter] = {}
         self.geometry_signatures: Dict[str, Dict[str, Any]] = {}
+        self.drawings: Dict[str, Dict[str, Any]] = {}
+        self.current_drawing_id: Optional[str] = None
         self.document: Dict[str, Any] = {}
         self.cad_document: Optional[CadDocument] = None
         self.document_revision: Optional[str] = None
@@ -183,6 +224,7 @@ class CadSession:
         self.active_shape_id = None
         self.objects.clear()
         self.runtime_objects.clear()
+        self._shape_wrappers.clear()
         self.operations.clear()
         self.parameters.clear()
         self.geometry_signatures.clear()
@@ -565,6 +607,7 @@ class CadSession:
         self.active_shape_id = None
         self.objects.clear()
         self.runtime_objects.clear()
+        self._shape_wrappers.clear()
         self.geometry_signatures.clear()
         self.document = {
             "name": getattr(self.app.get_doc(), "Name", name),
@@ -641,13 +684,21 @@ class CadSession:
                 f"Could not hydrate opened document: {type(exc).__name__}: {exc}"
             )
 
-    def execute_code(self, code: str) -> Dict[str, Any]:
-        """Execute RapidCADPy/FreeCAD code inside the attached GUI process."""
+    def execute_code(
+        self, code: str, allow_direct_geometry: bool = False
+    ) -> Dict[str, Any]:
+        """Execute code in the GUI, rejecting new baked features by default."""
         ready = self._ensure_gui_session(require_document=False)
         if ready is not None:
             return ready
         if self._worker is not None:
-            return self._worker.call("execute_code", {"code": code})
+            return self._worker.call(
+                "execute_code",
+                {
+                    "code": code,
+                    "allow_direct_geometry": allow_direct_geometry,
+                },
+            )
         if self.execution_mode != "embedded" and self.backend_name != "freecad":
             return self._error(
                 "execute_code requires an attached or embedded FreeCAD session."
@@ -673,12 +724,116 @@ class CadSession:
             "__name__": "__rapidcadpy_live__",
             "__builtins__": __builtins__,
         }
+        import FreeCAD as App
+
+        flat_feature_types = {"Part::Feature", "PartDesign::Feature"}
+
+        def flat_feature_snapshot() -> Dict[tuple[str, str], tuple[str, int]]:
+            snapshot: Dict[tuple[str, str], tuple[str, int]] = {}
+            for document_name, document in App.listDocuments().items():
+                for obj in document.Objects:
+                    type_id = str(getattr(obj, "TypeId", ""))
+                    if type_id not in flat_feature_types:
+                        continue
+                    shape = getattr(obj, "Shape", None)
+                    if shape is None or shape.isNull():
+                        continue
+                    try:
+                        shape_hash = int(shape.hashCode())
+                    except Exception:
+                        shape_hash = hash(str(shape))
+                    snapshot[(str(document_name), str(obj.Name))] = (
+                        type_id,
+                        shape_hash,
+                    )
+            return snapshot
+
+        original_documents = dict(App.listDocuments())
+        original_object_names = {
+            document_name: {str(obj.Name) for obj in document.Objects}
+            for document_name, document in original_documents.items()
+        }
+        original_flat_shapes = {}
+        for document_name, document in original_documents.items():
+            for obj in document.Objects:
+                if str(getattr(obj, "TypeId", "")) not in flat_feature_types:
+                    continue
+                shape = getattr(obj, "Shape", None)
+                if shape is not None and not shape.isNull():
+                    original_flat_shapes[(document_name, str(obj.Name))] = shape.copy()
+        original_active_name = str(
+            getattr(getattr(App, "ActiveDocument", None), "Name", "")
+        )
+        before_flat_features = flat_feature_snapshot()
+        transaction_documents = []
+        for document in original_documents.values():
+            try:
+                document.openTransaction("RapidCADPy live code")
+                transaction_documents.append(document)
+            except Exception:
+                continue
+
+        def rollback_execution() -> None:
+            current_documents = dict(App.listDocuments())
+            for document in transaction_documents:
+                if str(getattr(document, "Name", "")) in current_documents:
+                    try:
+                        document.abortTransaction()
+                    except Exception:
+                        pass
+            for document_name, document in original_documents.items():
+                if document_name not in current_documents:
+                    continue
+                known_names = original_object_names[document_name]
+                for obj in reversed(list(document.Objects)):
+                    if str(obj.Name) not in known_names:
+                        try:
+                            document.removeObject(str(obj.Name))
+                        except Exception:
+                            pass
+                for (
+                    shape_document,
+                    object_name,
+                ), shape in original_flat_shapes.items():
+                    if shape_document != document_name:
+                        continue
+                    obj = document.getObject(object_name)
+                    if obj is not None:
+                        try:
+                            obj.Shape = shape.copy()
+                        except Exception:
+                            pass
+                try:
+                    document.recompute()
+                except Exception:
+                    pass
+            for document_name in set(current_documents) - set(original_documents):
+                try:
+                    App.closeDocument(document_name)
+                except Exception:
+                    pass
+            if original_active_name and original_active_name in App.listDocuments():
+                try:
+                    App.setActiveDocument(original_active_name)
+                except Exception:
+                    pass
+
+        def commit_execution() -> None:
+            current_documents = App.listDocuments()
+            for document in transaction_documents:
+                if str(getattr(document, "Name", "")) in current_documents:
+                    try:
+                        document.commitTransaction()
+                    except Exception:
+                        pass
+
         previous_cwd = Path.cwd()
         try:
             os.chdir(execution_dir)
             with redirect_stdout(stdout_buffer), redirect_stderr(stderr_buffer):
                 exec(compile(normalized, "<rapidcadpy-live>", "exec"), namespace)
         except Exception as exc:
+            rollback_execution()
             return self._error(
                 "Live FreeCAD code failed: "
                 f"{type(exc).__name__}: {exc}\n"
@@ -687,6 +842,27 @@ class CadSession:
             )
         finally:
             os.chdir(previous_cwd)
+
+        after_flat_features = flat_feature_snapshot()
+        changed_flat_features = sorted(
+            key
+            for key, signature in after_flat_features.items()
+            if before_flat_features.get(key) != signature
+        )
+        if changed_flat_features and not allow_direct_geometry:
+            rollback_execution()
+            formatted = ", ".join(
+                f"{document_name}.{object_name}"
+                for document_name, object_name in changed_flat_features
+            )
+            return self._error(
+                "Live FreeCAD code created or modified baked Part::Feature "
+                f"geometry ({formatted}). The transaction was rolled back. Use "
+                "native Sketcher/Part/PartDesign features, or explicitly set "
+                "allow_direct_geometry=True when history loss is intentional."
+            )
+
+        commit_execution()
 
         hydrated = self.use_active_document()
         if not hydrated.get("ok"):
@@ -706,6 +882,14 @@ class CadSession:
                 "stdout": stdout_buffer.getvalue(),
                 "stderr": stderr_buffer.getvalue(),
                 "generated_files": generated_files,
+                "warnings": (
+                    [
+                        "Direct geometry mode was explicitly enabled; baked "
+                        "Part::Feature objects may not preserve construction history."
+                    ]
+                    if allow_direct_geometry
+                    else []
+                ),
             }
         )
         return hydrated
@@ -790,6 +974,52 @@ class CadSession:
         )
         return self._ok(summary=f"Drew line to ({x}, {y})", operation_id=op_id)
 
+    def three_point_arc(
+        self,
+        mid_x: float,
+        mid_y: float,
+        end_x: float,
+        end_y: float,
+    ) -> Dict[str, Any]:
+        ready = self._ensure_gui_session()
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call(
+                "three_point_arc",
+                {
+                    "mid_x": mid_x,
+                    "mid_y": mid_y,
+                    "end_x": end_x,
+                    "end_y": end_y,
+                },
+            )
+        ready = self._require_workplane()
+        if ready is not None:
+            return ready
+        try:
+            self.active_workplane.three_point_arc(
+                (float(mid_x), float(mid_y)),
+                (float(end_x), float(end_y)),
+            )
+        except Exception as exc:
+            return self._error(f"three_point_arc failed: {type(exc).__name__}: {exc}")
+        op_id = self._record(
+            "three_point_arc",
+            {
+                "mid_x": mid_x,
+                "mid_y": mid_y,
+                "end_x": end_x,
+                "end_y": end_y,
+            },
+            [],
+            f"Drew arc through ({mid_x}, {mid_y}) to ({end_x}, {end_y})",
+        )
+        return self._ok(
+            summary=f"Drew arc through ({mid_x}, {mid_y}) to ({end_x}, {end_y})",
+            operation_id=op_id,
+        )
+
     def rect(
         self, width: float, height: float, centered: bool = True
     ) -> Dict[str, Any]:
@@ -867,6 +1097,85 @@ class CadSession:
             active_workplane_id=self.active_workplane_id,
         )
 
+    def box(
+        self,
+        length: float,
+        width: float,
+        height: float,
+        centered: bool = True,
+    ) -> Dict[str, Any]:
+        ready = self._ensure_gui_session()
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call(
+                "box",
+                {
+                    "length": length,
+                    "width": width,
+                    "height": height,
+                    "centered": centered,
+                },
+            )
+        ready = self._require_workplane()
+        if ready is not None:
+            return ready
+        try:
+            shape = self.active_workplane.box(
+                float(length),
+                float(width),
+                float(height),
+                centered=bool(centered),
+            )
+        except Exception as exc:
+            return self._error(f"box failed: {type(exc).__name__}: {exc}")
+
+        shape_id = self._new_id("shape")
+        if getattr(shape, "feature", None) is not None:
+            shape_id = shape.feature.document.bind_object_id(
+                shape.feature.native_name,
+                shape_id,
+            )
+            shape.feature.id = shape_id
+            self.runtime_objects[shape_id] = shape.feature
+            self._shape_wrappers[shape_id] = shape
+        else:
+            return self._error("box did not produce a live native CAD feature.")
+        self.active_shape_id = shape_id
+        signature = self._geometry_signature(shape)
+        self.geometry_signatures[shape_id] = signature
+        op_id = self._record(
+            "box",
+            {
+                "length": length,
+                "width": width,
+                "height": height,
+                "centered": centered,
+            },
+            [shape_id],
+            f"Created native box {length} x {width} x {height}",
+        )
+        self.objects[shape_id] = SemanticObject(
+            id=shape_id,
+            type="solid",
+            label="box",
+            source_op=op_id,
+            metadata={
+                "length": float(length),
+                "width": float(width),
+                "height": float(height),
+                "centered": bool(centered),
+                "geometry": signature,
+            },
+        )
+        return self._ok(
+            summary=f"Created native box {length} x {width} x {height}",
+            operation_id=op_id,
+            object_id=shape_id,
+            active_shape_id=shape_id,
+            geometry=signature,
+        )
+
     def extrude(
         self, distance: float, operation: str = "new_body", symmetric: bool = False
     ) -> Dict[str, Any]:
@@ -896,13 +1205,16 @@ class CadSession:
             return self._error(f"extrude failed: {type(exc).__name__}: {exc}")
 
         shape_id = self._new_id("shape")
-        self.runtime_objects[shape_id] = shape
         if getattr(shape, "feature", None) is not None:
             shape_id = shape.feature.document.bind_object_id(
                 shape.feature.native_name,
                 shape_id,
             )
             shape.feature.id = shape_id
+            self.runtime_objects[shape_id] = shape.feature
+            self._shape_wrappers[shape_id] = shape
+        else:
+            return self._error("extrude did not produce a live native CAD feature.")
         self.active_shape_id = shape_id
         signature = self._geometry_signature(shape)
         self.geometry_signatures[shape_id] = signature
@@ -931,6 +1243,116 @@ class CadSession:
             geometry=signature,
         )
 
+    def loft(
+        self,
+        profile_workplane_ids: List[str],
+        make_solid: bool = True,
+        ruled: bool = False,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a native loft through ordered, existing workplane profiles."""
+
+        ready = self._ensure_gui_session()
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call(
+                "loft",
+                {
+                    "profile_workplane_ids": profile_workplane_ids,
+                    "make_solid": make_solid,
+                    "ruled": ruled,
+                    "expected_revision": expected_revision,
+                },
+            )
+        ready = self._require_app()
+        if ready is not None:
+            return ready
+        if expected_revision and expected_revision != self.document_revision:
+            return self._error(
+                "Document revision mismatch: expected "
+                f"{expected_revision}, current {self.document_revision}."
+            )
+        if len(profile_workplane_ids) < 2:
+            return self._error(
+                "loft requires at least two ordered profile_workplane_ids."
+            )
+        if len(set(profile_workplane_ids)) != len(profile_workplane_ids):
+            return self._error("loft profile_workplane_ids must be distinct.")
+
+        workplanes = []
+        for workplane_id in profile_workplane_ids:
+            semantic_object = self.objects.get(workplane_id)
+            workplane = self.runtime_objects.get(workplane_id)
+            if semantic_object is None or semantic_object.type != "workplane":
+                return self._error(
+                    f"{workplane_id!r} is not a known workplane ID."
+                )
+            if workplane is None:
+                return self._error(
+                    f"Workplane {workplane_id!r} has no live native handle."
+                )
+            workplanes.append(workplane)
+
+        if not callable(getattr(workplanes[0], "loft", None)):
+            return self._error(
+                f"Workplane {profile_workplane_ids[0]!r} cannot create a native loft."
+            )
+
+        try:
+            shape = workplanes[0].loft(
+                workplanes[1:],
+                make_solid=bool(make_solid),
+                ruled=bool(ruled),
+            )
+        except Exception as exc:
+            return self._error(f"loft failed: {type(exc).__name__}: {exc}")
+
+        shape_id = self._new_id("shape")
+        if getattr(shape, "feature", None) is not None:
+            shape_id = shape.feature.document.bind_object_id(
+                shape.feature.native_name,
+                shape_id,
+            )
+            shape.feature.id = shape_id
+            self.runtime_objects[shape_id] = shape.feature
+            self._shape_wrappers[shape_id] = shape
+        else:
+            return self._error("loft did not produce a live native CAD feature.")
+        self.active_shape_id = shape_id
+        signature = self._geometry_signature(shape)
+        self.geometry_signatures[shape_id] = signature
+        op_id = self._record(
+            "loft",
+            {
+                "profile_workplane_ids": list(profile_workplane_ids),
+                "make_solid": bool(make_solid),
+                "ruled": bool(ruled),
+            },
+            [shape_id],
+            f"Lofted {len(workplanes)} workplane profiles",
+        )
+        self.objects[shape_id] = SemanticObject(
+            id=shape_id,
+            type="solid",
+            label="lofted_solid",
+            source_op=op_id,
+            metadata={
+                "profile_workplane_ids": list(profile_workplane_ids),
+                "make_solid": bool(make_solid),
+                "ruled": bool(ruled),
+                "geometry": signature,
+            },
+        )
+        return self._ok(
+            summary=f"Lofted {len(workplanes)} workplane profiles",
+            operation_id=op_id,
+            object_id=shape_id,
+            active_shape_id=shape_id,
+            document_revision=self.document_revision,
+            geometry=signature,
+        )
+
     def cut(self, target_id: str, tool_id: str) -> Dict[str, Any]:
         ready = self._ensure_gui_session()
         if ready is not None:
@@ -941,17 +1363,28 @@ class CadSession:
             )
         target = self.runtime_objects.get(target_id)
         tool = self.runtime_objects.get(tool_id)
-        if target is None:
-            return self._error(f"Unknown target_id '{target_id}'")
-        if tool is None:
-            return self._error(f"Unknown tool_id '{tool_id}'")
+        if not isinstance(target, CadObject):
+            return self._error(f"Object '{target_id}' is not a live native CAD object.")
+        if not isinstance(tool, CadObject):
+            return self._error(f"Object '{tool_id}' is not a live native CAD object.")
         try:
-            result = target.cut(tool)
+            result = target.document.adapter.create_boolean_feature(
+                target.document,
+                target,
+                [tool],
+                type_id="Part::Cut",
+                prefix="Cut",
+                result_id=target_id,
+            )
         except Exception as exc:
             return self._error(f"cut failed: {type(exc).__name__}: {exc}")
 
         result_id = target_id
         self.runtime_objects[result_id] = result
+        wrapper = self._shape_wrappers.get(result_id)
+        if wrapper is not None:
+            wrapper.bind_native(result.document, result)
+            wrapper.obj = result.shape
         self.active_shape_id = result_id
         signature = self._geometry_signature(result)
         self.geometry_signatures[result_id] = signature
@@ -975,6 +1408,79 @@ class CadSession:
             geometry=signature,
         )
 
+    def union(
+        self,
+        target_id: str,
+        tool_ids: List[str],
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        ready = self._ensure_gui_session()
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call(
+                {
+                    "target_id": target_id,
+                    "tool_ids": tool_ids,
+                    "expected_revision": expected_revision,
+                }
+            )
+        if expected_revision and expected_revision != self.document_revision:
+            return self._error(
+                "Document revision mismatch: expected "
+                f"{expected_revision}, current {self.document_revision}."
+            )
+        target = self.runtime_objects.get(target_id)
+        if not isinstance(target, CadObject):
+            return self._error(f"Object '{target_id}' is not a live native CAD object.")
+        if not tool_ids:
+            return self._error("tool_ids must contain at least one shape ID.")
+        tools = []
+        for tool_id in tool_ids:
+            tool = self.runtime_objects.get(tool_id)
+            if not isinstance(tool, CadObject):
+                return self._error(f"Object '{tool_id}' is not a live native CAD object.")
+            tools.append(tool)
+        try:
+            result = target.document.adapter.create_boolean_feature(
+                target.document,
+                target,
+                tools,
+                type_id="Part::MultiFuse",
+                prefix="Fuse",
+                result_id=target_id,
+            )
+        except Exception as exc:
+            return self._error(f"union failed: {type(exc).__name__}: {exc}")
+
+        self.runtime_objects[target_id] = result
+        wrapper = self._shape_wrappers.get(target_id)
+        if wrapper is not None:
+            wrapper.bind_native(result.document, result)
+            wrapper.obj = result.shape
+        self.active_shape_id = target_id
+        signature = self._geometry_signature(result)
+        self.geometry_signatures[target_id] = signature
+        if target_id in self.objects:
+            self.objects[target_id].metadata["geometry"] = signature
+            self.objects[target_id].metadata["last_boolean"] = {
+                "operation": "union",
+                "tool_ids": list(tool_ids),
+            }
+        op_id = self._record(
+            "union",
+            {"target_id": target_id, "tool_ids": list(tool_ids)},
+            [target_id],
+            f"United {target_id} with {len(tool_ids)} shape(s)",
+        )
+        return self._ok(
+            summary=f"United {target_id} with {len(tool_ids)} shape(s)",
+            operation_id=op_id,
+            object_id=target_id,
+            active_shape_id=target_id,
+            geometry=signature,
+        )
+
     def fillet(
         self,
         shape_id: Optional[str] = None,
@@ -992,9 +1498,11 @@ class CadSession:
         shape_id = shape_id or self.active_shape_id
         if not shape_id:
             return self._error("No shape_id provided and no active shape exists.")
-        shape = self.runtime_objects.get(shape_id)
+        shape = self._shape_wrappers.get(shape_id)
         if shape is None:
-            return self._error(f"Unknown shape_id '{shape_id}'")
+            return self._error(
+                f"Object '{shape_id}' has no fluent geometry wrapper; use a native feature operation."
+            )
         try:
             if selector:
                 result = shape.edges(selector).fillet(float(radius))
@@ -1003,7 +1511,10 @@ class CadSession:
         except Exception as exc:
             return self._error(f"fillet failed: {type(exc).__name__}: {exc}")
 
-        self.runtime_objects[shape_id] = result
+        if not isinstance(getattr(result, "feature", None), CadObject):
+            return self._error("fillet did not produce a live native CAD feature.")
+        self.runtime_objects[shape_id] = result.feature
+        self._shape_wrappers[shape_id] = result
         self.active_shape_id = shape_id
         signature = self._geometry_signature(result)
         self.geometry_signatures[shape_id] = signature
@@ -1026,6 +1537,128 @@ class CadSession:
             active_shape_id=shape_id,
             geometry=signature,
         )
+
+    def hole(
+        self,
+        target_id: str,
+        diameter: float,
+        center: Optional[list[float]] = None,
+        axis: Optional[list[float]] = None,
+        through: bool = True,
+        depth: Optional[float] = None,
+        hole_type: str = "simple",
+        countersink_diameter: Optional[float] = None,
+        countersink_angle: Optional[float] = None,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a native, semantic hole feature on a live CAD object.
+
+        ``center`` is the entry-point centre in model millimetres. A through
+        hole extends through the target; a blind hole requires ``depth``.
+        """
+
+        ready = self._ensure_gui_session(require_document=True)
+        if ready is not None:
+            return ready
+        params = {
+            "target_id": target_id,
+            "diameter": diameter,
+            "center": center,
+            "axis": axis,
+            "through": through,
+            "depth": depth,
+            "hole_type": hole_type,
+            "countersink_diameter": countersink_diameter,
+            "countersink_angle": countersink_angle,
+            "expected_revision": expected_revision,
+        }
+        if self._worker is not None:
+            return self._worker.call("hole", params)
+        try:
+            center_vector = self._vector3(center or [0.0, 0.0, 0.0], "center")
+            axis_vector = self._vector3(axis or [0.0, 0.0, 1.0], "axis")
+            from .features import HoleFeature, HoleTermination, HoleType
+
+            definition = HoleFeature(
+                target_id=target_id,
+                center=center_vector,
+                axis=axis_vector,
+                diameter_mm=float(diameter),
+                termination=(
+                    HoleTermination.THROUGH if through else HoleTermination.BLIND
+                ),
+                depth_mm=None if through else depth,
+                hole_type=HoleType(hole_type),
+                countersink_diameter_mm=countersink_diameter,
+                countersink_angle_degrees=countersink_angle,
+            )
+        except (TypeError, ValueError) as exc:
+            return self._error(f"Invalid hole definition: {exc}")
+        return self.apply_feature(definition, target_id, expected_revision)
+
+    def apply_feature(
+        self,
+        feature: "Feature",
+        target_id: str,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Apply a semantic feature to a hydrated native CAD object.
+
+        This is the generic mutation path for objects that were created outside
+        RapidCADPy as well as for objects created through the fluent API.
+        """
+
+        ready = self._ensure_gui_session(require_document=True)
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._error(
+                "Applying a Feature object through the remote worker is not yet "
+                "supported; use the typed live-CAD operation."
+            )
+        if expected_revision and expected_revision != self.document_revision:
+            return self._error(
+                "Document revision mismatch: expected "
+                f"{expected_revision}, current {self.document_revision}."
+            )
+        candidate = self.runtime_objects.get(target_id)
+        target = candidate if isinstance(candidate, CadObject) else getattr(candidate, "feature", None)
+        if not isinstance(target, CadObject):
+            return self._error(f"Object '{target_id}' is not a live native CAD object.")
+        if self.cad_document is None or self.cad_document.backend != "freecad":
+            return self._error("No selected CAD feature executor supports this document.")
+        try:
+            from .integrations.freecad.feature_executor import FreeCADFeatureExecutor
+
+            result = FreeCADFeatureExecutor().apply(feature, target, expected_revision)
+            native_document = self.cad_document.native_handle
+            file_name = str(getattr(native_document, "FileName", "")).strip()
+            file_path = Path(file_name).expanduser().resolve() if file_name else None
+            hydrated = self._hydrate_freecad_document(
+                native_document,
+                file_path,
+                source_tool="apply_feature",
+            )
+            if not hydrated.get("ok"):
+                return hydrated
+        except Exception as exc:
+            return self._error(f"Feature application failed: {type(exc).__name__}: {exc}")
+        return self._ok(
+            summary=f"Applied {type(feature).__name__} to {target_id}",
+            object_id=result.feature.id,
+            feature=feature.to_dict(),
+            document_revision=self.document_revision,
+            created_object_ids=list(result.created_object_ids),
+            changed_object_ids=list(result.changed_object_ids),
+            removed_object_ids=list(result.removed_object_ids),
+            warnings=list(result.warnings),
+        )
+
+    @staticmethod
+    def _vector3(value: list[float], name: str) -> tuple[float, float, float]:
+        if len(value) != 3:
+            raise ValueError(f"{name} must contain exactly three coordinates.")
+        return (float(value[0]), float(value[1]), float(value[2]))
 
     def export_step(self, path: str, shape_id: Optional[str] = None) -> Dict[str, Any]:
         return self._export(path, "step", shape_id=shape_id)
@@ -1512,7 +2145,11 @@ class CadSession:
             return self._worker.call("list_objects", {})
         return self._ok(
             summary=f"{len(self.objects)} objects",
-            objects=[obj.to_dict() for obj in self.objects.values()],
+            objects=[obj.to_summary_dict() for obj in self.objects.values()],
+            id_usage=(
+                "Pass the complete id value, including its prefix, to get_object. "
+                "For example: shape_1, not 1."
+            ),
         )
 
     def get_object(self, object_id: str) -> Dict[str, Any]:
@@ -1521,12 +2158,106 @@ class CadSession:
             return self._worker.call("get_object", {"object_id": object_id})
         semantic_object = self.objects.get(object_id)
         if semantic_object is None:
-            return self._error(f"Unknown object_id '{object_id}'")
+            available_ids = list(self.objects)
+            displayed_ids = available_ids[:20]
+            available = ", ".join(repr(item) for item in displayed_ids)
+            if len(available_ids) > len(displayed_ids):
+                available += f", ... ({len(available_ids)} total)"
+            guidance = (
+                "Object IDs are exact and include their prefix. Copy the complete "
+                "id from list_objects; do not derive an ID or use its numeric suffix."
+            )
+            if available:
+                guidance += f" Available object_ids: {available}."
+            else:
+                guidance += " The active document currently has no objects."
+            return self._error(f"Unknown object_id '{object_id}'. {guidance}")
+        object_payload = semantic_object.to_dict()
+        semantic_features = self._semantic_features_for_object(object_id)
+        if semantic_features:
+            object_payload["semantic_features"] = semantic_features
+            object_payload["drawing_dimension_requests"] = [
+                request
+                for feature in semantic_features
+                for request in self._drawing_dimension_requests(feature)
+            ]
         return self._ok(
             summary=f"Object {object_id}",
-            object=semantic_object.to_dict(),
+            object=object_payload,
             document_revision=self.document_revision,
         )
+
+    def _semantic_features_for_object(self, object_id: str) -> list[Dict[str, Any]]:
+        """Expose authoritative feature IDs attached to an object's result chain."""
+
+        if self.cad_document is None:
+            return []
+        runtime_object = self.runtime_objects.get(object_id)
+        native = getattr(runtime_object, "native_handle", None)
+        if native is None:
+            return []
+        native_names: set[str] = set()
+        pending = [native]
+        while pending:
+            candidate = pending.pop()
+            native_name = str(getattr(candidate, "Name", ""))
+            if not native_name or native_name in native_names:
+                continue
+            native_names.add(native_name)
+            base = getattr(candidate, "Base", None)
+            if isinstance(base, tuple):
+                pending.extend(item for item in base if item is not None)
+            elif base is not None:
+                pending.append(base)
+        return [
+            dict(value)
+            for value in self.cad_document.feature_definitions_for_native_names(
+                native_names
+            )
+        ]
+
+    @staticmethod
+    def _drawing_dimension_requests(
+        feature: Dict[str, Any],
+    ) -> list[Dict[str, Any]]:
+        """Describe geometry-driven dimensions available for one feature."""
+
+        if feature.get("kind") != "hole":
+            return []
+        axis = tuple(float(value) for value in feature.get("axis", (0, 0, 1)))
+        absolute_axis = tuple(abs(value) for value in axis)
+        largest_axis = absolute_axis.index(max(absolute_axis))
+        recommended_view = ("right", "front", "top")[largest_axis]
+        feature_id = str(feature.get("id", ""))
+        requests = [
+            {
+                "feature_id": feature_id,
+                "dimension_kind": "diameter",
+                "geometry_reference": "hole_cylinder",
+                "recommended_view": recommended_view,
+                "measurement_source": "projected_geometry",
+                "semantic_qualifiers": {
+                    "termination": feature.get("termination"),
+                    "depth_mm": feature.get("depth_mm"),
+                },
+            }
+        ]
+        if feature.get("hole_type") == "countersink":
+            requests.append(
+                {
+                    "feature_id": feature_id,
+                    "dimension_kind": "countersink_diameter",
+                    "geometry_reference": "countersink_rim",
+                    "recommended_view": recommended_view,
+                    "measurement_source": "projected_geometry",
+                    "semantic_qualifiers": {
+                        "angle_degrees": feature.get(
+                            "countersink_angle_degrees"
+                        )
+                    },
+                }
+            )
+        return requests
 
     def set_object_property(
         self,
@@ -1614,9 +2345,11 @@ class CadSession:
         part_name: Optional[str] = None,
         run_id: Optional[str] = None,
         include_native: bool = True,
+        dimension_feature_ids: Optional[list[str]] = None,
+        output_formats: Optional[list[str]] = None,
         expected_revision: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Create a linked native drawing and export a print-ready PDF."""
+        """Create a linked native drawing and export the requested formats."""
 
         ready = self._ensure_gui_session(require_document=True)
         if ready is not None:
@@ -1631,6 +2364,8 @@ class CadSession:
             "part_name": part_name,
             "run_id": run_id,
             "include_native": include_native,
+            "dimension_feature_ids": dimension_feature_ids,
+            "output_formats": output_formats,
             "expected_revision": expected_revision,
         }
         if self._worker is not None:
@@ -1680,6 +2415,8 @@ class CadSession:
                 part_name=resolved_part_name,
                 run_id=resolved_run_id,
                 include_native=include_native,
+                dimension_feature_ids=dimension_feature_ids,
+                output_formats=output_formats,
             )
         except Exception as exc:
             return self._error(
@@ -1706,6 +2443,23 @@ class CadSession:
             for name in drawing.created_native_names
             if name in ids_by_native_name
         ]
+        views: list[Dict[str, Any]] = []
+        items: list[Dict[str, Any]] = []
+        view_lookup: Dict[str, str] = {}
+        if drawing.page_name:
+            try:
+                inspection = backend.inspect_drawing(
+                    document=self.cad_document,
+                    page_name=str(drawing.page_name),
+                )
+                views = inspection["views"]
+                items = inspection["items"]
+                view_lookup = self._drawing_view_lookup(views)
+            except Exception:
+                pass
+        view_choices = ", ".join(
+            f"{name}={object_id}" for name, object_id in view_lookup.items()
+        ) or "none"
         result = drawing.to_dict()
         result.update(
             {
@@ -1713,11 +2467,703 @@ class CadSession:
                 "summary": (
                     f"Created {standard.strip().upper()} "
                     f"{sheet_size.strip().upper()} {projection_angle.strip().lower()}-angle "
-                    f"technical drawing for {resolved_part_name}"
+                    f"technical drawing for {resolved_part_name}. "
+                    f"Available views: {view_choices}."
                 ),
                 "run_id": resolved_run_id,
                 "created_object_ids": created_object_ids,
                 "document_revision": self.document_revision,
+                "views": views,
+                "items": items,
+                "view_lookup": view_lookup,
+            }
+        )
+        self.drawings[resolved_run_id] = {
+            **result,
+            "drawing_id": resolved_run_id,
+            "status": "partial" if result.get("warnings") else "complete",
+            "workspace": str(resolved_output),
+            "artifact_status": "current",
+        }
+        self.current_drawing_id = resolved_run_id
+        return result
+
+    def get_current_drawing(self) -> Dict[str, Any]:
+        """Return the live session's latest drawing workspace manifest."""
+
+        ready = self._ensure_gui_session(
+            require_document=True,
+            create_document_if_missing=False,
+        )
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call("get_current_drawing", {})
+        if self.current_drawing_id is None:
+            discovered = self._discover_drawings()
+            if isinstance(discovered, dict):
+                return discovered
+            if len(discovered) == 1:
+                self.current_drawing_id = str(discovered[0]["drawing_id"])
+            elif discovered:
+                return self._error(
+                    "Multiple drawing pages are open. Call list_drawings and then "
+                    "select_drawing with the intended drawing_id."
+                )
+            else:
+                return self._error("The active CAD document contains no drawing pages.")
+        return self._ok(
+            summary=f"Current drawing: {self.current_drawing_id}",
+            drawing=dict(self.drawings[self.current_drawing_id]),
+        )
+
+    def list_drawings(self) -> Dict[str, Any]:
+        """Discover native drawing pages in the currently opened CAD file."""
+
+        ready = self._ensure_gui_session(
+            require_document=True,
+            create_document_if_missing=False,
+        )
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call("list_drawings", {})
+        discovered = self._discover_drawings()
+        if isinstance(discovered, dict):
+            return discovered
+        return self._ok(
+            summary=f"Found {len(discovered)} drawing page(s)",
+            drawing_count=len(discovered),
+            drawings=discovered,
+            current_drawing_id=self.current_drawing_id,
+            document_revision=self.document_revision,
+        )
+
+    def select_drawing(self, drawing_id: str) -> Dict[str, Any]:
+        """Select one discovered drawing page for subsequent editing tools."""
+
+        ready = self._ensure_gui_session(
+            require_document=True,
+            create_document_if_missing=False,
+        )
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call(
+                "select_drawing",
+                {"drawing_id": drawing_id},
+            )
+        discovered = self._discover_drawings()
+        if isinstance(discovered, dict):
+            return discovered
+        available = [str(item["drawing_id"]) for item in discovered]
+        selected = self.drawings.get(str(drawing_id))
+        if selected is None or str(drawing_id) not in available:
+            return self._error(
+                f"Unknown drawing_id {drawing_id!r}. Call list_drawings and copy "
+                f"one exactly. Available drawing IDs: {available or 'none'}."
+            )
+        self.current_drawing_id = str(drawing_id)
+        return self._ok(
+            summary=f"Selected drawing {drawing_id}",
+            drawing=dict(selected),
+            document_revision=self.document_revision,
+        )
+
+    def list_drawing_items(
+        self,
+        drawing_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """List exact view and editable-item IDs on an existing drawing."""
+
+        ready = self._ensure_gui_session(
+            require_document=True,
+            create_document_if_missing=False,
+        )
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call(
+                "list_drawing_items",
+                {"drawing_id": drawing_id},
+            )
+        resolved = self._resolve_drawing(drawing_id)
+        if isinstance(resolved, dict) and resolved.get("ok") is False:
+            return resolved
+        drawing = resolved
+        assert isinstance(drawing, dict)
+        try:
+            from .drawing import create_drawing_backend
+
+            backend = create_drawing_backend(self.cad_document)
+            inspection = backend.inspect_drawing(
+                document=self.cad_document,
+                page_name=str(drawing["page_name"]),
+            )
+        except Exception as exc:
+            return self._error(
+                f"Could not inspect drawing: {type(exc).__name__}: {exc}"
+            )
+        drawing["views"] = inspection["views"]
+        drawing["items"] = inspection["items"]
+        view_lookup = self._drawing_view_lookup(inspection["views"])
+        view_choices = ", ".join(
+            f"{name}={object_id}" for name, object_id in view_lookup.items()
+        )
+        if not view_choices:
+            view_choices = ", ".join(
+                f"{view.get('native_name', 'view')}={view.get('id')}"
+                for view in inspection["views"]
+            ) or "none"
+        return self._ok(
+            summary=(
+                f"Drawing {drawing['drawing_id']} has "
+                f"{len(inspection['views'])} views and "
+                f"{len(inspection['items'])} editable items. "
+                f"Available views: {view_choices}."
+            ),
+            drawing_id=drawing["drawing_id"],
+            page_id=inspection["page_id"],
+            views=inspection["views"],
+            view_lookup=view_lookup,
+            items=inspection["items"],
+            document_revision=self.document_revision,
+        )
+
+    def add_feature_dimension(
+        self,
+        feature_id: str,
+        dimension_kind: str,
+        view_id: str,
+        position_mm: list[float],
+        drawing_id: Optional[str] = None,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add a native dimension whose numeric value comes from geometry."""
+
+        params = {
+            "feature_id": feature_id,
+            "dimension_kind": dimension_kind,
+            "view_id": view_id,
+            "position_mm": position_mm,
+            "drawing_id": drawing_id,
+            "expected_revision": expected_revision,
+        }
+        if self._worker is not None:
+            return self._worker.call("add_feature_dimension", params)
+        ready = self._prepare_drawing_edit(drawing_id, expected_revision)
+        if isinstance(ready, dict) and ready.get("ok") is False:
+            return ready
+        drawing = ready
+        assert isinstance(drawing, dict)
+        definition = next(
+            (
+                dict(value)
+                for value in self.cad_document.feature_definitions.values()
+                if str(value.get("id", "")) == str(feature_id)
+            ),
+            None,
+        )
+        if definition is None:
+            available = sorted(
+                str(value.get("id"))
+                for value in self.cad_document.feature_definitions.values()
+                if value.get("id")
+            )
+            return self._error(
+                f"Unknown feature_id {feature_id!r}. Call get_object and copy "
+                f"semantic_features[].id exactly. Available IDs: {available or 'none'}."
+            )
+        view = self._resolve_drawing_view(drawing, view_name=None, view_id=view_id)
+        if isinstance(view, dict):
+            return view
+        try:
+            from .drawing import create_drawing_backend
+
+            backend = create_drawing_backend(self.cad_document)
+            edit = backend.add_feature_dimension(
+                document=self.cad_document,
+                page_name=str(drawing["page_name"]),
+                view_native_name=view.native_name,
+                feature_definition=definition,
+                dimension_kind=dimension_kind,
+                position_mm=self._drawing_position(position_mm),
+                standard=str(
+                    (drawing.get("metadata") or {}).get("standard", "ISO")
+                ),
+            )
+        except Exception as exc:
+            return self._error(
+                f"Could not add feature dimension: {type(exc).__name__}: {exc}"
+            )
+        return self._complete_drawing_edit(
+            drawing,
+            "add_feature_dimension",
+            params,
+            edit,
+            f"Added geometry-measured {dimension_kind} dimension",
+        )
+
+    def add_drawing_note(
+        self,
+        text: str,
+        position_mm: list[float],
+        drawing_id: Optional[str] = None,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add an editorial native TechDraw annotation."""
+
+        params = {
+            "text": text,
+            "position_mm": position_mm,
+            "drawing_id": drawing_id,
+            "expected_revision": expected_revision,
+        }
+        if self._worker is not None:
+            return self._worker.call("add_drawing_note", params)
+        ready = self._prepare_drawing_edit(drawing_id, expected_revision)
+        if isinstance(ready, dict) and ready.get("ok") is False:
+            return ready
+        drawing = ready
+        assert isinstance(drawing, dict)
+        try:
+            from .drawing import create_drawing_backend
+
+            edit = create_drawing_backend(self.cad_document).add_drawing_note(
+                document=self.cad_document,
+                page_name=str(drawing["page_name"]),
+                text=text,
+                position_mm=self._drawing_position(position_mm),
+            )
+        except Exception as exc:
+            return self._error(f"Could not add drawing note: {type(exc).__name__}: {exc}")
+        return self._complete_drawing_edit(
+            drawing,
+            "add_drawing_note",
+            params,
+            edit,
+            "Added native drawing note",
+        )
+
+    def add_drawing_leader(
+        self,
+        text: str,
+        view_name: Optional[str] = None,
+        view_id: Optional[str] = None,
+        anchor_mm: Optional[list[float]] = None,
+        elbow_mm: Optional[list[float]] = None,
+        text_position_mm: Optional[list[float]] = None,
+        drawing_id: Optional[str] = None,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Add a native leader and label to a projected drawing view."""
+
+        params = {
+            "text": text,
+            "view_name": view_name,
+            "view_id": view_id,
+            "anchor_mm": anchor_mm,
+            "elbow_mm": elbow_mm,
+            "text_position_mm": text_position_mm,
+            "drawing_id": drawing_id,
+            "expected_revision": expected_revision,
+        }
+        if self._worker is not None:
+            return self._worker.call("add_drawing_leader", params)
+        ready = self._prepare_drawing_edit(drawing_id, expected_revision)
+        if isinstance(ready, dict) and ready.get("ok") is False:
+            return ready
+        drawing = ready
+        assert isinstance(drawing, dict)
+        view = self._resolve_drawing_view(
+            drawing,
+            view_name=view_name,
+            view_id=view_id,
+        )
+        if isinstance(view, dict):
+            return view
+        try:
+            from .drawing import create_drawing_backend
+
+            edit = create_drawing_backend(self.cad_document).add_drawing_leader(
+                document=self.cad_document,
+                page_name=str(drawing["page_name"]),
+                view_native_name=view.native_name,
+                text=text,
+                anchor_mm=(
+                    self._drawing_position(anchor_mm) if anchor_mm is not None else None
+                ),
+                elbow_mm=(
+                    self._drawing_position(elbow_mm) if elbow_mm is not None else None
+                ),
+                text_position_mm=(
+                    self._drawing_position(text_position_mm)
+                    if text_position_mm is not None
+                    else None
+                ),
+            )
+        except Exception as exc:
+            return self._error(
+                f"Could not add drawing leader: {type(exc).__name__}: {exc}"
+            )
+        return self._complete_drawing_edit(
+            drawing,
+            "add_drawing_leader",
+            params,
+            edit,
+            "Added native drawing leader and label",
+        )
+
+    def move_drawing_item(
+        self,
+        item_id: str,
+        position_mm: list[float],
+        drawing_id: Optional[str] = None,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Move an existing RapidCAD dimension, note, or leader."""
+
+        params = {
+            "item_id": item_id,
+            "position_mm": position_mm,
+            "drawing_id": drawing_id,
+            "expected_revision": expected_revision,
+        }
+        if self._worker is not None:
+            return self._worker.call("move_drawing_item", params)
+        ready = self._prepare_drawing_edit(drawing_id, expected_revision)
+        if isinstance(ready, dict) and ready.get("ok") is False:
+            return ready
+        drawing = ready
+        assert isinstance(drawing, dict)
+        item = self._drawing_runtime_object(item_id, "item")
+        if isinstance(item, dict):
+            return item
+        try:
+            from .drawing import create_drawing_backend
+
+            edit = create_drawing_backend(self.cad_document).move_drawing_item(
+                document=self.cad_document,
+                page_name=str(drawing["page_name"]),
+                item_native_name=item.native_name,
+                position_mm=self._drawing_position(position_mm),
+            )
+        except Exception as exc:
+            return self._error(
+                f"Could not move drawing item: {type(exc).__name__}: {exc}"
+            )
+        return self._complete_drawing_edit(
+            drawing,
+            "move_drawing_item",
+            params,
+            edit,
+            f"Moved drawing item {item_id}",
+        )
+
+    def export_current_drawing(
+        self,
+        drawing_id: Optional[str] = None,
+        expected_revision: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Re-export the edited page to its managed PDF and SVG paths."""
+
+        params = {
+            "drawing_id": drawing_id,
+            "expected_revision": expected_revision,
+        }
+        if self._worker is not None:
+            return self._worker.call("export_current_drawing", params)
+        ready = self._prepare_drawing_edit(drawing_id, expected_revision)
+        if isinstance(ready, dict) and ready.get("ok") is False:
+            return ready
+        drawing = ready
+        assert isinstance(drawing, dict)
+        pdf_path = Path(str(drawing.get("pdf_path") or "")).expanduser()
+        if not str(drawing.get("pdf_path") or "").strip():
+            return self._error("The current drawing has no managed PDF path.")
+        raw_vector = str(drawing.get("vector_source_path") or "").strip()
+        vector_path = (
+            Path(raw_vector).expanduser()
+            if raw_vector
+            else Path(str(drawing["workspace"])) / ".intermediate" / ".edited.svg"
+        )
+        try:
+            from .drawing import create_drawing_backend
+
+            edit = create_drawing_backend(self.cad_document).export_drawing(
+                document=self.cad_document,
+                page_name=str(drawing["page_name"]),
+                pdf_path=pdf_path,
+                vector_source_path=vector_path,
+            )
+        except Exception as exc:
+            return self._error(
+                f"Could not export current drawing: {type(exc).__name__}: {exc}"
+            )
+        drawing["artifact_status"] = "current"
+        drawing["vector_source_path"] = str(vector_path)
+        result = edit.to_dict()
+        result.update(
+            {
+                "ok": True,
+                "summary": f"Exported drawing {drawing['drawing_id']}",
+                "drawing_id": drawing["drawing_id"],
+                "pdf_path": str(pdf_path),
+                "vector_source_path": str(vector_path),
+                "document_revision": self.document_revision,
+            }
+        )
+        return result
+
+    def _resolve_drawing(
+        self,
+        drawing_id: Optional[str],
+    ) -> Dict[str, Any]:
+        if self.cad_document is None:
+            return self._error("No native CAD document is open.")
+        discovered = self._discover_drawings()
+        if isinstance(discovered, dict):
+            return discovered
+        resolved_id = str(drawing_id).strip() if drawing_id else self.current_drawing_id
+        if not resolved_id and len(discovered) == 1:
+            resolved_id = str(discovered[0]["drawing_id"])
+            self.current_drawing_id = resolved_id
+        if not resolved_id and len(discovered) > 1:
+            return self._error(
+                "Multiple drawing pages are open. Call list_drawings and then "
+                "select_drawing before editing."
+            )
+        discovered_ids = {str(item["drawing_id"]) for item in discovered}
+        if (
+            not resolved_id
+            or resolved_id not in self.drawings
+            or resolved_id not in discovered_ids
+        ):
+            return self._error(
+                "No matching drawing exists in the active CAD document. Call "
+                "list_drawings to inspect existing pages or generate_drawing to "
+                "create one."
+            )
+        drawing = self.drawings[resolved_id]
+        if not drawing.get("page_name"):
+            return self._error(f"Drawing {resolved_id!r} has no native page reference.")
+        return drawing
+
+    def _discover_drawings(self) -> list[Dict[str, Any]] | Dict[str, Any]:
+        if self.cad_document is None:
+            return self._error("No native CAD document is open.")
+        native_document = self.cad_document.native_handle
+        file_name = str(getattr(native_document, "FileName", "")).strip()
+        file_path = Path(file_name).expanduser().resolve() if file_name else None
+        hydrated = self._hydrate_freecad_document(
+            native_document,
+            file_path,
+            source_tool="drawing_discovery",
+        )
+        if not hydrated.get("ok"):
+            return hydrated
+        try:
+            from .drawing import create_drawing_backend
+
+            discovered = create_drawing_backend(self.cad_document).list_drawings(
+                document=self.cad_document
+            )
+        except Exception as exc:
+            return self._error(
+                f"Could not discover drawing pages: {type(exc).__name__}: {exc}"
+            )
+        for item in discovered:
+            drawing_id = str(item["drawing_id"])
+            existing = self.drawings.get(drawing_id, {})
+            self.drawings[drawing_id] = {
+                **item,
+                **existing,
+                "drawing_id": drawing_id,
+                "page_id": item["page_id"],
+                "page_name": item["page_name"],
+                "label": item["label"],
+                "managed_by_rapidcad": item["managed_by_rapidcad"],
+                "views": item["views"],
+                "items": item["items"],
+                "status": existing.get("status", "opened"),
+                "artifact_status": existing.get("artifact_status", "unmanaged"),
+            }
+        return [dict(self.drawings[str(item["drawing_id"])]) for item in discovered]
+
+    def _prepare_drawing_edit(
+        self,
+        drawing_id: Optional[str],
+        expected_revision: Optional[str],
+    ) -> Dict[str, Any]:
+        drawing = self._resolve_drawing(drawing_id)
+        if drawing.get("ok") is False:
+            return drawing
+        if expected_revision and expected_revision != self.document_revision:
+            return self._error(
+                "Document revision mismatch: expected "
+                f"{expected_revision}, current {self.document_revision}."
+            )
+        return drawing
+
+    def _drawing_runtime_object(
+        self,
+        object_id: str,
+        expected_kind: str,
+    ) -> CadObject | Dict[str, Any]:
+        runtime_object = self.runtime_objects.get(object_id)
+        if not isinstance(runtime_object, CadObject):
+            return self._error(
+                f"Unknown drawing {expected_kind}_id {object_id!r}. Call "
+                "list_drawing_items and copy the complete id exactly."
+            )
+        return runtime_object
+
+    @staticmethod
+    def _drawing_view_lookup(views: list[Dict[str, Any]]) -> Dict[str, str]:
+        """Return unambiguous semantic drawing-view names mapped to exact IDs."""
+
+        grouped: Dict[str, list[str]] = {}
+        for view in views:
+            name = str(view.get("view_name") or "").strip().lower()
+            object_id = str(view.get("id") or "").strip()
+            if name and object_id:
+                grouped.setdefault(name, []).append(object_id)
+        return {
+            name: object_ids[0]
+            for name, object_ids in grouped.items()
+            if len(object_ids) == 1
+        }
+
+    def _resolve_drawing_view(
+        self,
+        drawing: Dict[str, Any],
+        *,
+        view_name: Optional[str],
+        view_id: Optional[str],
+    ) -> CadObject | Dict[str, Any]:
+        """Resolve a semantic view name or an exact runtime view ID."""
+
+        views = list(drawing.get("views") or [])
+        lookup = self._drawing_view_lookup(views)
+        normalized_name = str(view_name or "").strip().lower()
+        normalized_id = str(view_id or "").strip()
+        if not normalized_name and not normalized_id:
+            return self._error(
+                "A drawing view is required. Pass view_name from "
+                f"list_drawing_items.view_lookup. Available views: {lookup or 'none'}."
+            )
+        if normalized_name:
+            matching_ids = [
+                str(view.get("id"))
+                for view in views
+                if str(view.get("view_name") or "").strip().lower()
+                == normalized_name
+                and view.get("id")
+            ]
+            if not matching_ids:
+                return self._error(
+                    f"Unknown drawing view_name {view_name!r}. Available semantic "
+                    f"views: {lookup or 'none'}."
+                )
+            if len(matching_ids) > 1 and not normalized_id:
+                return self._error(
+                    f"Drawing view_name {view_name!r} is ambiguous. Pass one exact "
+                    f"view_id from {matching_ids}."
+                )
+            semantic_id = matching_ids[0] if len(matching_ids) == 1 else normalized_id
+            if normalized_id and normalized_id not in matching_ids:
+                return self._error(
+                    f"view_id {view_id!r} does not identify the {normalized_name!r} "
+                    f"view. Matching IDs: {matching_ids}."
+                )
+            normalized_id = semantic_id
+        runtime_object = self.runtime_objects.get(normalized_id)
+        if not isinstance(runtime_object, CadObject) and not normalized_name:
+            # A caller sometimes passes a guessed semantic name (for example
+            # "FrontView") in the view_id slot instead of view_name. Recover
+            # it against the lookup before failing outright.
+            guessed_name = normalized_id.lower()
+            if guessed_name.endswith("view"):
+                guessed_name = guessed_name[: -len("view")].strip()
+            guessed_id = lookup.get(guessed_name)
+            if guessed_id:
+                normalized_id = guessed_id
+                runtime_object = self.runtime_objects.get(normalized_id)
+        if not isinstance(runtime_object, CadObject):
+            choices = {
+                str(view.get("view_name") or view.get("native_name") or "view"): str(
+                    view.get("id")
+                )
+                for view in views
+                if view.get("id")
+            }
+            return self._error(
+                f"Unknown drawing view_id {view_id!r}. Available views: "
+                f"{choices or 'none'}. Prefer view_name when it is available."
+            )
+        return runtime_object
+
+    @staticmethod
+    def _drawing_position(value: list[float]) -> tuple[float, float]:
+        if not isinstance(value, (list, tuple)) or len(value) != 2:
+            raise ValueError("Drawing positions must be [x_mm, y_mm].")
+        return float(value[0]), float(value[1])
+
+    def _complete_drawing_edit(
+        self,
+        drawing: Dict[str, Any],
+        operation: str,
+        params: Dict[str, Any],
+        edit: Any,
+        summary: str,
+    ) -> Dict[str, Any]:
+        native_document = self.cad_document.native_handle
+        file_name = str(getattr(native_document, "FileName", "")).strip()
+        file_path = Path(file_name).expanduser().resolve() if file_name else None
+        hydrated = self._hydrate_freecad_document(
+            native_document,
+            file_path,
+            source_tool=operation,
+        )
+        if not hydrated.get("ok"):
+            return hydrated
+        ids_by_name = {
+            item.native_name: object_id
+            for object_id, item in self.runtime_objects.items()
+            if isinstance(item, CadObject)
+        }
+        created_ids = [
+            ids_by_name[name]
+            for name in edit.created_native_names
+            if name in ids_by_name
+        ]
+        changed_ids = [
+            ids_by_name[name]
+            for name in edit.changed_native_names
+            if name in ids_by_name
+        ]
+        drawing["artifact_status"] = "stale"
+        drawing["status"] = "edited"
+        operation_id = self._record(
+            operation,
+            params,
+            created_ids or changed_ids,
+            summary,
+        )
+        result = edit.to_dict()
+        result.update(
+            {
+                "ok": True,
+                "summary": summary,
+                "operation_id": operation_id,
+                "drawing_id": drawing["drawing_id"],
+                "created_object_ids": created_ids,
+                "changed_object_ids": changed_ids,
+                "document_revision": self.document_revision,
+                "artifact_status": "stale",
+                "next_action": (
+                    "Call export_current_drawing to refresh the downloadable PDF."
+                ),
             }
         )
         return result
@@ -1728,6 +3174,10 @@ class CadSession:
             return self._worker.call("save_document", {"path": path})
         if self.cad_document is None:
             return self._error("No native CAD document is open.")
+        if not path and not str(getattr(self.cad_document.native_handle, "FileName", "")).strip():
+            return self._error(
+                "This document has not been saved before. Provide a path to save_document."
+            )
         try:
             saved_path = self.cad_document.save(path)
         except Exception as exc:
@@ -1782,9 +3232,11 @@ class CadSession:
         try:
             self._ensure_parent(str(resolved_path))
             if shape_id:
-                shape = self.runtime_objects.get(shape_id)
+                shape = self._shape_wrappers.get(shape_id)
                 if shape is None:
-                    return self._error(f"Unknown shape_id '{shape_id}'")
+                    return self._error(
+                        f"Object '{shape_id}' has no geometry export wrapper."
+                    )
                 if kind == "step":
                     shape.to_step(str(resolved_path))
                 elif kind == "stl":
@@ -1816,6 +3268,8 @@ class CadSession:
 
     def _geometry_signature(self, shape: Any) -> Dict[str, Any]:
         obj = getattr(shape, "obj", None)
+        if obj is None and isinstance(shape, CadObject):
+            obj = shape.shape
         if obj is None:
             return {}
         return self._shape_signature(obj)
@@ -1950,6 +3404,19 @@ class CadSession:
                 source="native_document",
                 metadata=metadata,
             )
+
+        cad_document.feature_definitions.clear()
+        for native_obj in native_objects:
+            raw_definition = getattr(native_obj, "RapidCADFeatureDefinition", "")
+            if not raw_definition:
+                continue
+            try:
+                definition = json.loads(str(raw_definition))
+                if isinstance(definition, dict):
+                    cad_document.register_feature_definition(native_obj.Name, definition)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # Invalid third-party metadata must not prevent document hydration.
+                continue
 
         object_snapshots = [obj.to_dict() for obj in self.objects.values()]
         if parameter_adapter is not None:
@@ -2279,6 +3746,7 @@ class CadSession:
         self,
         *,
         require_document: bool = True,
+        create_document_if_missing: bool = True,
     ) -> Optional[Dict[str, Any]]:
         """Attach GUI-mode sessions automatically when one instance is available."""
         if (
@@ -2298,6 +3766,11 @@ class CadSession:
         if not require_document or not attached.get("warning"):
             return None
         if attached.get("active_document") is None:
+            if not create_document_if_missing:
+                return self._error(
+                    "FreeCAD has no active document. Open the intended CAD file "
+                    "or call open_document before drawing discovery."
+                )
             created = self._worker.call("new_document", {"name": "RapidCADPy"})
             if created.get("ok"):
                 return None

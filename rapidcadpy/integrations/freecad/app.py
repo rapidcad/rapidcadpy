@@ -141,6 +141,14 @@ class FreeCADApp(App):
         """Compatibility method for code that cannot use properties."""
         return self.cad_document
 
+    @property
+    def feature_executor(self):
+        """Return the history-preserving executor for semantic features."""
+
+        from .feature_executor import FreeCADFeatureExecutor
+
+        return FreeCADFeatureExecutor()
+
     def bind_document(self, document) -> CadDocument:
         """Replace the active native document and refresh its public binding."""
         self._fc_doc = document
@@ -279,13 +287,13 @@ class FreeCADApp(App):
         file_name: str,
         shapes=None,
         feature_name_prefix: str = "Shape",
+        allow_direct_geometry: bool = False,
     ) -> None:
         """Save the document in FreeCAD's native .FCStd format.
 
-        If a single shape with its own document is provided, saves that document's
-        feature tree. Otherwise, writes all registered shapes as Part::Feature objects.
-        Geometry is eager — all features are realized immediately as the
-        shapes are built.
+        When all target shapes belong to the same native document, save that
+        document and preserve its complete feature tree. Baked ``Part::Feature``
+        export is available only through explicit direct-geometry mode.
 
         Args:
             file_name: Destination path (should end in ``.FCStd``).
@@ -294,14 +302,28 @@ class FreeCADApp(App):
         """
         target_shapes = self._shapes if shapes is None else shapes
 
-        # If single shape with its own doc, save that directly
-        if (
-            len(target_shapes) == 1
-            and getattr(target_shapes[0], "document", None) is not None
-        ):
-            target_shapes[0].document.save(file_name)
-            return
+        native_documents = [getattr(shape, "document", None) for shape in target_shapes]
+        if target_shapes and all(document is not None for document in native_documents):
+            first_document = native_documents[0]
+            if all(
+                document.native_handle is first_document.native_handle
+                for document in native_documents[1:]
+            ):
+                first_document.save(file_name)
+                return
 
-        # Otherwise, add shapes to app doc
+        if not allow_direct_geometry:
+            from .errors import FreeCADNativeFeatureError
+
+            raise FreeCADNativeFeatureError(
+                "FCStd export cannot preserve one native feature tree because the "
+                "requested shapes are unbacked or belong to different documents. "
+                "Refusing to bake them as Part::Feature objects. Pass "
+                "allow_direct_geometry=True only when history loss is intentional."
+            )
+
+        if not target_shapes:
+            raise ValueError("No shapes to export")
+
         self._upsert_doc_shapes(target_shapes, feature_name_prefix=feature_name_prefix)
         self._fc_doc.saveAs(file_name)

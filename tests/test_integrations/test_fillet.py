@@ -72,6 +72,7 @@ class TestFillet:
             object_types = [obj.TypeId for obj in reopened.Objects]
             assert "Sketcher::SketchObject" in object_types
             assert "Part::Extrusion" in object_types
-            assert "Part::Feature" in object_types
+            assert "Part::Fillet" in object_types
+            assert "Part::Feature" not in object_types
         finally:
             FreeCAD.closeDocument(reopened.Name)
