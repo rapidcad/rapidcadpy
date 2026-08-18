@@ -7,6 +7,7 @@ from typing import Any, Optional, cast
 
 from ...sketch2d import Sketch2D
 from ...primitives import Arc, Circle, Line
+from .errors import FreeCADNativeFeatureError
 from .shape import FreeCADShape
 
 
@@ -285,6 +286,12 @@ class FreeCADSketch2D(Sketch2D):
         Returns:
             FreeCADShape wrapping the resulting solid.
         """
+        if self.app is not None and hasattr(self.app, "get_doc"):
+            raise FreeCADNativeFeatureError(
+                "Native FreeCAD pipe creation is not implemented; refusing to "
+                "return an unbacked OCC shape that would later be baked."
+            )
+
         import FreeCAD
         import Part
 
@@ -350,10 +357,6 @@ class FreeCADSketch2D(Sketch2D):
         try:
             # makePipeShell(profiles, make_solid, is_frenet)
             solid = spine.makePipeShell([profile_wire], True, True)
-            if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
-                cast(Any, self.app).mark_history_unsupported(
-                    "Pipe replay not implemented for FreeCAD history export"
-                )
             return FreeCADShape(solid, self.app)
         except Exception as exc:
             if self._silent_fail_enabled():
@@ -379,6 +382,12 @@ class FreeCADSketch2D(Sketch2D):
         Returns:
             FreeCADShape wrapping the resulting solid.
         """
+        if self.app is not None and hasattr(self.app, "get_doc"):
+            raise FreeCADNativeFeatureError(
+                "Native Part::Sweep creation is not implemented; refusing to "
+                "return an unbacked OCC shape that would later be baked."
+            )
+
         path_wire = self._make_wire()
         profile_wire = profile._make_wire()
 
@@ -387,10 +396,6 @@ class FreeCADSketch2D(Sketch2D):
 
         try:
             solid = path_wire.makePipeShell([profile_wire], make_solid, is_frenet)
-            if self.app is not None and hasattr(self.app, "mark_history_unsupported"):
-                cast(Any, self.app).mark_history_unsupported(
-                    "Sweep replay not implemented for FreeCAD history export"
-                )
             return FreeCADShape(solid, self.app)
         except Exception as exc:
             if self._silent_fail_enabled():
@@ -428,65 +433,67 @@ class FreeCADSketch2D(Sketch2D):
         """
 
         def _make_freecad_shape(obj, app):
-            """Helper to create FreeCADShape with doc and feature if available."""
+            """Create a native extrusion, never a baked ``Part::Feature``."""
             doc = None
             feat = None
             if app is not None and hasattr(app, "get_doc"):
                 doc = app.get_doc()
                 feat_idx = app.get_next_feature_index()
+                created_names = []
+                try:
+                    sketch = self._create_editable_sketch(doc, f"Sketch_{feat_idx}")
+                    created_names.append(str(sketch.Name))
+                    extrusion = doc.addObject("Part::Extrusion", f"Extrude_{feat_idx}")
+                    created_names.append(str(extrusion.Name))
+                    extrusion.Base = sketch
+                    extrusion.DirMode = "Normal"
+                    extrusion.Solid = True
+                    extrusion.TaperAngle = 0.0
+                    extrusion.TaperAngleRev = 0.0
 
-                if operation == "NewBodyFeatureOperation" and self._primitives:
+                    distance = float(getattr(self, "_last_extrude_distance", 0.0))
+                    symmetric = bool(getattr(self, "_last_extrude_symmetric", False))
+                    if symmetric:
+                        extrusion.LengthFwd = abs(distance) / 2.0
+                        extrusion.LengthRev = abs(distance) / 2.0
+                    elif distance >= 0.0:
+                        extrusion.LengthFwd = distance
+                        extrusion.LengthRev = 0.0
+                    else:
+                        extrusion.LengthFwd = 0.0
+                        extrusion.LengthRev = abs(distance)
+
+                    doc.recompute()
+                    native_shape = getattr(extrusion, "Shape", None)
+                    if (
+                        native_shape is None
+                        or getattr(native_shape, "isNull", lambda: False)()
+                    ):
+                        raise ValueError(
+                            "FreeCAD recomputed an empty Part::Extrusion shape."
+                        )
+                    feat = extrusion
+                except Exception as exc:
+                    for name in reversed(created_names):
+                        try:
+                            doc.removeObject(name)
+                        except Exception:
+                            pass
                     try:
-                        sketch = self._create_editable_sketch(doc, f"Sketch_{feat_idx}")
-                        extrusion = doc.addObject(
-                            "Part::Extrusion", f"Extrude_{feat_idx}"
-                        )
-                        extrusion.Base = sketch
-                        extrusion.DirMode = "Normal"
-                        extrusion.Solid = True
-                        extrusion.TaperAngle = 0.0
-                        extrusion.TaperAngleRev = 0.0
-
-                        distance = float(getattr(self, "_last_extrude_distance", 0.0))
-                        symmetric = bool(
-                            getattr(self, "_last_extrude_symmetric", False)
-                        )
-                        if symmetric:
-                            extrusion.LengthFwd = abs(distance) / 2.0
-                            extrusion.LengthRev = abs(distance) / 2.0
-                        elif distance >= 0.0:
-                            extrusion.LengthFwd = distance
-                            extrusion.LengthRev = 0.0
-                        else:
-                            extrusion.LengthFwd = 0.0
-                            extrusion.LengthRev = abs(distance)
-
-                        feat = extrusion
+                        doc.recompute()
                     except Exception:
-                        feat = doc.addObject("Part::Feature", f"Feature_{feat_idx}")
-                        feat.Shape = obj
-                else:
-                    feat = doc.addObject("Part::Feature", f"Feature_{feat_idx}")
-                    feat.Shape = obj
-                doc.recompute()
+                        pass
+                    raise FreeCADNativeFeatureError(
+                        "Could not create Sketcher::SketchObject -> Part::Extrusion; "
+                        "refusing to replace the failed native feature with baked "
+                        "Part::Feature geometry."
+                    ) from exc
             return FreeCADShape(obj, app, doc=doc, current_feature=feat)
 
-        if operation in ("Cut", "CutOperation"):
-            if self.app and self.app._shapes:
-                for shape in self.app._shapes:
-                    freecad_shape = cast(FreeCADShape, shape)
-                    if hasattr(shape, "obj"):
-                        freecad_shape.obj = freecad_shape.obj.cut(solid)
-                return cast(FreeCADShape, self.app._shapes[-1])
-            return _make_freecad_shape(solid, self.app)
-
-        elif operation == "JoinBodyFeatureOperation":
-            if self.app and self.app._shapes:
-                last = cast(FreeCADShape, self.app._shapes[-1])
-                if hasattr(last, "obj"):
-                    last.obj = last.obj.fuse(solid)
-                    return last
-            return _make_freecad_shape(solid, self.app)
-
-        else:  # NewBodyFeatureOperation (default)
-            return _make_freecad_shape(solid, self.app)
+        if operation != "NewBodyFeatureOperation":
+            raise FreeCADNativeFeatureError(
+                f"Native FreeCAD extrusion operation {operation!r} is not "
+                "implemented. Create a new extrusion and apply cut() or union() "
+                "so RapidCADPy can create a linked Part::Cut or Part::MultiFuse."
+            )
+        return _make_freecad_shape(solid, self.app)

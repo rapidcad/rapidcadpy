@@ -10,6 +10,7 @@ from typing import List, Optional, Union, Any
 from ...cad_objects import CadDocument, CadFeature
 from ...shape import Shape
 from .cad_adapter import FreeCADAdapter
+from .errors import FreeCADNativeFeatureError
 
 
 class FreeCADShape(Shape):
@@ -115,21 +116,9 @@ class FreeCADShape(Shape):
         self._feature_counter += 1
         return self._feature_counter
 
-    def _store_result_shape(self, result_shape, prefix: str) -> None:
-        """Update ``self.obj`` and mirror the result into the FreeCAD document."""
-        self.obj = result_shape
-        if self.document is not None and self.feature is not None:
-            native_document = self.document.native_handle
-            feature = native_document.addObject(
-                "Part::Feature", f"{prefix}_{self._doc_get_next_index()}"
-            )
-            feature.Shape = result_shape
-            self.document.recompute()
-            self._bind_feature(feature)
-
     def _make_boolean_feature(
         self, type_id: str, others: List["FreeCADShape"], prefix: str
-    ) -> bool:
+    ) -> None:
         """Create a parametric FreeCAD boolean referencing operand features.
 
         ``Part::Cut`` / ``Part::MultiFuse`` / ``Part::MultiCommon`` reference the
@@ -137,12 +126,13 @@ class FreeCADShape(Shape):
         FCStd export keeps an editable boolean node (with the operand sketches /
         extrusions nested underneath) instead of a baked solid.
 
-        Returns ``True`` when the parametric feature was created; ``False`` when
-        an operand is not document-backed (caller should fall back to a baked
-        OCC boolean so geometry is still correct).
+        All operands must belong to the same native document. RapidCADPy does
+        not silently replace a failed native boolean with baked OCC geometry.
         """
         if self.document is None or self.feature is None:
-            return False
+            raise FreeCADNativeFeatureError(
+                "Native FreeCAD booleans require a document-backed target feature."
+            )
 
         operand_feats = []
         for s in others:
@@ -151,21 +141,38 @@ class FreeCADShape(Shape):
                 or s.document is None
                 or s.document.native_handle is not self.document.native_handle
             ):
-                return False
+                raise FreeCADNativeFeatureError(
+                    "Native FreeCAD booleans require every operand to be a "
+                    "feature in the same document."
+                )
             operand_feats.append(s.feature.native_handle)
 
-        doc = self.document.native_handle
-        boolean = doc.addObject(type_id, f"{prefix}_{self._doc_get_next_index()}")
-        if type_id == "Part::Cut":
-            boolean.Base = self.feature.native_handle
-            boolean.Tool = operand_feats[0]
-        else:  # Part::MultiFuse / Part::MultiCommon
-            boolean.Shapes = [self.feature.native_handle] + operand_feats
-        self.document.recompute()
+        try:
+            tools = [
+                CadFeature(
+                    id=other.feature.id,
+                    document=self.document,
+                    native_handle=native_feature,
+                    native_name=str(getattr(native_feature, "Name", "")),
+                )
+                for other, native_feature in zip(others, operand_feats)
+            ]
+            feature = self.document.adapter.create_boolean_feature(
+                self.document,
+                self.feature,
+                tools,
+                type_id=type_id,
+                prefix=prefix,
+                result_id=self.feature.id,
+            )
+        except Exception as exc:
+            raise FreeCADNativeFeatureError(
+                f"Could not create native {type_id}; refusing to bake the "
+                "boolean result into Part::Feature geometry."
+            ) from exc
 
-        self.obj = boolean.Shape
-        self._bind_feature(boolean)
-        return True
+        self.obj = feature.shape
+        self.bind_native(self.document, feature)
 
     def _raw_edges(self) -> List[Any]:
         self.refresh_from_feature()
@@ -186,19 +193,64 @@ class FreeCADShape(Shape):
     def _apply_fillet_to_edges(
         self, edges: List[Any], radius: float, selector: Optional[str] = None
     ) -> None:
-        # Compute the filleted shape
-        try:
-            filleted = self.obj.makeFillet(float(radius), edges)
-        except Exception:
-            # Per-edge fallback
-            filleted = self.obj
-            for edge in edges:
-                try:
-                    filleted = filleted.makeFillet(float(radius), [edge])
-                except Exception:
-                    continue
+        if self.document is None or self.feature is None:
+            raise FreeCADNativeFeatureError(
+                "Native FreeCAD fillets require a document-backed source feature."
+            )
 
-        self._store_result_shape(filleted, "Fillet")
+        source_edges = self._raw_edges()
+        edge_indexes = []
+        for selected_edge in edges:
+            matched_index = next(
+                (
+                    index
+                    for index, source_edge in enumerate(source_edges, start=1)
+                    if source_edge.isSame(selected_edge)
+                ),
+                None,
+            )
+            if matched_index is None:
+                raise FreeCADNativeFeatureError(
+                    "Selected fillet edge could not be mapped to the native source "
+                    "feature."
+                )
+            edge_indexes.append(matched_index)
+        from ...features import FilletFeature, GeometrySelection
+        from .feature_executor import FreeCADFeatureExecutor
+
+        anchor = getattr(edges[0], "CenterOfMass", None)
+        reference_point = (
+            (float(anchor.x), float(anchor.y), float(anchor.z))
+            if anchor is not None
+            else None
+        )
+
+        definition = FilletFeature(
+            target_id=self.feature.id,
+            edges=(
+                GeometrySelection(
+                    object_id=self.feature.id,
+                    subelements=tuple(f"Edge{index}" for index in edge_indexes),
+                    document_revision=self.document.revision,
+                ),
+            ),
+            radius_mm=float(radius),
+            reference_point=reference_point,
+        )
+        executor = (
+            self.app.feature_executor
+            if self.app is not None and hasattr(self.app, "feature_executor")
+            else FreeCADFeatureExecutor()
+        )
+        result = executor.apply(
+            definition,
+            self.feature,
+            expected_revision=self.document.revision,
+        )
+        native_feature = result.feature.native_handle
+        self.obj = native_feature.Shape
+        # Keep the public Shape identity stable across its dependent feature.
+        self._bind_feature(native_feature)
 
     # ------------------------------------------------------------------
     # Abstract implementations
@@ -214,7 +266,7 @@ class FreeCADShape(Shape):
         self.refresh_from_feature()
         self.obj.exportStl(file_name)
 
-    def to_fcstd(self, file_name: str) -> None:
+    def to_fcstd(self, file_name: str, *, allow_direct_geometry: bool = False) -> None:
         """Export this shape to a FreeCAD .FCStd file.
 
         If this shape was created with a document, the entire feature tree
@@ -227,7 +279,13 @@ class FreeCADShape(Shape):
             # Save the existing feature tree
             self.document.save(file_name)
         else:
-            # No doc: create a minimal one with just this shape
+            if not allow_direct_geometry:
+                raise FreeCADNativeFeatureError(
+                    "This shape has no native FreeCAD feature tree. Refusing to "
+                    "export it as a baked Part::Feature; pass "
+                    "allow_direct_geometry=True only when history loss is intentional."
+                )
+            # Explicit direct-geometry export for an unbacked shape.
             doc = FreeCAD.newDocument("export")
             feature = doc.addObject("Part::Feature", "Shape")
             feature.Shape = self.obj
@@ -265,25 +323,17 @@ class FreeCADShape(Shape):
                 os.remove(tmp_stl)
 
     def cut(self, other: "FreeCADShape") -> "FreeCADShape":
-        """Boolean subtraction as a parametric ``Part::Cut`` (baked fallback)."""
-        if not self._make_boolean_feature("Part::Cut", [other], "Cut"):
-            self.refresh_from_feature()
-            other.refresh_from_feature()
-            self._store_result_shape(self.obj.cut(other.obj), "Cut")
+        """Boolean subtraction as a parametric ``Part::Cut``."""
+        self._make_boolean_feature("Part::Cut", [other], "Cut")
         self._clear_edge_selection()
         return self
 
     def union(
         self, other: Union["FreeCADShape", List["FreeCADShape"]]
     ) -> "FreeCADShape":
-        """Boolean union as a parametric ``Part::MultiFuse`` (baked fallback)."""
+        """Boolean union as a parametric ``Part::MultiFuse``."""
         others = [other] if not isinstance(other, list) else other
-
-        if not self._make_boolean_feature("Part::MultiFuse", others, "Fuse"):
-            self.refresh_from_feature()
-            for s in others:
-                s.refresh_from_feature()
-                self._store_result_shape(self.obj.fuse(s.obj), "Fuse")
+        self._make_boolean_feature("Part::MultiFuse", others, "Fuse")
 
         self._clear_edge_selection()
         return self

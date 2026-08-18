@@ -7,16 +7,273 @@ from dataclasses import dataclass, field
 import math
 from pathlib import Path
 import re
-from typing import Dict, Optional, Sequence, Type
+from typing import Any, Dict, Literal, Optional, Sequence, Type
 
 from .cad_objects import CadDocument, CadObject
+
+
+ProjectionAngle = Literal["first", "third"]
+DrawingStandard = Literal["ISO", "ASME"]
+DimensionKind = Literal[
+    "overall",
+    "hole",
+    "countersink",
+    "spacing",
+    "radius",
+    "chamfer",
+    "thickness",
+]
+DimensionView = Literal["front", "top", "right"]
+DimensionSide = Literal["top", "bottom", "left", "right"]
+DrawingOutputFormat = Literal["pdf", "idw", "dwg", "dxf"]
+DRAWING_OUTPUT_FORMATS: tuple[DrawingOutputFormat, ...] = (
+    "pdf",
+    "idw",
+    "dwg",
+    "dxf",
+)
+
+
+def normalize_drawing_standard(value: str) -> DrawingStandard:
+    """Return the supported engineering-drawing standard name."""
+
+    normalized = str(value).strip().upper().replace("-", "")
+    aliases: dict[str, DrawingStandard] = {
+        "ISO": "ISO",
+        "ASME": "ASME",
+        "ANSI": "ASME",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError("standard must be 'ISO' or 'ASME'.") from exc
+
+
+def format_dimension_value(value_mm: float, standard: str) -> str:
+    """Format a millimetre value using the requested drawing convention."""
+
+    normalized = normalize_drawing_standard(standard)
+    if not math.isfinite(value_mm) or value_mm < 0:
+        raise ValueError("Dimension values must be finite and non-negative.")
+    if normalized == "ISO":
+        return f"{value_mm:.2f}".replace(".", ",")
+    return f"{value_mm / 25.4:.3f}"
+
+
+@dataclass(frozen=True)
+class DimensionIntent:
+    """Backend-neutral semantic dimension before sheet placement.
+
+    Coordinates remain in model millimetres. Adapters project them into the
+    requested orthographic view and create native dimension objects.
+    """
+
+    id: str
+    kind: DimensionKind
+    view: DimensionView
+    value_mm: float
+    reference_points: tuple[tuple[float, float, float], ...]
+    preferred_sides: tuple[DimensionSide, ...]
+    depth_mm: Optional[float] = None
+    angle_degrees: Optional[float] = None
+    through: bool = False
+    multiplicity: int = 1
+    source_references: tuple[str, ...] = ()
+
+    def formatted_text(self, standard: str) -> str:
+        """Return an explicit ISO/ASME label for TechDraw's format override."""
+
+        value = format_dimension_value(self.value_mm, standard)
+        prefix = f"{self.multiplicity}X " if self.multiplicity > 1 else ""
+        if self.kind == "hole":
+            text = f"{prefix}\u2300{value}"
+            if self.through:
+                return f"{text} THRU"
+            if self.depth_mm is not None:
+                return f"{text} \u21a7{format_dimension_value(self.depth_mm, standard)}"
+            return text
+        if self.kind == "countersink":
+            angle = self.angle_degrees if self.angle_degrees is not None else 90.0
+            return f"⌵ ⌀{value} × {angle:g}°"
+        if self.kind == "radius":
+            return f"{prefix}R{value}"
+        if self.kind == "chamfer":
+            angle = self.angle_degrees if self.angle_degrees is not None else 45.0
+            return f"{prefix}C{value} \u00d7 {angle:g}\u00b0"
+        if self.kind == "thickness":
+            return f"t {value}"
+        return value
+
+    def to_dict(self, standard: str) -> dict[str, object]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "view": self.view,
+            "value_mm": self.value_mm,
+            "depth_mm": self.depth_mm,
+            "angle_degrees": self.angle_degrees,
+            "through": self.through,
+            "multiplicity": self.multiplicity,
+            "reference_points": [list(point) for point in self.reference_points],
+            "preferred_sides": list(self.preferred_sides),
+            "source_references": list(self.source_references),
+            "formatted_text": self.formatted_text(standard),
+        }
+
+
+@dataclass(frozen=True)
+class DimensionPlacement:
+    """Collision-checked sheet placement for one semantic dimension."""
+
+    intent: DimensionIntent
+    side: DimensionSide
+    x_mm: float
+    y_mm: float
+    text_box: tuple[float, float, float, float]
+    projected_reference_points: tuple[tuple[float, float], ...]
+    leader_segments: tuple[tuple[float, float, float, float], ...] = ()
+
+    def to_dict(self, standard: str) -> dict[str, object]:
+        result = self.intent.to_dict(standard)
+        result.update(
+            {
+                "side": self.side,
+                "x_mm": self.x_mm,
+                "y_mm": self.y_mm,
+                "text_box": list(self.text_box),
+                "projected_reference_points": [
+                    list(point) for point in self.projected_reference_points
+                ],
+                "leader_segments": [list(segment) for segment in self.leader_segments],
+            }
+        )
+        return result
+
+
+def normalize_output_formats(
+    values: Optional[Sequence[str]],
+) -> tuple[DrawingOutputFormat, ...]:
+    """Validate and de-duplicate backend-neutral drawing output formats."""
+
+    requested = values if values is not None else ("pdf",)
+    normalized: list[DrawingOutputFormat] = []
+    for value in requested:
+        candidate = str(value).strip().lower()
+        if candidate not in DRAWING_OUTPUT_FORMATS:
+            supported = ", ".join(DRAWING_OUTPUT_FORMATS)
+            raise ValueError(
+                f"Unsupported drawing output format {value!r}; expected one of: "
+                f"{supported}."
+            )
+        typed_candidate: DrawingOutputFormat = candidate  # type: ignore[assignment]
+        if typed_candidate not in normalized:
+            normalized.append(typed_candidate)
+    if not normalized:
+        raise ValueError("output_formats must contain at least one format.")
+    return tuple(normalized)
+
+
+@dataclass(frozen=True)
+class DrawingViewSpec:
+    """Backend-neutral placement and camera direction for one drawing view."""
+
+    name: str
+    direction: tuple[float, float, float]
+    x_mm: float
+    y_mm: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "direction": list(self.direction),
+            "x_mm": self.x_mm,
+            "y_mm": self.y_mm,
+        }
+
+
+def normalize_projection_angle(value: str) -> ProjectionAngle:
+    """Validate a public projection-angle value without backend terminology."""
+
+    normalized = value.strip().lower().replace("_", "-")
+    aliases: dict[str, ProjectionAngle] = {
+        "first": "first",
+        "first-angle": "first",
+        "third": "third",
+        "third-angle": "third",
+    }
+    try:
+        return aliases[normalized]
+    except KeyError as exc:
+        raise ValueError("projection_angle must be 'first' or 'third'.") from exc
+
+
+def projected_view_layout(
+    projection_angle: str,
+    *,
+    sheet_size: str = "A3",
+) -> tuple[DrawingViewSpec, ...]:
+    """Return the standard four-view layout for a drawing sheet.
+
+    First-angle projection places the top view below the front view and the
+    right-side view to its left. Third-angle projection reverses those two
+    placements. Coordinates are expressed in sheet millimetres so adapters do
+    not leak native coordinate objects through the public contract.
+    """
+
+    if sheet_size.strip().upper() != "A3":
+        raise ValueError("Projected-view layout currently supports A3 sheets only.")
+    angle = normalize_projection_angle(projection_angle)
+    if angle == "first":
+        positions = {
+            "front": (170.0, 170.0),
+            "top": (170.0, 65.0),
+            "right": (60.0, 170.0),
+            "isometric": (315.0, 175.0),
+        }
+    else:
+        positions = {
+            "front": (105.0, 120.0),
+            "top": (105.0, 225.0),
+            "right": (215.0, 120.0),
+            "isometric": (315.0, 185.0),
+        }
+    directions = {
+        "front": (0.0, -1.0, 0.0),
+        "top": (0.0, 0.0, 1.0),
+        "right": (1.0, 0.0, 0.0),
+        "isometric": (1.0, -1.0, 1.0),
+    }
+    return tuple(
+        DrawingViewSpec(
+            name=name,
+            direction=directions[name],
+            x_mm=positions[name][0],
+            y_mm=positions[name][1],
+        )
+        for name in ("front", "top", "right", "isometric")
+    )
+
+
+def select_drawing_scale(extents_mm: Sequence[float]) -> float:
+    """Select the largest RAP-50 engineering scale that fits an A3 layout."""
+
+    if len(extents_mm) != 3 or any(value <= 0 for value in extents_mm):
+        raise ValueError("extents_mm must contain three positive dimensions.")
+    largest = max(float(value) for value in extents_mm)
+    for scale in (2.0, 1.0, 0.5, 0.2):
+        if largest * scale <= 100.0:
+            return scale
+    raise ValueError(
+        "The selected geometry does not fit the A3 four-view layout at 1:5 scale."
+    )
 
 
 @dataclass(frozen=True)
 class DrawingResult:
     """Files and native objects produced by one synchronous drawing export."""
 
-    pdf_path: Path
+    pdf_path: Optional[Path] = None
+    output_paths: dict[str, Path] = field(default_factory=dict)
     vector_source_path: Optional[Path] = None
     native_drawing_path: Optional[Path] = None
     page_name: Optional[str] = None
@@ -26,8 +283,12 @@ class DrawingResult:
     metadata: dict[str, object] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
+        output_paths = {key: str(value) for key, value in self.output_paths.items()}
+        if self.pdf_path is not None:
+            output_paths.setdefault("pdf", str(self.pdf_path))
         return {
-            "pdf_path": str(self.pdf_path),
+            "pdf_path": str(self.pdf_path) if self.pdf_path is not None else None,
+            "output_paths": output_paths,
             "vector_source_path": (
                 str(self.vector_source_path)
                 if self.vector_source_path is not None
@@ -46,8 +307,49 @@ class DrawingResult:
         }
 
 
+@dataclass(frozen=True)
+class DrawingEditResult:
+    """Native drawing objects changed by one constrained edit."""
+
+    created_native_names: tuple[str, ...] = ()
+    changed_native_names: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    metadata: dict[str, object] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "created_native_names": list(self.created_native_names),
+            "changed_native_names": list(self.changed_native_names),
+            "warnings": list(self.warnings),
+            "metadata": dict(self.metadata),
+        }
+
+
 class DrawingBackend(ABC):
     """CAD-specific implementation of native drawing creation and export."""
+
+    @property
+    @abstractmethod
+    def supported_output_formats(self) -> frozenset[DrawingOutputFormat]:
+        """Formats this CAD adapter can export without lossy conversion."""
+
+    def validate_output_formats(
+        self,
+        output_formats: Optional[Sequence[str]],
+    ) -> tuple[DrawingOutputFormat, ...]:
+        """Normalize formats and fail explicitly for adapter limitations."""
+
+        requested = normalize_output_formats(output_formats)
+        unsupported = [
+            item for item in requested if item not in self.supported_output_formats
+        ]
+        if unsupported:
+            supported = ", ".join(sorted(self.supported_output_formats)) or "none"
+            raise NotImplementedError(
+                f"{type(self).__name__} does not support drawing export format(s): "
+                f"{', '.join(unsupported)}. Supported formats: {supported}."
+            )
+        return requested
 
     @abstractmethod
     def generate_drawing(
@@ -57,13 +359,111 @@ class DrawingBackend(ABC):
         objects: Sequence[CadObject],
         standard: str,
         sheet_size: str,
+        projection_angle: str,
         template_id: Optional[str],
         output_directory: Path,
         part_name: str,
         run_id: str,
         include_native: bool,
+        dimension_feature_ids: Optional[Sequence[str]] = None,
+        output_formats: Optional[Sequence[str]] = None,
     ) -> DrawingResult:
-        """Create a native drawing linked to ``objects`` and export its PDF."""
+        """Create a native drawing linked to ``objects`` and export requested files."""
+
+    def inspect_drawing(
+        self,
+        *,
+        document: CadDocument,
+        page_name: str,
+    ) -> dict[str, Any]:
+        """List native views and editable drawing items."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support drawing inspection."
+        )
+
+    def list_drawings(self, *, document: CadDocument) -> list[dict[str, Any]]:
+        """Discover existing native drawing pages in an opened document."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support drawing discovery."
+        )
+
+    def add_feature_dimension(
+        self,
+        *,
+        document: CadDocument,
+        page_name: str,
+        view_native_name: str,
+        feature_definition: dict[str, Any],
+        dimension_kind: str,
+        position_mm: tuple[float, float],
+        standard: str,
+    ) -> DrawingEditResult:
+        """Add a geometry-measured native dimension for a semantic feature."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support feature dimensions."
+        )
+
+    def add_drawing_note(
+        self,
+        *,
+        document: CadDocument,
+        page_name: str,
+        text: str,
+        position_mm: tuple[float, float],
+    ) -> DrawingEditResult:
+        """Add an editorial note to an existing native drawing."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support drawing notes."
+        )
+
+    def add_drawing_leader(
+        self,
+        *,
+        document: CadDocument,
+        page_name: str,
+        view_native_name: str,
+        text: str,
+        anchor_mm: Optional[tuple[float, float]],
+        elbow_mm: Optional[tuple[float, float]],
+        text_position_mm: Optional[tuple[float, float]],
+    ) -> DrawingEditResult:
+        """Add a native leader and associated annotation to a drawing view."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support drawing leaders."
+        )
+
+    def move_drawing_item(
+        self,
+        *,
+        document: CadDocument,
+        page_name: str,
+        item_native_name: str,
+        position_mm: tuple[float, float],
+    ) -> DrawingEditResult:
+        """Move an editable native drawing item on its page."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support moving drawing items."
+        )
+
+    def export_drawing(
+        self,
+        *,
+        document: CadDocument,
+        page_name: str,
+        pdf_path: Path,
+        vector_source_path: Path,
+    ) -> DrawingEditResult:
+        """Re-export an edited native drawing to its managed artifact paths."""
+
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support drawing re-export."
+        )
 
 
 class DrawingBackendFactory(ABC):
@@ -318,11 +718,27 @@ def _pdf_font_is_embedded(font: object) -> bool:
 
 
 __all__ = [
+    "DimensionIntent",
+    "DimensionKind",
+    "DimensionPlacement",
+    "DimensionSide",
+    "DimensionView",
     "DrawingBackend",
     "DrawingBackendFactory",
+    "DrawingOutputFormat",
     "DrawingResult",
+    "DrawingStandard",
+    "DrawingViewSpec",
+    "DRAWING_OUTPUT_FORMATS",
+    "ProjectionAngle",
     "create_drawing_backend",
     "finalize_vector_pdf",
+    "format_dimension_value",
+    "normalize_drawing_standard",
+    "normalize_projection_angle",
+    "normalize_output_formats",
+    "projected_view_layout",
     "register_drawing_backend",
+    "select_drawing_scale",
     "validate_print_ready_pdf",
 ]

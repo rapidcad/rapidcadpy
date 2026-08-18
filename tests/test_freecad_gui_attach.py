@@ -329,7 +329,12 @@ def test_live_code_execution_auto_attaches_and_delegates(monkeypatch):
     result = session.execute_code("import FreeCAD")
 
     assert result["ok"] is True
-    assert worker.calls == [("execute_code", {"code": "import FreeCAD"})]
+    assert worker.calls == [
+        (
+            "execute_code",
+            {"code": "import FreeCAD", "allow_direct_geometry": False},
+        )
+    ]
 
 
 def test_embedded_session_adopts_active_document_without_creating_one(monkeypatch):
