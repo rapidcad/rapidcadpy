@@ -98,7 +98,9 @@ class TestAddParameter:
 
         new_app = InventorApp()
         new_app.open_document(str(file_path))
-        assert new_app.get_parameter("thickness") == pytest.approx(original_val, rel=0.01)
+        assert new_app.get_parameter("thickness") == pytest.approx(
+            original_val, rel=0.01
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -229,7 +231,9 @@ class TestParameterStringInWorkplane:
 
         wp = object.__new__(InventorWorkPlane)
         wp.app = app
-        assert wp._resolve_distance("extrude_depth") == pytest.approx(expected, rel=0.01)
+        assert wp._resolve_distance("extrude_depth") == pytest.approx(
+            expected, rel=0.01
+        )
 
     def test_resolve_unknown_string_raises_key_error(self, app):
         from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane
