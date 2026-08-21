@@ -407,9 +407,13 @@ class LoadCaseFromFreeCadInp:
                     coord = nodes_arr[idx_int]
                 else:
                     source = nodes_arr[idx_int]
-                    nearest = int(np.argmin(np.sum((visible_coords - source) ** 2, axis=1)))
+                    nearest = int(
+                        np.argmin(np.sum((visible_coords - source) ** 2, axis=1))
+                    )
                     coord = visible_coords[nearest]
-                visual_points.append([float(coord[0]), float(coord[1]), float(coord[2])])
+                visual_points.append(
+                    [float(coord[0]), float(coord[1]), float(coord[2])]
+                )
             return visual_points
 
         # ------------------------------------------------------------------
@@ -724,9 +728,9 @@ class LoadCaseFromFreeCadInp:
                             original_point[2] - marker_point[2],
                         )
                     load = PointLoad(
-                        point=marker_point
-                        if marker_point is not None
-                        else original_point,
+                        point=(
+                            marker_point if marker_point is not None else original_point
+                        ),
                         force=(0.0, 0.0, 0.0),
                         direction=None,
                         tolerance=1,

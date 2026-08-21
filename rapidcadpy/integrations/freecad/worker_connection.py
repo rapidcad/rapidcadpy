@@ -19,7 +19,9 @@ class FreeCADWorkerClient:
     """JSON-lines client for a persistent FreeCAD Python worker."""
 
     def __init__(self) -> None:
-        package_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+        package_root = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "..", "..", "..")
+        )
         worker_path = os.path.join(
             package_root,
             "rapidcadpy",
@@ -114,6 +116,8 @@ class FreeCADWorkerClient:
 
 def ensure_package_import_path() -> None:
     """Add the RapidCADPy source root when running a bundled worker directly."""
-    package_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
+    package_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..", "..")
+    )
     if package_root not in sys.path:
         sys.path.insert(0, package_root)

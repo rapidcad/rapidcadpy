@@ -344,6 +344,20 @@ class OccShape(Shape):
         self.obj = cut_result.Shape()
         return self
 
+    def intersection_volume(self, other: "Shape") -> float:
+        """Return exact shared solid volume without mutating either shape."""
+        from OCC.Core.BRepAlgoAPI import BRepAlgoAPI_Common
+        from OCC.Core.BRepGProp import brepgprop
+        from OCC.Core.GProp import GProp_GProps
+
+        common = BRepAlgoAPI_Common(self.obj, other.obj)
+        common.Build()
+        if not common.IsDone():
+            raise RuntimeError("Intersection operation failed.")
+        properties = GProp_GProps()
+        brepgprop.VolumeProperties(common.Shape(), properties)
+        return max(0.0, float(properties.Mass()))
+
     def union(self, other: "Shape | list[Shape]") -> "OccShape":
         """
         Perform a boolean union operation (addition) on this shape.

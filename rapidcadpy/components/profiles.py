@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from .sections.ipe import ipe, list_ipe
 from .sections.ipn import ipn, list_ipn
+from .sections.item import item, list_item
 
 
 def list_profiles() -> dict[str, list[str]]:
@@ -17,4 +18,5 @@ def list_profiles() -> dict[str, list[str]]:
     return {
         "ipe": list_ipe(),
         "ipn": list_ipn(),
+        "item": list_item(),
     }

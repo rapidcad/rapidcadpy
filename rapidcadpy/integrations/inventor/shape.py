@@ -13,6 +13,17 @@ class InventorShape(Shape):
     def volume(self) -> float:
         return 1.0  # Placeholder implementation
 
+    def intersection_volume(self, other: "Shape") -> float:
+        """Return the shared volume once the Inventor transient-BRep adapter exists.
+
+        Returning zero here would falsely mark colliding production assemblies
+        as valid, so callers receive an explicit unsupported-query failure.
+        """
+        raise NotImplementedError(
+            "InventorShape does not yet expose an exact transient-BRep "
+            "intersection-volume query."
+        )
+
     def to_stl(self, file_name: str) -> None:
         """
         Export the shape to STL format using Autodesk Inventor COM API.

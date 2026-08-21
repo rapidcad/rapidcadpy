@@ -369,6 +369,20 @@ class OccShape(Shape):
         self._clear_edge_selection()
         return self
 
+    def intersection_volume(self, other: "Shape") -> float:
+        """Return exact shared solid volume without mutating either shape."""
+        from OCP.BRepAlgoAPI import BRepAlgoAPI_Common
+        from OCP.BRepGProp import BRepGProp
+        from OCP.GProp import GProp_GProps
+
+        common = BRepAlgoAPI_Common(self.obj, other.obj)
+        common.Build()
+        if not common.IsDone():
+            raise RuntimeError("Intersection operation failed.")
+        properties = GProp_GProps()
+        BRepGProp.VolumeProperties_s(common.Shape(), properties)
+        return max(0.0, float(properties.Mass()))
+
     def union(self, other: Union[Shape, List[Shape]]) -> Shape:
         """
         Perform a boolean union operation (addition) with one or more shapes.
@@ -441,6 +455,53 @@ class OccShape(Shape):
         transform_builder = BRepBuilderAPI_Transform(self.obj, transform, True)
         self.obj = transform_builder.Shape()
 
+        self._clear_edge_selection()
+        return self
+
+    def place_along(
+        self,
+        origin: tuple = (0.0, 0.0, 0.0),
+        direction: tuple = (0.0, 0.0, 1.0),
+    ) -> "OccShape":
+        """Move the shape so its +Z axis at the world origin lands on a new axis.
+
+        A profile extruded on the XY workplane runs from the world origin along
+        +Z.  This rigidly transforms it so that axis becomes ``origin`` ->
+        ``direction``, which is how a member gets an arbitrary position and
+        orientation without an arbitrary-normal workplane.  The transform is
+        exact -- no tessellation -- so volumes and boolean results are
+        unchanged.
+
+        Args:
+            origin: World point the shape's local origin moves to.
+            direction: World direction the shape's local +Z aligns with; it is
+                normalized, and need not be a unit vector.
+
+        Returns:
+            OccShape: Self (modified in place) for method chaining.
+
+        Raises:
+            ValueError: If ``direction`` has (near) zero length, which leaves
+                the orientation undefined.
+        """
+        import math
+
+        from OCP.BRepBuilderAPI import BRepBuilderAPI_Transform
+        from OCP.gp import gp_Ax3, gp_Dir, gp_Pnt, gp_Trsf
+
+        vector = tuple(float(component) for component in direction)
+        length = math.sqrt(sum(component * component for component in vector))
+        if length <= 1e-12:
+            raise ValueError("direction must have non-zero length")
+        unit = tuple(component / length for component in vector)
+
+        transform = gp_Trsf()
+        transform.SetDisplacement(
+            gp_Ax3(gp_Pnt(0.0, 0.0, 0.0), gp_Dir(0.0, 0.0, 1.0)),
+            gp_Ax3(gp_Pnt(*(float(c) for c in origin)), gp_Dir(*unit)),
+        )
+
+        self.obj = BRepBuilderAPI_Transform(self.obj, transform, True).Shape()
         self._clear_edge_selection()
         return self
 

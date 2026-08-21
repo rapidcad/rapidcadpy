@@ -11,6 +11,7 @@ __email__ = "your.email@example.com"
 # Core fluent API components
 try:
     from .app import App
+    from .assembly_fit import AssemblyFitEvaluator, AssemblyFitReport, Interference
 except ImportError:
     App = None
 

@@ -105,6 +105,20 @@ class Shape(ABC):
     def union(self, other: "Shape") -> "Shape":
         pass
 
+    def intersection_volume(self, other: "Shape") -> float:
+        """Return the volume shared by this solid and ``other``.
+
+        Unlike :meth:`cut` and :meth:`union`, this is an inspection operation:
+        it must not alter either operand or its feature history.  CAD backends
+        with an exact solid-boolean implementation override it.  Keeping the
+        method here makes assembly validation depend on the public RapidCADPy
+        API rather than on a particular OCC/FreeCAD native object.
+        """
+        raise NotImplementedError(
+            f"Exact intersection-volume queries are not implemented for "
+            f"{self.__class__.__name__}."
+        )
+
     # ------------------------------------------------------------------
     # Edge selection & fillet — backend-agnostic default implementation
     # ------------------------------------------------------------------

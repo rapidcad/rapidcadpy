@@ -328,6 +328,12 @@ class FreeCADShape(Shape):
         self._clear_edge_selection()
         return self
 
+    def intersection_volume(self, other: "Shape") -> float:
+        """Return exact shared solid volume without creating a document feature."""
+        self.refresh_from_feature()
+        other.refresh_from_feature()
+        return max(0.0, float(self.obj.common(other.obj).Volume))
+
     def union(
         self, other: Union["FreeCADShape", List["FreeCADShape"]]
     ) -> "FreeCADShape":

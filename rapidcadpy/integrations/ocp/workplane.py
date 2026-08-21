@@ -37,15 +37,28 @@ class OccWorkplane(Workplane):
     ) -> "OccWorkplane":
         """Create an OccWorkplane from origin and normal vector.
 
+        .. warning::
+            **Axis-aligned normals only, and ``origin`` is currently ignored.**
+            ``Workplane.__init__`` accepts ``origin``/``up_dir`` through
+            ``**kwargs`` without reading them, and ``_setup_coordinate_system``
+            only recognizes normals along X, Y, or Z -- an oblique normal
+            silently falls through to the YZ basis.  ``normal_vector`` is also a
+            *class* attribute, so concurrently live workplanes share whichever
+            normal was set last.
+
+            Do not build member placement on this method.  To position a solid
+            on an arbitrary axis, extrude it on a named plane and apply a rigid
+            ``gp_Trsf`` transform to the resulting shape instead.
+
         Args:
-            origin: Origin point of the workplane
+            origin: Origin point of the workplane (not yet honored, see above)
             normal: Normal vector (up-axis direction)
             app: Optional app instance
 
         Returns:
             New OccWorkplane with specified origin and normal
         """
-        from .cad_types import Vector
+        from ...cad_types import Vector
 
         # Convert to vectors
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
