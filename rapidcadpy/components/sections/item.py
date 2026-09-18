@@ -79,10 +79,14 @@ class ItemSection(Section2D):
         for point in points[1:]:
             wp.line_to(*point)
 
-        # The outer outline is explicitly closed before starting the inner
-        # bore loop. This avoids a connector line in Workplane.close().
+        # Close the outer outline before starting the inner bore loop. Workplane
+        # implementations with multi-loop support, such as FreeCAD, extrude
+        # these as an outer wire with an inner void rather than attempting to
+        # connect the two loops with a line.
+        wp.close()
         wp.move_to(x, y).circle(self.core_hole_diameter / 2.0)
-        return wp.close()
+        wp.close()
+        return wp
 
 
 _ITEM_PRESETS: dict[str, ItemSection] = {

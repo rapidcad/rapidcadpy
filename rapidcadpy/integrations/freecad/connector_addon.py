@@ -111,8 +111,16 @@ QtCore.QTimer.singleShot(0, _start_rapidcadpy_connector)
 def install_freecad_connector(
     mod_dir: Optional[str] = None,
     package_root: Optional[str] = None,
+    dev: bool = False,
 ) -> Dict[str, Any]:
-    """Install an auto-start module that imports the current RapidCADPy package."""
+    """Install an auto-start module that imports the current RapidCADPy package.
+
+    When ``dev`` is true, symlink the installed package to ``source_package_root``
+    instead of copying it, so local RapidCADPy edits take effect on the next
+    FreeCAD restart without reinstalling the connector. Falls back to a copy
+    install if symlink creation is not permitted (for example, on Windows
+    without Developer Mode or admin rights).
+    """
     resolved_mod_dir = (
         Path(mod_dir).expanduser().resolve()
         if mod_dir
@@ -138,18 +146,35 @@ def install_freecad_connector(
     addon_dir.mkdir(parents=True, exist_ok=True)
     installed_package_root = addon_dir / "_vendor"
     installed_package_dir = installed_package_root / "rapidcadpy"
-    if installed_package_dir.is_dir():
+    installed_package_root.mkdir(parents=True, exist_ok=True)
+    if installed_package_dir.is_symlink():
+        installed_package_dir.unlink()
+    elif installed_package_dir.is_dir():
         shutil.rmtree(installed_package_dir)
-    shutil.copytree(
-        source_package_root / "rapidcadpy",
-        installed_package_dir,
-        ignore=shutil.ignore_patterns(
-            "__pycache__",
-            "*.pyc",
-            "*.pyo",
-            ".pytest_cache",
-        ),
-    )
+
+    install_mode = "copy"
+    if dev:
+        try:
+            installed_package_dir.symlink_to(
+                source_package_root / "rapidcadpy", target_is_directory=True
+            )
+            install_mode = "symlink"
+        except OSError:
+            # Most commonly Windows without Developer Mode or admin rights.
+            # Fall through to a copy install below.
+            pass
+
+    if install_mode == "copy":
+        shutil.copytree(
+            source_package_root / "rapidcadpy",
+            installed_package_dir,
+            ignore=shutil.ignore_patterns(
+                "__pycache__",
+                "*.pyc",
+                "*.pyo",
+                ".pytest_cache",
+            ),
+        )
     init_gui_path.write_text(
         _init_gui_source(installed_package_root),
         encoding="utf-8",
@@ -184,12 +209,21 @@ def install_freecad_connector(
 """,
         encoding="utf-8",
     )
+    summary = (
+        "Installed the RapidCADPy connector for FreeCAD"
+        if install_mode == "copy"
+        else (
+            "Installed the RapidCADPy connector for FreeCAD, symlinked to the "
+            "live source"
+        )
+    )
     return {
         "ok": True,
-        "summary": "Installed the RapidCADPy connector for FreeCAD",
+        "summary": summary,
         "addon_dir": str(addon_dir),
         "package_root": str(installed_package_root),
         "source_package_root": str(source_package_root),
+        "install_mode": install_mode,
         "restart_required": True,
     }
 
@@ -200,13 +234,24 @@ def main() -> None:
     )
     parser.add_argument("--mod-dir", default=None)
     parser.add_argument("--package-root", default=None)
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help=(
+            "Symlink the installed connector to the source package instead of "
+            "copying it, so local RapidCADPy edits take effect on the next "
+            "FreeCAD restart without reinstalling."
+        ),
+    )
     arguments = parser.parse_args()
     result = install_freecad_connector(
         mod_dir=arguments.mod_dir,
         package_root=arguments.package_root,
+        dev=arguments.dev,
     )
     print(result["summary"])
     print(f"Addon: {result['addon_dir']}")
+    print(f"Install mode: {result['install_mode']}")
     print("Restart FreeCAD once to activate it.")
 
 

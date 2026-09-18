@@ -5,6 +5,7 @@ if TYPE_CHECKING:
     from .fea.boundary_conditions import BoundaryCondition, Load
     from .fea.materials import MaterialProperties
     from .fea.results import FEAResults
+from .cad_types import VectorLike
 from .shape import Shape
 from .workplane import Workplane
 
@@ -113,7 +114,23 @@ class App:
         """
         return dict(self._parameters)
 
-    def work_plane(self, name: str, offset: Optional[float] = None) -> Workplane:
+    def work_plane(
+        self,
+        name: str = "XY",
+        offset: Optional[float] = None,
+        origin: Optional[VectorLike] = None,
+        normal: Optional[VectorLike] = None,
+    ) -> Workplane:
+        """Create a workplane by name/offset, or by absolute origin + normal.
+
+        ``origin``/``normal`` take precedence when both are given, letting a
+        caller place a workplane anywhere rather than only at one of the
+        three axis-aligned planes with a single perpendicular offset.
+        """
+        if origin is not None and normal is not None:
+            return self.workplane_class.from_origin_normal(
+                app=self, origin=origin, normal=normal
+            )
         if name.upper() == "XY":
             return self.workplane_class.xy_plane(app=self, offset=offset)
         elif name.upper() == "XZ":

@@ -5,6 +5,49 @@ description: Export CAD shapes to PNG images with technical drawings or 3D shade
 
 # PNG Rendering Feature
 
+## Live technical drawing formats
+
+The live-CAD `generate_drawing` operation accepts an `output_formats` list with
+`pdf`, `idw`, `dwg`, and `dxf` as backend-neutral values. Format support is
+declared by the selected drawing adapter:
+
+| Adapter | PDF | DXF | DWG | IDW |
+| --- | --- | --- | --- | --- |
+| FreeCAD TechDraw | Yes | Yes | No | No |
+| Autodesk Inventor | Adapter pending (RAP-87) | Adapter pending (RAP-87) | Adapter pending (RAP-87) | Adapter pending (RAP-87) |
+
+FreeCAD writes the complete TechDraw page directly to DXF, including projected
+views and annotations. It deliberately rejects DWG because native DWG output
+requires an external converter such as ODA; RapidCADPy does not silently add a
+lossy or unlicensed conversion step. IDW is an Inventor-native format. An
+Inventor drawing adapter can implement all four formats behind the same
+`DrawingBackendFactory` contract without changing callers or the MCP tool.
+
+```python
+session.generate_drawing(output_formats=["pdf", "dxf"])
+```
+
+### Automatic dimensions from semantic features
+
+FreeCAD drawings prefer RapidCADPy's semantic `HoleFeature`, `FilletFeature`,
+and `ChamferFeature` definitions. The generated Front and Top views receive
+overall dimensions, grouped hole diameter/depth callouts, centre-to-centre
+hole-pattern spacing, and fillet/chamfer callouts without inferring modelling
+intent from the result shape. Repeated equal features use engineering
+multiplicity notation such as `4X ⌀10,00 THRU` or `3X R3,00` instead of
+duplicate callouts.
+
+Imported STEP solids have no feature history. They receive overall dimensions,
+but feature-specific dimensions require explicit semantic features; the backend
+does not infer manufacturing intent from raw topology. The result metadata
+reports `dimension_source` as `semantic_features` or `none`.
+
+Dimension text and lines are placed in collision-checked lanes outside the
+projected-view boundaries. `standard="ISO"` uses millimetres and a decimal
+comma; `standard="ASME"` converts values to inches and uses a decimal point.
+The result metadata includes every semantic dimension, its sheet placement,
+the selected unit system, and the dimension source.
+
 ## Overview
 
 RapidCADpy provides PNG rendering capabilities for the OCC backend with two distinct methods:
@@ -114,4 +157,3 @@ Or run the example script:
 ```bash
 python example_png_rendering.py
 ```
-

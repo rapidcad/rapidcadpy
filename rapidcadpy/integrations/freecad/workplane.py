@@ -271,10 +271,19 @@ class FreeCADWorkplane(Workplane):
         dummy_sketch = FreeCADSketch2D(
             primitives=combined_primitives, workplane=self, app=self.app
         )
-        return dummy_sketch._apply_operation(  # type: ignore[return-value]
-            solid,
-            operation,
-        )
+        # _apply_operation() uses this state to populate the editable native
+        # Part::Extrusion. Without it, multi-loop profiles retain the computed
+        # OCC solid in memory but are serialized with LengthFwd/LengthRev = 0.
+        dummy_sketch._last_extrude_distance = float(distance)
+        dummy_sketch._last_extrude_symmetric = bool(symmetric)
+        try:
+            return dummy_sketch._apply_operation(  # type: ignore[return-value]
+                solid,
+                operation,
+            )
+        finally:
+            dummy_sketch._last_extrude_distance = None
+            dummy_sketch._last_extrude_symmetric = None
 
     def box(
         self,

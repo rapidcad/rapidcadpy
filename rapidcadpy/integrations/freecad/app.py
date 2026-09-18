@@ -200,20 +200,6 @@ class FreeCADApp(App):
     # Document helpers
     # ------------------------------------------------------------------
 
-    def work_plane(
-        self,
-        name: str = "XY",
-        offset: Optional[float] = None,
-        origin: Optional[VectorLike] = None,
-        normal: Optional[VectorLike] = None,
-    ):
-        """Create a workplane by name/offset or by absolute origin + normal."""
-        if origin is not None and normal is not None:
-            return self.workplane_class.from_origin_normal(
-                app=self, origin=origin, normal=normal
-            )
-        return super().work_plane(name=name, offset=offset)
-
     def reset(self) -> None:
         """Close the current document and open a fresh one."""
         import FreeCAD

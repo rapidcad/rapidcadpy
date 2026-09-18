@@ -26,31 +26,67 @@ wp = app.work_plane("XY")
 
 ## Creating and Modifying Shapes
 
-### Creating an Arm and Cutting a Hole
+### Adding a Semantic Hole to a Live CAD Object
 
 ```python
-app = InventorApp()
-app.new_document()
-wp = app.work_plane("XY")
+from rapidcadpy import CadSession
 
-arm_thick = 5
+session = CadSession()
 
-# Create an arm shape
-arm = (
-    wp.move_to(-4.5, 0)
-    .line_to(-4.5, 20)
-    .line_to(-8, 45)
-    .three_point_arc((0, 53), (8, 45))
-    .line_to(4.5, 20)
-    .line_to(4.5, 0)
-    .three_point_arc((0, -4.5), (-4.5, 0))
-    .extrude(arm_thick)
+# `arm_id` and `revision` come from a previously created or opened live body.
+# This creates a semantic native feature; do not model a hole by extruding a
+# circle and cutting it from the body.
+result = session.hole(
+    target_id=arm_id,
+    diameter=8.0,
+    center=[0.0, 45.0, 5.0],
+    axis=[0.0, 0.0, 1.0],
+    through=True,
+    expected_revision=revision,
 )
 
-# Create a hole and cut it from the arm
-hole = wp.move_to(0, 45).circle(4).extrude(arm_thick)
-arm.cut(hole)
+if not result["ok"]:
+    raise RuntimeError(result["error"])
+
+hole_feature_id = result["object_id"]
+revision = result["document_revision"]
 ```
+
+`CadSession.hole()` preserves semantic feature intent for later editing and
+technical-drawing callouts. It currently supports simple through and blind
+holes. Countersink and counterbore hole types are not yet supported by the
+live FreeCAD executor; do not emulate them with raw FreeCAD code or boolean
+cuts.
+
+### Lofting Ordered Workplane Profiles
+
+Create each closed profile on its own workplane, then pass the ordered
+workplane IDs to `CadSession.loft()`. The FreeCAD adapter creates an editable
+native `Part::Loft` with those profiles as its sections.
+
+```python
+# Each work_plane call returns an object_id. Create its profile before moving
+# to the next workplane.
+top = session.work_plane("XY", offset=60.0)["object_id"]
+session.circle(8.0)
+
+neck = session.work_plane("XY", offset=52.0)["object_id"]
+session.circle(4.0)
+
+result = session.loft(
+    profile_workplane_ids=[top, neck],
+    make_solid=True,
+    ruled=False,
+    expected_revision=revision,
+)
+loft_id = result["object_id"]
+revision = result["document_revision"]
+```
+
+`profile_workplane_ids` must contain at least two distinct workplanes in loft
+order. `list_objects()` can be used to inspect previously created workplane
+IDs. The current public operation creates a new loft body; join and cut
+operations are not exposed yet.
 
 ## Simple Shapes
 

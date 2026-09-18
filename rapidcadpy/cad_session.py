@@ -1,4 +1,19 @@
-"""Stateful RapidCADPy session for local and live CAD applications."""
+"""Stateful RapidCADPy session for local and live CAD applications.
+
+RPC-dispatch note (tracked follow-up, not fixed here): every "worker" call
+below (``self._worker.call(method, params)``) and the FreeCAD GUI bridge
+(``integrations/freecad/gui_bridge.py``) independently reflect on a live
+``CadSession`` instance via ``getattr(session, method)(**params)`` — three
+separately-loaded copies of this class (this process, the out-of-process
+worker subprocess, and the FreeCAD GUI process), with no shared interface
+or schema between them. Adding a method here only reaches the GUI bridge
+once the FreeCAD connector is reinstalled *and* FreeCAD is restarted (see
+``rapidcadpy/integrations/freecad/connector_addon.py``); until then callers
+get a runtime "Unknown GUI bridge/worker method" error instead of a
+load-time failure. A real fix means introducing an explicit RPC/backend
+contract these three dispatchers can be checked against, rather than
+reflection over whatever public methods happen to exist.
+"""
 
 from __future__ import annotations
 
@@ -12,9 +27,9 @@ import sys
 import tempfile
 import time
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .cad_objects import CadDocument, CadFeature, CadObject, CadParameter
 from .feature import Feature
@@ -125,10 +140,19 @@ class CadSession:
         "viewport.fit",
     )
 
-    def __init__(self, execution_mode: str = "headless") -> None:
+    def __init__(
+        self,
+        execution_mode: str = "headless",
+        app_factory: Optional[Callable[[str], Any]] = None,
+    ) -> None:
         if execution_mode not in {"headless", "gui", "embedded"}:
             raise ValueError("execution_mode must be 'headless', 'gui', or 'embedded'.")
         self.execution_mode = execution_mode
+        # Constructs a backend App given a document name. Defaults to
+        # FreeCADApp (imported lazily at each call site, matching prior
+        # behavior); inject a different factory to run CadSession against
+        # another App implementation instead of FreeCAD.
+        self._app_factory: Optional[Callable[[str], Any]] = app_factory
         self._worker: Any = None
         self._gui_connection: Any = None
         self.backend_name: Optional[str] = None
@@ -181,18 +205,22 @@ class CadSession:
 
         previous_logging_disable = logging.root.manager.disable
         try:
-            if os.environ.get("RAPIDCADPY_CAD_WORKER") != "1":
-                logging.disable(logging.CRITICAL)
-            try:
-                from rapidcadpy.integrations.freecad.app import (
-                    FreeCADApp,
-                    ensure_freecad_python_path,
-                )
-            finally:
-                logging.disable(previous_logging_disable)
+            if self._app_factory is not None:
+                freecad_lib_path = None
+                self.app = self._app_factory(document_name)
+            else:
+                if os.environ.get("RAPIDCADPY_CAD_WORKER") != "1":
+                    logging.disable(logging.CRITICAL)
+                try:
+                    from rapidcadpy.integrations.freecad.app import (
+                        FreeCADApp,
+                        ensure_freecad_python_path,
+                    )
+                finally:
+                    logging.disable(previous_logging_disable)
 
-            freecad_lib_path = ensure_freecad_python_path()
-            self.app = FreeCADApp(doc_name=document_name)
+                freecad_lib_path = ensure_freecad_python_path()
+                self.app = FreeCADApp(doc_name=document_name)
         except Exception as exc:
             logging.disable(previous_logging_disable)
             if os.environ.get("RAPIDCADPY_CAD_WORKER") == "1":
@@ -593,9 +621,12 @@ class CadSession:
             return self._error("new_document MVP supports only FreeCAD backend.")
 
         try:
-            from rapidcadpy.integrations.freecad.app import FreeCADApp
+            if self._app_factory is not None:
+                self.app = self._app_factory(name)
+            else:
+                from rapidcadpy.integrations.freecad.app import FreeCADApp
 
-            self.app = FreeCADApp(doc_name=name)
+                self.app = FreeCADApp(doc_name=name)
             self.backend_name = "freecad"
         except Exception as exc:
             return self._error(
@@ -895,29 +926,47 @@ class CadSession:
         return hydrated
 
     def work_plane(
-        self, plane: str = "XY", offset: Optional[float] = None
+        self,
+        plane: str = "XY",
+        offset: Optional[float] = None,
+        origin: Optional[List[float]] = None,
+        normal: Optional[List[float]] = None,
     ) -> Dict[str, Any]:
         ready = self._ensure_gui_session()
         if ready is not None:
             return ready
         if self._worker is not None:
-            return self._worker.call("work_plane", {"plane": plane, "offset": offset})
+            return self._worker.call(
+                "work_plane",
+                {
+                    "plane": plane,
+                    "offset": offset,
+                    "origin": origin,
+                    "normal": normal,
+                },
+            )
         ready = self._require_app()
         if ready is not None:
             return ready
+        placed = origin is not None and normal is not None
         try:
-            wp = self.app.work_plane(plane, offset=offset)
+            wp = self.app.work_plane(plane, offset=offset, origin=origin, normal=normal)
         except Exception as exc:
             return self._error(
                 f"Could not create workplane: {type(exc).__name__}: {exc}"
             )
 
         wp_id = self._new_id("workplane")
+        label = (
+            f"workplane at origin {origin}, normal {normal}"
+            if placed
+            else f"{plane.upper()} workplane"
+        )
         op_id = self._record(
             "work_plane",
-            {"plane": plane, "offset": offset},
+            {"plane": plane, "offset": offset, "origin": origin, "normal": normal},
             [wp_id],
-            f"Created {plane.upper()} workplane",
+            f"Created {label}",
         )
         self.active_workplane = wp
         self.active_workplane_id = wp_id
@@ -925,12 +974,17 @@ class CadSession:
         self.objects[wp_id] = SemanticObject(
             id=wp_id,
             type="workplane",
-            label=f"{plane.upper()} workplane",
+            label=label,
             source_op=op_id,
-            metadata={"plane": plane.upper(), "offset": offset},
+            metadata={
+                "plane": plane.upper(),
+                "offset": offset,
+                "origin": origin,
+                "normal": normal,
+            },
         )
         return self._ok(
-            summary=f"Created {plane.upper()} workplane",
+            summary=f"Created {label}",
             operation_id=op_id,
             object_id=wp_id,
             active_workplane_id=wp_id,
@@ -1092,6 +1146,96 @@ class CadSession:
         )
         return self._ok(
             summary=f"Drew circle radius {radius}",
+            operation_id=op_id,
+            object_id=profile_id,
+            active_workplane_id=self.active_workplane_id,
+        )
+
+    def list_profiles(self) -> Dict[str, Any]:
+        from .components import profiles
+
+        families = profiles.list_profiles()
+        return self._ok(
+            summary="Listed available preset profile families",
+            profiles=families,
+        )
+
+    def list_item_angle_brackets(self) -> Dict[str, Any]:
+        """List standardized ITEM angle-bracket catalog entries."""
+        from .components.item import item_angle_bracket, list_item_angle_brackets
+
+        brackets = [
+            asdict(item_angle_bracket(name)) for name in list_item_angle_brackets()
+        ]
+        return self._ok(
+            summary="Listed available ITEM angle brackets",
+            brackets=brackets,
+        )
+
+    def get_item_angle_bracket(self, name: str) -> Dict[str, Any]:
+        """Return one standardized ITEM angle-bracket catalog entry."""
+        from .components.item import item_angle_bracket
+
+        try:
+            bracket = item_angle_bracket(name)
+        except (AttributeError, TypeError, ValueError) as exc:
+            return self._error(str(exc))
+        return self._ok(
+            summary=f"Loaded ITEM angle bracket {bracket.name}",
+            bracket=asdict(bracket),
+        )
+
+    def sketch_profile(
+        self, family: str, name: str, x: float = 0.0, y: float = 0.0
+    ) -> Dict[str, Any]:
+        ready = self._ensure_gui_session()
+        if ready is not None:
+            return ready
+        if self._worker is not None:
+            return self._worker.call(
+                "sketch_profile", {"family": family, "name": name, "x": x, "y": y}
+            )
+        ready = self._require_workplane()
+        if ready is not None:
+            return ready
+
+        from .components import profiles
+
+        family_key = family.strip().lower()
+        factories = {"ipe": profiles.ipe, "ipn": profiles.ipn, "item": profiles.item}
+        factory = factories.get(family_key)
+        if factory is None:
+            return self._error(
+                f"Unknown profile family {family!r}. Available: "
+                f"{', '.join(sorted(factories))}"
+            )
+        try:
+            section = factory(name)
+            section.sketch(self.active_workplane, x=float(x), y=float(y))
+        except Exception as exc:
+            return self._error(f"sketch_profile failed: {type(exc).__name__}: {exc}")
+
+        profile_id = self._new_id("profile")
+        op_id = self._record(
+            "sketch_profile",
+            {"family": family_key, "name": section.name, "x": x, "y": y},
+            [profile_id],
+            f"Drew {family_key.upper()} profile {section.name}",
+        )
+        self.objects[profile_id] = SemanticObject(
+            id=profile_id,
+            type="profile",
+            label=f"{family_key}:{section.name}",
+            source_op=op_id,
+            metadata={
+                "family": family_key,
+                "name": section.name,
+                "x": float(x),
+                "y": float(y),
+            },
+        )
+        return self._ok(
+            summary=f"Drew {family_key.upper()} profile {section.name}",
             operation_id=op_id,
             object_id=profile_id,
             active_workplane_id=self.active_workplane_id,
@@ -1419,11 +1563,12 @@ class CadSession:
             return ready
         if self._worker is not None:
             return self._worker.call(
+                "union",
                 {
                     "target_id": target_id,
                     "tool_ids": tool_ids,
                     "expected_revision": expected_revision,
-                }
+                },
             )
         if expected_revision and expected_revision != self.document_revision:
             return self._error(
