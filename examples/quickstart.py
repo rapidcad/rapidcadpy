@@ -4,7 +4,6 @@ from pathlib import Path
 
 from rapidcadpy import OpenCascadeOcpApp
 
-
 output = Path("quickstart.step")
 app = OpenCascadeOcpApp()
 

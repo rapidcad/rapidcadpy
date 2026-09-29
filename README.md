@@ -14,7 +14,7 @@
 
 <p align="center"><sub>A parameter edit recomputes the dependent cut while retaining the same native FreeCAD feature.</sub></p>
 
-**[Architecture](#architecture)** · **[Examples](./examples)** · **[Backend support](#backend-support)** · **[Documentation](https://docs.rapidcad.ai)**
+**[Architecture](./docs/architecture.md)** · **[Examples](./examples)** · **[Backend support](#backend-support)** · **[Contributing](./docs/contributing.md)** · **[Documentation](https://docs.rapidcad.ai)**
 
 ## 30-second quickstart
 
