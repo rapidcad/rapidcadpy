@@ -120,16 +120,22 @@ class App:
         offset: Optional[float] = None,
         origin: Optional[VectorLike] = None,
         normal: Optional[VectorLike] = None,
+        x_axis: Optional[VectorLike] = None,
     ) -> Workplane:
-        """Create a workplane by name/offset, or by absolute origin + normal.
+        """Create a workplane by name/offset, or by an absolute local frame.
 
         ``origin``/``normal`` take precedence when both are given, letting a
         caller place a workplane anywhere rather than only at one of the
-        three axis-aligned planes with a single perpendicular offset.
+        three axis-aligned planes with a single perpendicular offset. The
+        origin is the reference start of a following non-symmetric extrusion.
+        The normal is the local Z axis and positive extrusion direction.
+        Optional ``x_axis`` fixes the profile's rotation around that normal.
         """
+        if x_axis is not None and (origin is None or normal is None):
+            raise ValueError("x_axis requires both origin and normal.")
         if origin is not None and normal is not None:
             return self.workplane_class.from_origin_normal(
-                app=self, origin=origin, normal=normal
+                app=self, origin=origin, normal=normal, x_axis=x_axis
             )
         if name.upper() == "XY":
             return self.workplane_class.xy_plane(app=self, offset=offset)

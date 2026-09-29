@@ -16,7 +16,6 @@ except ImportError:
     App = None
 
 # Core geometry types for fluent API
-from .cad_types import Vector, Vertex
 from .cad_objects import (
     CadAdapter,
     CadDocument,
@@ -26,18 +25,10 @@ from .cad_objects import (
     ParameterBinding,
 )
 from .cad_session import CadSession
-from .feature import Feature
-from .feature_executor import FeatureExecutor, FeatureResult, FeatureSupport
-from .features import (
-    ChamferFeature,
-    ChamferMode,
-    FeatureProvenance,
-    FilletFeature,
-    GeometrySelection,
-    HoleFeature,
-    HoleTermination,
-    HoleType,
-)
+from .cad_types import Vector, Vertex
+
+# Components - preset profiles
+from .components import profiles
 from .drawing import (
     DimensionIntent,
     DimensionPlacement,
@@ -56,14 +47,68 @@ from .drawing import (
     select_drawing_scale,
     validate_print_ready_pdf,
 )
+from .feature import Feature
+from .feature_executor import FeatureExecutor, FeatureResult, FeatureSupport
+from .feature_updates import (
+    LoftFeatureUpdate,
+    SweepFeatureUpdate,
+    feature_update_from_dict,
+)
+from .features import (
+    ChamferFeature,
+    ChamferMode,
+    FeatureProvenance,
+    FilletFeature,
+    GeometrySelection,
+    HoleFeature,
+    HoleTermination,
+    HoleType,
+)
+from .live_backend import (
+    CadApplication,
+    CapabilityInspector,
+    DocumentHydrator,
+    LiveCadBackend,
+    LiveCadBackendFactory,
+    LiveCadBackendRegistry,
+    LiveCadConnection,
+    ModelingBackend,
+)
+from .modeling import (
+    ArcSegment,
+    CadPath,
+    CadProfile,
+    CircleSegment,
+    ControlPointSpline,
+    CoordinateFrame,
+    InterpolatedSpline,
+    LengthUnit,
+    LineSegment,
+    LoftDefinition,
+    ModelingRequest,
+    PathDefinition,
+    Point3,
+    ProfileDefinition,
+    SplineCurve,
+    SweepDefinition,
+    modeling_request_from_dict,
+)
+from .operation_result import CadOperationResult, CadOperationSupport
 
 # Core shape and sketch classes
 from .shape import Shape
 from .sketch2d import Sketch2D
 from .sketch3d import Sketch3D
-
-# Components - preset profiles
-from .components import profiles
+from .viewport import (
+    ViewportBackend,
+    ViewportBackendFactory,
+    ViewportName,
+    ViewportScreenshot,
+    create_viewport_backend,
+    normalize_viewport_name,
+    register_viewport_backend,
+    validate_viewport_size,
+)
 
 # Optional integrations are loaded lazily so importing rapidcadpy does not
 # require FreeCAD/OCP/Inventor runtimes or emit warnings during lightweight imports.
@@ -102,6 +147,30 @@ except ImportError as e:
 
 # Define what gets imported with "from rapidcadpy import *"
 __all__ = [
+    "CoordinateFrame",
+    "LengthUnit",
+    "Point3",
+    "InterpolatedSpline",
+    "ControlPointSpline",
+    "SplineCurve",
+    "ProfileDefinition",
+    "PathDefinition",
+    "CadProfile",
+    "CadPath",
+    "LoftDefinition",
+    "LineSegment", "ArcSegment", "CircleSegment",
+    "LoftFeatureUpdate", "SweepFeatureUpdate", "feature_update_from_dict",
+    "SweepDefinition",
+    "ModelingRequest",
+    "modeling_request_from_dict",
+    "CadApplication",
+    "LiveCadConnection",
+    "ModelingBackend",
+    "DocumentHydrator",
+    "CapabilityInspector",
+    "LiveCadBackend",
+    "LiveCadBackendFactory",
+    "LiveCadBackendRegistry",
     # Core fluent API
     "App",
     "Workplane",
@@ -117,6 +186,16 @@ __all__ = [
     "FeatureExecutor",
     "FeatureResult",
     "FeatureSupport",
+    "CadOperationResult",
+    "CadOperationSupport",
+    "ViewportBackend",
+    "ViewportBackendFactory",
+    "ViewportName",
+    "ViewportScreenshot",
+    "create_viewport_backend",
+    "normalize_viewport_name",
+    "register_viewport_backend",
+    "validate_viewport_size",
     "GeometrySelection",
     "FeatureProvenance",
     "HoleFeature",

@@ -28,6 +28,26 @@ class SemanticObject:
             **self.metadata,
         }
 
+    def to_summary_dict(self) -> Dict[str, Any]:
+        """Return the fields needed to choose an object for later inspection."""
+        summary = {
+            "id": self.id,
+            "type": self.type,
+            "label": self.label,
+        }
+        for key in (
+            "native_name",
+            "native_type",
+            "backend",
+            "visibility",
+            "capabilities",
+            "geometry",
+            "extrusion_path",
+        ):
+            if key in self.metadata:
+                summary[key] = self.metadata[key]
+        return summary
+
 
 @dataclass
 class OperationRecord:

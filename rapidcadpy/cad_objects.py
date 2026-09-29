@@ -43,6 +43,7 @@ class CadDocument:
     label: str = ""
     file_name: str = ""
     revision: Optional[str] = None
+    id: Optional[str] = None
     _object_ids_by_native_name: Dict[str, str] = field(
         default_factory=dict,
         init=False,
@@ -217,6 +218,7 @@ class CadDocument:
             "label": self.label,
             "file_name": self.file_name,
             "revision": self.revision,
+            "id": self.id,
             "feature_definitions": dict(self.feature_definitions),
         }
 

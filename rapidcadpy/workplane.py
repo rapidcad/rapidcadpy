@@ -136,12 +136,14 @@ class Workplane(ABC):
         app: "App",
         origin: VectorLike,
         normal: VectorLike,
+        x_axis: Optional[VectorLike] = None,
     ) -> "Workplane":
-        """Create a workplane from origin and normal vector.
+        """Create a workplane from an origin, normal, and optional local X axis.
 
         Args:
             origin: Origin point of the workplane
-            normal: Normal vector (z-axis direction)
+            normal: Normal vector (local z-axis and extrusion direction)
+            x_axis: Optional local x-axis controlling rotation about ``normal``
             app: Optional app instance
 
         Returns:
@@ -153,7 +155,15 @@ class Workplane(ABC):
         origin_vec = Vector(*origin) if not isinstance(origin, Vector) else origin
         normal_vec = Vector(*normal) if not isinstance(normal, Vector) else normal
 
-        # Use default x and y directions for now
+        if x_axis is not None:
+            return cls.from_n_x_axis(
+                origin_vec,
+                normal_vec,
+                x_axis,
+                app=app,
+            )
+
+        # Use default x and y directions when profile roll is unspecified.
         return cls(
             origin=origin_vec,
             up_dir=normal_vec,
@@ -162,7 +172,11 @@ class Workplane(ABC):
 
     @classmethod
     def from_n_x_axis(
-        cls, origin: VectorLike, normal: VectorLike, x_axis: VectorLike
+        cls,
+        origin: VectorLike,
+        normal: VectorLike,
+        x_axis: VectorLike,
+        app: Optional["App"] = None,
     ) -> "Workplane":
         """Create a workplane from origin, normal vector, and x-axis vector.
 
@@ -177,9 +191,23 @@ class Workplane(ABC):
         normal_vec = Vector(*normal) if not isinstance(normal, Vector) else normal
         x_axis_vec = Vector(*x_axis) if not isinstance(x_axis, Vector) else x_axis
 
-        # Normalize vectors
-        normal_normalized = normal_vec.normalize()
-        x_axis_normalized = x_axis_vec.normalize()
+        normal_length = float(np.linalg.norm(normal_vec))
+        if normal_length <= 1e-12:
+            raise ValueError("Workplane normal must be a non-zero vector.")
+        normal_normalized = normal_vec / normal_length
+
+        # Remove any component parallel to the normal so the resulting frame
+        # is orthonormal even when the caller supplied an approximate X axis.
+        x_projected = x_axis_vec - normal_normalized * np.dot(
+            x_axis_vec,
+            normal_normalized,
+        )
+        x_length = float(np.linalg.norm(x_projected))
+        if x_length <= 1e-12:
+            raise ValueError(
+                "Workplane x_axis must be non-zero and not parallel to normal."
+            )
+        x_axis_normalized = x_projected / x_length
 
         # Calculate y-axis as cross product of normal and x-axis using numpy
         y_cross = np.cross(normal_normalized, x_axis_normalized)
@@ -196,6 +224,7 @@ class Workplane(ABC):
             up_dir=Vector(
                 normal_normalized[0], normal_normalized[1], normal_normalized[2]
             ),
+            app=app,
         )
 
     @classmethod
