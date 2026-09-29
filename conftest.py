@@ -18,11 +18,9 @@ _GROUP_DIRECTORIES = {
     ("tests", "test_fea"): "fea",
     ("tests", "test_integrations", "freecad"): "freecad",
     ("tests", "test_integrations", "inventor"): "inventor",
-    ("tests", "test_integrations", "occ"): "ocp",
 }
 
 _GROUP_FILES = {
-    "tests/test_3d_visualization.py": "ocp",
     "tests/test_app_tracking.py": "ocp",
     "tests/test_freecad_gui_attach.py": "freecad",
     "tests/test_item_components.py": "freecad",
@@ -42,9 +40,11 @@ _GROUP_FILES = {
 _LEGACY_DIRECTORIES = {
     ("tests", "test_abstracts"),
     ("tests", "test_importers"),
+    ("tests", "test_integrations", "occ"),
     ("tests", "test_primitives"),
 }
 _LEGACY_FILES = {
+    "tests/test_3d_visualization.py",
     "tests/test_integrations/test_cad_modeling.py",
     "tests/test_integrations/test_fea_analyzer.py",
     "tests/test_integrations/test_fluent_api_occ.py",

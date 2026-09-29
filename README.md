@@ -1,116 +1,70 @@
-# RapidCAD-Py
+# RapidCADPy
 
-A Python library for parametric CAD modeling with built-in FEA and 3D visualization. Integrates with FreeCAD, Autodesk Inventor, and OpenCascade.
+[![CI](https://github.com/rapidcad/rapidcadpy/actions/workflows/ci.yml/badge.svg)](https://github.com/rapidcad/rapidcadpy/actions/workflows/ci.yml)
+[![Python 3.10–3.13](https://img.shields.io/badge/Python-3.10%E2%80%933.13-3776AB?logo=python&logoColor=white)](./pyproject.toml)
+[![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
+[![Documentation](https://img.shields.io/badge/Docs-online-blue.svg)](https://docs.rapidcad.ai)
+[![uv project](https://img.shields.io/badge/Package-uv-DE5FE9?logo=uv)](./pyproject.toml)
 
-![Status](https://img.shields.io/badge/status-alpha-orange)
+**One backend-neutral Python API for building, inspecting, and safely updating CAD models while preserving native feature history when the CAD system supports it.**
 
-## 🚀 Features
+<p align="center">
+  <img src="readme/native_feature_update.gif" alt="A native FreeCAD extrusion changing from 32 mm to 60 mm while retaining the same feature" width="760">
+</p>
 
-- **Fluent API** for intuitive CAD modeling
-- **Finite Element Analysis** powered by torch-fem
-- **3D Visualization** with PyVista
-- **CAD Integration** with FreeCAD, Autodesk Inventor, and OpenCascade
-- **Export** to STEP, STL, and native CAD formats
+<p align="center"><sub>A parameter edit recomputes the dependent cut while retaining the same native FreeCAD feature.</sub></p>
 
-## 📦 Installation
+**[Architecture](#architecture)** · **[Examples](./examples)** · **[Backend support](#backend-support)** · **[Documentation](https://docs.rapidcad.ai)**
+
+## 30-second quickstart
 
 ```bash
 git clone https://github.com/rapidcad/rapidcadpy.git
 cd rapidcadpy
-uv sync
+uv sync --extra ocp
+uv run python examples/quickstart.py
 ```
 
-Install only the capabilities you need. For example, the OpenCascade quick
-start below also uses the visualization dependencies:
+This writes `quickstart.step` from a modeled plate with a through-hole. FreeCAD
+is discovered from an existing installation; other optional features are
+installed with the `drawing`, `fea`, `importers`, `inventor`, or `visualization`
+extras.
 
-```bash
-uv sync --extra ocp --extra visualization
-```
+## Architecture
 
-Other supported extras are `drawing`, `fea`, `importers`, and `inventor`.
-FreeCAD is discovered from an existing FreeCAD installation and is not
-installed from PyPI.
+RapidCADPy separates modeling intent from CAD execution:
 
-# Documentation
+- Backend-neutral contracts keep modeling code portable across CAD systems.
+- Document hydration maps native objects to stable RapidCAD IDs without
+  serializing native handles.
+- Expected revisions, recompute validation, and rollback protect native
+  mutations from stale writes and partial updates.
 
-[![Docs](https://img.shields.io/badge/docs-online-blue)](https://docs.rapidcad.ai)
+## Backend support
 
-## 🏁 Quick Start
+| Capability | FreeCAD | OCP | Inventor |
+|---|---:|---:|---:|
+| Parametric sketches | ✅ | Partial | ✅ |
+| Native feature history | ✅ | N/A | ✅ |
+| Document hydration | ✅ | N/A | Planned |
+| Revision-safe mutations | ✅ | Partial | Planned |
+| STEP/STL export | ✅ | ✅ | ✅ |
+| FEA | ✅ | ✅ | Partial |
 
-### Build a Model
+`✅` is covered by backend or contract tests. `Partial` means a narrower API or
+test surface; `Planned` is not exposed as supported behavior. OCP is a direct
+geometry kernel, so desktop-document hydration and native feature history do
+not apply.
 
-```python
-from rapidcadpy import OpenCascadeOcpApp
+## Tests
 
-app = OpenCascadeOcpApp()
-
-# Create a box with a hole
-box = app.work_plane("XY").rect(30, 30, centered=True).close().extrude(10)
-hole = app.work_plane("XY").circle(5).close().extrude(15)
-result = box.cut(hole)
-
-# Visualize
-app.show_3d(camera_angle="iso", screenshot="model.png")
-```
-
-![3D Model](readme/test_camera_iso.png)
-
-### Run FEA Analysis
-
-```python
-from rapidcadpy import OpenCascadeOcpApp
-from rapidcadpy.fea import Material, FixedConstraint, DistributedLoad
-
-app = OpenCascadeOcpApp()
-beam = app.work_plane("XY").rect(10, 100).close().extrude(10)
-
-results = app.fea(
-    material=Material.STEEL,
-    mesh_size=2.0,
-    constraints=[FixedConstraint(location="x_min")],
-    loads=[DistributedLoad(location="z_max", force=-1000.0, direction="z")],
-)
-
-print(results.summary())
-results.show(display='displacement')
-```
-
-![FEA Results](readme/fea_displacement_top.png)
-
-### Export Models
-
-```python
-result.export("model.step")  # STEP format
-result.export("model.stl")   # STL format
-```
-
-## 📚 Documentation
-
-```bash
-cd docs && npm install && npm run dev
-```
-
-Open http://localhost:3000/docs
-
-## 🧪 Testing
-
-The core contract suite runs without an installed desktop CAD application:
+The green default suite needs no desktop CAD installation:
 
 ```bash
 uv run pytest
 ```
 
-Tests are split into `core`, `ocp`, `freecad`, `inventor`, and `fea` groups.
-The default is `core`; select another group explicitly after installing its
-extra or native CAD runtime:
+Optional suites are selected explicitly with `--test-group ocp`, `freecad`,
+`inventor`, or `fea`; repeat the option to combine groups.
 
-```bash
-uv sync --extra ocp --extra visualization
-uv run pytest --test-group ocp
-uv run pytest --test-group freecad
-uv run pytest --test-group inventor
-uv run pytest --test-group fea
-```
-
-Repeat `--test-group` to combine groups, or use `--test-group all` in an
-environment that provides every optional dependency and CAD application.
+RapidCADPy is alpha software released under the [MIT License](./LICENSE).
