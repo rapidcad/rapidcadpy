@@ -2,8 +2,9 @@ import math
 
 import pytest
 
-from vendor.rapidcadpy.rapidcadpy.integrations.freecad import FreeCADApp
-from vendor.rapidcadpy.rapidcadpy.integrations.ocp.app import OpenCascadeOcpApp
+pytest.importorskip("OCP", reason="requires the OCP extra")
+
+from rapidcadpy.integrations.ocp.app import OpenCascadeOcpApp
 
 
 class TestFillet:

@@ -4,6 +4,8 @@ import tempfile
 
 import pytest
 
+pytest.importorskip("win32com.client", reason="requires pywin32 and Autodesk Inventor")
+
 from rapidcadpy.integrations.inventor.app import InventorApp
 from rapidcadpy.integrations.inventor.reverse_engineer import InventorReverseEngineer
 from rapidcadpy.integrations.inventor.workplane import InventorWorkPlane

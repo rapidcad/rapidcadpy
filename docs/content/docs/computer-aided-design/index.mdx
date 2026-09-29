@@ -5,12 +5,12 @@ description: Get started with RapidCADpy quickly
 
 # Installation
 
-Install RapidCADpy using pip:
+Install RapidCADPy and the OpenCascade backend using uv:
 
 ```bash
 git clone https://github.com/rapidcad/rapidcadpy.git
 cd rapidcadpy
-pip install -e .
+uv sync --extra ocp
 ```
 
 # Basic Usage
@@ -18,17 +18,16 @@ pip install -e .
 Here's a simple example to create a basic 3D model using the new App approach:
 
 ```python
-from rapidcadpy.integrations.occ import OpenCascadeApp
+from rapidcadpy import OpenCascadeOcpApp
 
 # Initialize OpenCascade application
-app = OpenCascadeApp()
-app.new_document()
+app = OpenCascadeOcpApp()
 
 # Create a workplane on the XY plane
 wp = app.work_plane("XY")
 
 # Create a simple cube
-cube = wp.move_to(-5, -5).rect(10, 10).extrude(10)
+cube = wp.move_to(-5, -5).rect(10, 10).close().extrude(10)
 
 # Export to STEP format
 cube.export("my_cube.step")

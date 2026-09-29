@@ -1,14 +1,16 @@
-import tempfile
+from __future__ import annotations
+
 import math
-from typing import TYPE_CHECKING, Optional, List, Union, Tuple, Dict
+import tempfile
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Union
 
 from ...app import App
 
 if TYPE_CHECKING:
+    from ...fea.boundary_conditions import BoundaryCondition, Load
+    from ...fea.materials import MaterialProperties
     from .workplane import OccWorkplane
 
-from ...fea.boundary_conditions import BoundaryCondition, Load
-from ...fea.materials import MaterialProperties
 from .workplane import OccWorkplane
 
 # Standard ISO metric thread data: designation -> (pitch, major_diameter)

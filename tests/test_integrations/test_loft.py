@@ -1,26 +1,18 @@
 import pytest
 
+pytest.importorskip("FreeCAD", reason="requires the FreeCAD Python runtime")
+
+from rapidcadpy.integrations.freecad import FreeCADApp
+
 
 class TestLoft:
     """Reusable loft tests for backend-specific integration suites."""
 
     @pytest.fixture
     def app(self):
-        app = "freecad"
-        if app == "freecad":
-            from vendor.rapidcadpy.rapidcadpy.integrations.freecad import FreeCADApp
+        yield FreeCADApp()
 
-            app = FreeCADApp()
-            yield app
-        elif app == "ocp":
-            from vendor.rapidcadpy.rapidcadpy.integrations.freecad import (
-                OpenCascadeOCPApp,
-            )
-
-            app = OpenCascadeOCPApp()
-            yield app
-
-    def test_loft_simple(self, app):
+    def test_loft_simple(self, app, tmp_path):
         wp1 = app.work_plane("XY", offset=0)
         wp1.rect(50, 30, centered=False).close()
 
@@ -35,12 +27,9 @@ class TestLoft:
             obj for obj in doc.Objects if obj.TypeId == "Sketcher::SketchObject"
         ]
         assert sketch_objs, "Expected editable Sketcher sections in FreeCAD document"
-        if "freecad" in app.__class__.lower():
-            shape.to_fcstd("outputs/minimal_loft.fcstd")
-        else:
-            shape.to_step("outputs/minimal_loft.step")
+        shape.to_fcstd(str(tmp_path / "minimal_loft.fcstd"))
 
-    def test_loft_circular_profiles(self, app):
+    def test_loft_circular_profiles(self, app, tmp_path):
         wp1 = app.work_plane("XY", offset=0)
         wp1.circle(15).close()
 
@@ -53,4 +42,4 @@ class TestLoft:
             obj for obj in doc.Objects if obj.TypeId == "Sketcher::SketchObject"
         ]
         assert sketch_objs, "Expected editable Sketcher sections in FreeCAD document"
-        shape.to_fcstd("outputs/circular_loft.fcstd")
+        shape.to_fcstd(str(tmp_path / "circular_loft.fcstd"))

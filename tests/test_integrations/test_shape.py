@@ -28,8 +28,7 @@ import pytest
 # Paths / interpreter discovery
 # ---------------------------------------------------------------------------
 
-_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", ".."))
-_VENDOR_RC = os.path.join(_ROOT, "vendor", "rapidcadpy")
+_PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 _FREECAD_LIB_CANDIDATES = [
     os.environ.get("FREECAD_LIB_PATH", "").strip(),
@@ -76,11 +75,11 @@ def _interpreter_for(backend: str):
 
 def _make_app(backend: str):
     if backend == "freecad":
-        from vendor.rapidcadpy.rapidcadpy.integrations.freecad import FreeCADApp
+        from rapidcadpy.integrations.freecad import FreeCADApp
 
         return FreeCADApp()
     if backend == "ocp":
-        from vendor.rapidcadpy.rapidcadpy import OpenCascadeOcpApp
+        from rapidcadpy import OpenCascadeOcpApp
 
         return OpenCascadeOcpApp()
     raise ValueError(f"unknown backend: {backend}")
@@ -190,10 +189,10 @@ if freecad_lib:
         sys.path.insert(0, freecad_lib)
 
 if {backend!r} == "freecad":
-    from vendor.rapidcadpy.rapidcadpy.integrations.freecad import FreeCADApp
+    from rapidcadpy.integrations.freecad import FreeCADApp
     app = FreeCADApp()
 else:
-    from vendor.rapidcadpy.rapidcadpy import OpenCascadeOcpApp
+    from rapidcadpy import OpenCascadeOcpApp
     app = OpenCascadeOcpApp()
 
 ns = {{"app": app}}
@@ -227,7 +226,7 @@ def _run_case_in_backend(backend: str, case_src: str):
         return None
 
     program = _RUNNER_TEMPLATE.format(
-        paths=[_ROOT, _VENDOR_RC],
+        paths=[_PROJECT_ROOT],
         freecad_lib=_freecad_lib_path() or "",
         backend=backend,
         case=case_src,

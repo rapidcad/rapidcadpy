@@ -13,7 +13,10 @@ from tqdm import tqdm
 from rapidcadpy.cadseq import Cad
 from rapidcadpy.json_importer.process_f360 import Fusion360GalleryParser
 
-data_folder = "/Users/eliasberger/Documents/PhD/brep2cad/data/cad_constraint_json"
+data_folder = os.environ.get(
+    "RAPIDCADPY_DEMO_DATA",
+    str(pathlib.Path("data") / "cad_constraint_json"),
+)
 # get random file from data folder
 cad_parser = Fusion360GalleryParser()
 files = os.listdir(data_folder)

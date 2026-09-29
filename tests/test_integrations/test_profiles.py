@@ -21,7 +21,7 @@ class TestIpeBeam:
     @pytest.fixture
     def app(self):
         try:
-            from ...rapidcadpy.integrations.freecad import FreeCADApp
+            from rapidcadpy.integrations.freecad import FreeCADApp
 
             app = FreeCADApp()
         except ImportError as exc:
@@ -29,7 +29,7 @@ class TestIpeBeam:
         yield app
 
     def test_profiles_public_api_exposes_ipe(self):
-        from ...rapidcadpy.components import profiles
+        from rapidcadpy.components import profiles
 
         section = profiles.ipe("IPE80")
 
@@ -37,7 +37,7 @@ class TestIpeBeam:
         assert profiles.list_profiles()["ipe"] == ["IPE100", "IPE120", "IPE80"]
 
     def test_ipe_beam_extrusion_geometry(self, app, result_dir):
-        from ...rapidcadpy.components import profiles
+        from rapidcadpy.components import profiles
 
         section = profiles.ipe("IPE80")
         length = 300.0
@@ -59,7 +59,7 @@ class TestIpeBeam:
 
     def test_ipe_beam_joined_frame_can_export_and_reopen(self, app, result_dir):
         FreeCAD = importlib.import_module("FreeCAD")
-        from ...rapidcadpy.components import profiles
+        from rapidcadpy.components import profiles
 
         section = profiles.ipe("IPE80")
         column_height = 240.0

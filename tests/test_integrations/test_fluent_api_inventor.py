@@ -7,6 +7,8 @@ including creating simple geometries and exporting to .ipt format.
 
 import pytest
 
+pytest.importorskip("win32com.client", reason="requires pywin32 and Autodesk Inventor")
+
 from rapidcadpy.integrations.inventor.app import InventorApp
 
 

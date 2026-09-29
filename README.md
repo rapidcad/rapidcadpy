@@ -1,6 +1,6 @@
 # RapidCAD-Py
 
-A Python library for parametric CAD modeling with built-in FEA and 3D visualization. Integrates with Autodesk Inventor and OpenCASCADE.
+A Python library for parametric CAD modeling with built-in FEA and 3D visualization. Integrates with FreeCAD, Autodesk Inventor, and OpenCascade.
 
 ![Status](https://img.shields.io/badge/status-alpha-orange)
 
@@ -9,7 +9,7 @@ A Python library for parametric CAD modeling with built-in FEA and 3D visualizat
 - **Fluent API** for intuitive CAD modeling
 - **Finite Element Analysis** powered by torch-fem
 - **3D Visualization** with PyVista
-- **CAD Integration** with Autodesk Inventor and OpenCASCADE
+- **CAD Integration** with FreeCAD, Autodesk Inventor, and OpenCascade
 - **Export** to STEP, STL, and native CAD formats
 
 ## 📦 Installation
@@ -17,9 +17,19 @@ A Python library for parametric CAD modeling with built-in FEA and 3D visualizat
 ```bash
 git clone https://github.com/rapidcad/rapidcadpy.git
 cd rapidcadpy
-pip install -e .          # Basic install
-pip install -e ".[fea]"   # With FEA support
+uv sync
 ```
+
+Install only the capabilities you need. For example, the OpenCascade quick
+start below also uses the visualization dependencies:
+
+```bash
+uv sync --extra ocp --extra visualization
+```
+
+Other supported extras are `drawing`, `fea`, `importers`, and `inventor`.
+FreeCAD is discovered from an existing FreeCAD installation and is not
+installed from PyPI.
 
 # Documentation
 
@@ -30,14 +40,13 @@ pip install -e ".[fea]"   # With FEA support
 ### Build a Model
 
 ```python
-from rapidcadpy.integrations.occ import OpenCascadeApp
+from rapidcadpy import OpenCascadeOcpApp
 
-app = OpenCascadeApp()
-wp = app.work_plane("XY")
+app = OpenCascadeOcpApp()
 
 # Create a box with a hole
-box = wp.rect(30, 30, centered=True).extrude(10)
-hole = wp.circle(5).extrude(15)
+box = app.work_plane("XY").rect(30, 30, centered=True).close().extrude(10)
+hole = app.work_plane("XY").circle(5).close().extrude(15)
 result = box.cut(hole)
 
 # Visualize
@@ -49,11 +58,11 @@ app.show_3d(camera_angle="iso", screenshot="model.png")
 ### Run FEA Analysis
 
 ```python
-from rapidcadpy.integrations.occ import OpenCascadeApp
+from rapidcadpy import OpenCascadeOcpApp
 from rapidcadpy.fea import Material, FixedConstraint, DistributedLoad
 
-app = OpenCascadeApp()
-beam = app.work_plane("XY").rect(10, 100).extrude(10)
+app = OpenCascadeOcpApp()
+beam = app.work_plane("XY").rect(10, 100).close().extrude(10)
 
 results = app.fea(
     material=Material.STEEL,
@@ -73,7 +82,6 @@ results.show(display='displacement')
 ```python
 result.export("model.step")  # STEP format
 result.export("model.stl")   # STL format
-result.export("model.ipt")   # Autodesk Inventor (Windows)
 ```
 
 ## 📚 Documentation
@@ -84,8 +92,25 @@ cd docs && npm install && npm run dev
 
 Open http://localhost:3000/docs
 
-## �🧪 Testing
+## 🧪 Testing
+
+The core contract suite runs without an installed desktop CAD application:
 
 ```bash
-pytest tests/
+uv run pytest
 ```
+
+Tests are split into `core`, `ocp`, `freecad`, `inventor`, and `fea` groups.
+The default is `core`; select another group explicitly after installing its
+extra or native CAD runtime:
+
+```bash
+uv sync --extra ocp --extra visualization
+uv run pytest --test-group ocp
+uv run pytest --test-group freecad
+uv run pytest --test-group inventor
+uv run pytest --test-group fea
+```
+
+Repeat `--test-group` to combine groups, or use `--test-group all` in an
+environment that provides every optional dependency and CAD application.

@@ -1,9 +1,10 @@
 import math
-import importlib
 
 import pytest
 
-from vendor.rapidcadpy.rapidcadpy.integrations.freecad import FreeCADApp
+FreeCAD = pytest.importorskip("FreeCAD", reason="requires the FreeCAD Python runtime")
+
+from rapidcadpy.integrations.freecad import FreeCADApp
 
 
 class TestFillet:
@@ -50,8 +51,6 @@ class TestFillet:
             assert step_file.readline().strip() == "ISO-10303-21;"
 
     def test_fillet_save_to_fcstd(self, app, tmp_path):
-        FreeCAD = importlib.import_module("FreeCAD")
-
         workplane = app.work_plane("XY")
         box = workplane.rect(3.0, 3.0).close().extrude(0.5)
         filleted = box.edges("|Z").fillet(0.125)
@@ -63,7 +62,6 @@ class TestFillet:
             shapes=[filleted],
             feature_name_prefix="Result",
         )
-        filleted.to_fcstd("outputs/filleted_box.FCStd")
         assert fcstd_path.exists()
         assert fcstd_path.stat().st_size > 0
 

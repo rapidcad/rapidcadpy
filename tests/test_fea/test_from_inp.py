@@ -1,7 +1,9 @@
-import pytest
+import os
 import pathlib
 import textwrap
+
 import numpy as np
+import pytest
 
 from rapidcadpy.fea.load_case.load_case import LoadCase
 from rapidcadpy.fea.load_case.abaqus_inp_load_case import AbaqusInpLoadCase
@@ -375,9 +377,13 @@ class TestFromInpWithFea:
 
     @pytest.fixture
     def get_inp_file_bracket(self):
-        return (
-            "/Users/elias.berger/Documents/agentic_cad_system/data/abaqus/l_bracket.inp"
-        )
+        configured = os.environ.get("RAPIDCADPY_ABAQUS_BRACKET")
+        if not configured:
+            pytest.skip("set RAPIDCADPY_ABAQUS_BRACKET to run the external bracket case")
+        path = pathlib.Path(configured).expanduser()
+        if not path.is_file():
+            pytest.skip(f"configured bracket input does not exist: {path}")
+        return path
 
     @pytest.fixture
     def load_case(self, get_inp_file):

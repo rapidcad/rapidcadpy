@@ -12,7 +12,7 @@ import { Step, Steps } from 'fumadocs-ui/components/steps';
 RapidCAD-Py includes integrated Finite Element Analysis powered by **torch-fem**, enabling you to validate your designs with structural analysis directly in Python.
 
 <Callout type="info">
-FEA requires additional dependencies. Install with: `pip install -e "[fea]"`
+FEA requires additional dependencies. Install them with `uv sync --extra ocp --extra fea`.
 </Callout>
 
 ## Quick Start
@@ -20,7 +20,7 @@ FEA requires additional dependencies. Install with: `pip install -e "[fea]"`
 Here's a complete example of creating a model and analyzing it:
 
 ```python
-from rapidcadpy.integrations.occ import OpenCascadeApp
+from rapidcadpy import OpenCascadeOcpApp
 from rapidcadpy.fea import (
     FixedConstraint,
     LoadCase,
@@ -29,8 +29,8 @@ from rapidcadpy.fea import (
     DistributedLoad,
 )
 
-app = OpenCascadeApp()
-box = app.work_plane("XY").rect(20, 100).extrude(10)
+app = OpenCascadeOcpApp()
+box = app.work_plane("XY").rect(20, 100).close().extrude(10)
 
 load_case = LoadCase(
     material=Material.STEEL,
@@ -625,7 +625,7 @@ print(f"Load 2: {results2.max_stress:.2f} MPa")
 - Verify geometry is valid (no zero-thickness parts)
 
 **"ImportError: FEA dependencies not available"**
-- Install FEA support: `pip install -e ".[fea]"`
+- Install FEA support: `uv sync --extra ocp --extra fea`
 
 ### Best Practices
 

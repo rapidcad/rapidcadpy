@@ -16,9 +16,8 @@ from rapidcadpy.json_importer.process_deepcad import DeepCadJsonParser
 from rapidcadpy.json_importer.process_f360 import Fusion360GalleryParser
 from rapidcadpy.primitive import Arc, Circle, Line
 
-DATA_ROOT = "/Users/elias.berger/cadgpt/data"
-
-DATA_FOLDER = pathlib.Path(DATA_ROOT).joinpath("deepcad_json")
+DATA_ROOT = os.environ.get("RAPIDCADPY_TEST_DATA")
+DATA_FOLDER = pathlib.Path(DATA_ROOT).joinpath("deepcad_json") if DATA_ROOT else None
 
 
 @pytest.fixture
@@ -475,16 +474,17 @@ def test_graph_format(flash_cad):
     cad_reconstructed.show_3d()
 
 
-def test_from_json():
+def test_from_json(tmp_path):
     import json
 
     from rapidcadpy.cad import Cad
 
-    json = json.loads(
-        open("/Users/elias.berger/cadgpt/server/mock_data/demo_2.stp.json").read()
-    )
-    cad = Cad.from_json(json)
-    cad.to_step("/Users/elias.berger/cadgpt/server/mock_data/demo_2.stp")
+    source = os.environ.get("RAPIDCADPY_TEST_STEP_JSON")
+    if not source:
+        pytest.skip("set RAPIDCADPY_TEST_STEP_JSON to run this external-data test")
+    payload = json.loads(pathlib.Path(source).read_text(encoding="utf-8"))
+    cad = Cad.from_json(payload)
+    cad.to_step(str(tmp_path / "model.step"))
 
 
 def test_to_python(long_sequence_omni):

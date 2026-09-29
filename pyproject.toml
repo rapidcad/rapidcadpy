@@ -1,0 +1,113 @@
+[project]
+name = "rapidcadpy"
+version = "0.1.0"
+description = "Backend-neutral Python APIs for parametric CAD, native feature editing, and FEA workflows."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Elias Berger" },
+]
+keywords = [
+    "cad",
+    "fea",
+    "freecad",
+    "opencascade",
+    "parametric-modeling",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+visualization = [
+    "matplotlib>=3.7",
+    "pillow>=10",
+    "plotly>=5",
+    "pyvista>=0.43",
+    "seaborn>=0.13",
+]
+drawing = [
+    "pypdf>=5",
+    "weasyprint>=62",
+]
+ocp = [
+    "cadquery-ocp>=7.8",
+]
+inventor = [
+    "pywin32>=306; sys_platform == 'win32'",
+]
+fea = [
+    "attrs>=23",
+    "gmsh>=4.11",
+    "matplotlib>=3.7",
+    "meshio>=5.3",
+    "netgen-mesher>=6.2",
+    "pyvista>=0.43",
+    "scipy>=1.10",
+    "torch>=2",
+    "torch-fem>=0.12",
+    "tqdm>=4.66",
+]
+importers = [
+    "h5py>=3.10",
+]
+
+[project.urls]
+Documentation = "https://docs.rapidcad.ai"
+Issues = "https://github.com/rapidcad/rapidcadpy/issues"
+Repository = "https://github.com/rapidcad/rapidcadpy"
+
+[dependency-groups]
+dev = [
+    "pypdf>=5",
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.8",
+    "weasyprint>=62",
+]
+
+[build-system]
+requires = ["uv_build>=0.12.0,<0.13"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "rapidcadpy"
+module-root = ""
+source-include = ["tests/**"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--strict-config", "--strict-markers"]
+markers = [
+    "core: runs without a desktop CAD application or optional solver",
+    "ocp: requires the OpenCascade OCP extra",
+    "freecad: requires a FreeCAD installation or Python runtime",
+    "inventor: requires Autodesk Inventor on Windows",
+    "fea: requires the finite-element analysis extra",
+    "integration: exercises an external CAD runtime or solver",
+    "serial: must not run concurrently with another CAD integration test",
+]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
