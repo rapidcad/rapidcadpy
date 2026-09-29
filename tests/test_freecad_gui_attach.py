@@ -298,7 +298,7 @@ def test_gui_modeling_auto_attaches_and_creates_a_document(monkeypatch):
     assert result["ok"] is True
     assert worker.calls == [
         ("new_document", {"name": "RapidCADPy"}),
-        ("work_plane", {"plane": "XY", "offset": None}),
+        ("work_plane", {"plane": "XY", "offset": None, "origin": None, "normal": None, "x_axis": None}),
     ]
 
 

@@ -345,67 +345,31 @@ def test_drawing_discovery_returns_only_runtime_registered_view_ids(monkeypatch)
 
 
 def test_loft_uses_ordered_registered_workplanes() -> None:
-    adapter = SimpleNamespace()
-    document = CadDocument(
-        backend="freecad",
-        native_handle=SimpleNamespace(),
-        adapter=adapter,
-    )
-    created_shape = SimpleNamespace(
-        feature=CadFeature(
-            id="temporary",
-            document=document,
-            native_handle=SimpleNamespace(Name="Loft_1", TypeId="Part::Loft"),
-            native_name="Loft_1",
-            native_type="Part::Loft",
-        )
-    )
-    first_workplane = SimpleNamespace()
-    second_workplane = SimpleNamespace()
     calls = []
 
-    def create_loft(profiles, *, make_solid, ruled):
-        calls.append((profiles, make_solid, ruled))
-        return created_shape
+    def create_loft(**params):
+        calls.append(params)
+        return {
+            "ok": True, "document_revision": "revision-2",
+            "object_id": "loft-1", "created_object_ids": ["loft-1"],
+            "object_type": "solid",
+        }
 
-    first_workplane.loft = create_loft
+    operations = SimpleNamespace(loft=create_loft)
+    adapter = SimpleNamespace(profile_operations=lambda session: operations)
     session = CadSession()
-    session.backend_name = "freecad"
     session.app = SimpleNamespace()
-    session.runtime_objects.update(
-        {
-            "workplane_1": first_workplane,
-            "workplane_2": second_workplane,
-        }
+    session.cad_document = CadDocument(
+        backend="freecad", native_handle=SimpleNamespace(), adapter=adapter,
     )
-    session.objects.update(
-        {
-            "workplane_1": SemanticObject(
-                id="workplane_1",
-                type="workplane",
-                label="XY workplane",
-                source_op="operation_1",
-            ),
-            "workplane_2": SemanticObject(
-                id="workplane_2",
-                type="workplane",
-                label="XY workplane",
-                source_op="operation_2",
-            ),
-        }
-    )
-    session._geometry_signature = lambda shape: {"volume": 42.0}  # type: ignore[method-assign]
-
     result = session.loft(["workplane_1", "workplane_2"], ruled=True)
-
-    assert result["ok"] is True, result
-    assert result["object_id"] == "shape_1"
-    assert calls == [([second_workplane], True, True)]
-    assert isinstance(session.runtime_objects["shape_1"], CadFeature)
-    assert session.objects["shape_1"].metadata["profile_workplane_ids"] == [
-        "workplane_1",
-        "workplane_2",
-    ]
+    assert result["ok"] is True
+    assert result["document_revision"] == "revision-2"
+    assert calls == [{
+        "profile_ids": None,
+        "workplane_ids": ["workplane_1", "workplane_2"],
+        "make_solid": True, "ruled": True, "expected_revision": None,
+    }]
 
 
 def test_embedded_session_can_create_first_gui_document(monkeypatch):
@@ -634,7 +598,11 @@ def test_extrusion_id_survives_parameter_rehydration_and_object_insertion():
         capabilities=frozenset({"geometry", "feature_history"}),
     )
     runtime_shape = SimpleNamespace(obj=native_shape, feature=feature)
-    workplane = SimpleNamespace(extrude=lambda *args, **kwargs: runtime_shape)
+    workplane = SimpleNamespace(
+        extrude=lambda *args, **kwargs: runtime_shape,
+        _to_3d=lambda x, y: (x, y, 0.0),
+        normal_vector=(0.0, 0.0, 1.0),
+    )
 
     session = CadSession()
     session.backend_name = "freecad"
@@ -645,6 +613,13 @@ def test_extrusion_id_survives_parameter_rehydration_and_object_insertion():
 
     created = session.extrude(10)
     extrusion_id = created["object_id"]
+
+    assert created["document_revision"].startswith("sha256:")
+    assert created["created_object_ids"] == [extrusion_id]
+    assert created["changed_object_ids"] == []
+    assert created["removed_object_ids"] == []
+    assert created["support_status"] == "supported"
+    assert created["support"]["mode"] == "native_feature"
 
     inserted = FakeNativeObject("InsertedBeforeExtrude", "Part::Feature")
     native_document.Objects.insert(0, inserted)
