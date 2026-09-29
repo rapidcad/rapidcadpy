@@ -7,6 +7,12 @@ description: Working with workplanes in RapidCADpy
 
 Workplanes are fundamental to creating 2D sketches and 3D geometry in RapidCADpy. They define a coordinate system where you can draw shapes and perform operations like extrude and revolve.
 
+The workplane normal is its local Z axis. Positive extrusion follows that
+normal. For a placed workplane, provide `x_axis` when the sketch or profile
+must have a specific rotation around the extrusion direction. The placed
+workplane `origin` is the reference start for a non-symmetric extrusion; a
+symmetric extrusion spans equally on both sides of it.
+
 ## Creating Standard Workplanes
 
 The simplest way to create a workplane is using one of the standard planes (XY, XZ, or YZ):
@@ -48,3 +54,25 @@ wp = app.work_plane("YZ", offset=-3.0)
 ```
 
 Currently support for the Inventor Integration.
+
+## Creating Placed Workplanes
+
+Use `origin` and `normal` to place a workplane in world coordinates. The
+optional `x_axis` sets the profile's local X direction. RapidCADPy projects it
+onto the workplane, so it must not be zero or parallel to `normal`.
+
+Successful `CadSession.extrude` calls return an `extrusion_path` containing the
+world-space start and end points. Check these endpoints before creating an
+opposite member: extruding backward from the other endpoint of the same segment
+creates a coincident duplicate.
+
+```python
+# A profile at the origin that extrudes along world X. Its local X direction
+# points along world Y, fixing the profile's roll around the member axis.
+wp = app.work_plane(
+    origin=(0.0, 0.0, 0.0),
+    normal=(1.0, 0.0, 0.0),
+    x_axis=(0.0, 1.0, 0.0),
+)
+member = wp.rect(20.0, 20.0).extrude(200.0)
+```
