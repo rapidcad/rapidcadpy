@@ -94,6 +94,7 @@ class InventorApp(App):
         offset: Optional[float] = None,
         origin: Optional[VectorLike] = None,
         normal: Optional[VectorLike] = None,
+        x_axis: Optional[VectorLike] = None,
         **kwargs,
     ) -> "InventorWorkPlane":
         """
@@ -114,7 +115,7 @@ class InventorApp(App):
         if origin is not None and normal is not None:
             # Create custom workplane from origin and normal
             return InventorWorkPlane.from_origin_normal(
-                app=self, origin=origin, normal=normal
+                app=self, origin=origin, normal=normal, x_axis=x_axis
             )
         elif offset is not None and name in ["XY", "XZ", "YZ"]:
             # Create standard named workplane with offset

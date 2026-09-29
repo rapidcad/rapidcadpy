@@ -21,12 +21,17 @@ _PACKAGE_ROOT = Path(__file__).resolve().parents[3]
 if str(_PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(_PACKAGE_ROOT))
 
+from rapidcadpy.bridge_contract import (
+    VERSIONED_OPERATIONS,
+    bridge_contract,
+    negotiate_contract,
+)  # noqa: E402
+from rapidcadpy.cad_session import CadSession  # noqa: E402
 from rapidcadpy.integrations.freecad.instance_registry import (  # noqa: E402
     instance_ipc_dir,
     remove_instance_record,
     write_instance_record,
 )
-from rapidcadpy.cad_session import CadSession  # noqa: E402
 
 try:
     from PySide import QtCore
@@ -45,7 +50,9 @@ _IPC_DIR: Optional[Path] = None
 _INSTANCE_ID = f"freecad-{os.getpid()}"
 _START_LOCK = threading.Lock()
 _LOG_PATH = Path(
-    os.environ.get("RAPIDCADPY_GUI_BRIDGE_LOG", "/tmp/rapidcadpy_freecad_gui_bridge.log")
+    os.environ.get(
+        "RAPIDCADPY_GUI_BRIDGE_LOG", "/tmp/rapidcadpy_freecad_gui_bridge.log"
+    )
 )
 _LOGGER = logging.getLogger("rapidcadpy.freecad.gui_bridge")
 
@@ -110,7 +117,45 @@ def _refresh_gui(fit: bool = False) -> None:
         Gui.updateGui()
 
 
-def _dispatch(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+def _current_contract() -> dict[str, Any]:
+    operations = (
+        [
+            name
+            for name in VERSIONED_OPERATIONS
+            if callable(getattr(_SESSION, name, None))
+        ]
+        if getattr(_SESSION, "LIVE_CONTRACT_VERSION", None) == (1, 0)
+        else []
+    )
+    return bridge_contract(operations)
+
+
+def _dispatch(
+    method: str, params: Dict[str, Any], contract: Any = None
+) -> Dict[str, Any]:
+    if method == "negotiate_contract":
+        return negotiate_contract(params, _current_contract())
+    if method in VERSIONED_OPERATIONS:
+        agreement = negotiate_contract(contract, _current_contract())
+        if not agreement["ok"] or method not in agreement.get(
+            "negotiated_operations", []
+        ):
+            return {
+                **agreement,
+                "ok": False,
+                "error_code": "cad_bridge_incompatible",
+                "error": agreement.get("error", "Operation was not negotiated."),
+            }
+    if method == "inspect_capabilities" and App.ActiveDocument is None:
+        from rapidcadpy.integrations.freecad.spline_geometry import (
+            modeling_capabilities,
+        )
+
+        return {
+            "ok": True,
+            "bridge_contract": _current_contract(),
+            **modeling_capabilities(),
+        }
     if method == "ping":
         version = getattr(App, "Version", lambda: [])()
         return {
@@ -120,6 +165,7 @@ def _dispatch(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
             "instance_id": _INSTANCE_ID,
             "gui": True,
             "freecad_version": ".".join(str(part) for part in version[:3]),
+            "bridge_contract": _current_contract(),
             "active_document": _active_document_info(),
         }
     if method == "select_object":
@@ -141,6 +187,8 @@ def _dispatch(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
     if function is None:
         return {"ok": False, "error": f"Unknown GUI bridge method '{method}'"}
     result = function(**params)
+    if method == "inspect_capabilities":
+        result["bridge_contract"] = _current_contract()
     if result.get("ok"):
         fit = method in {
             "open_document",
@@ -169,6 +217,7 @@ def _drain_requests() -> None:
             request["response"] = _dispatch(
                 method,
                 dict(request.get("params") or {}),
+                request.get("contract"),
             )
         except Exception:
             request["response"] = {
@@ -201,6 +250,7 @@ def _drain_file_requests() -> None:
                 response = _dispatch(
                     str(request.get("method", "")),
                     dict(request.get("params") or {}),
+                    request.get("contract"),
                 )
         except Exception:
             response = {"ok": False, "error": traceback.format_exc()}
@@ -230,6 +280,7 @@ class _BridgeHandler(socketserver.StreamRequestHandler):
                 pending: Dict[str, Any] = {
                     "method": request.get("method", ""),
                     "params": request.get("params", {}),
+                    "contract": request.get("contract"),
                     "event": threading.Event(),
                 }
                 _REQUESTS.put(pending)

@@ -10,11 +10,18 @@ import socket
 import subprocess
 import tempfile
 import time
-from uuid import uuid4
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
+from ...bridge_contract import (
+    VERSIONED_OPERATIONS,
+    advertised_capabilities,
+    bridge_contract,
+    negotiate_contract,
+)
+from .capabilities import FREECAD_CAPABILITIES
 from .instance_registry import (
     FreeCADInstance,
     discover_instance_records,
@@ -109,6 +116,7 @@ class FreeCADGuiConnection:
         instance_id: Optional[str] = None,
         info_path: Optional[Path] = None,
     ) -> None:
+        self.bridge_contract: dict[str, Any] | None = None
         self.process = process
         self.host = host
         self.port = int(port)
@@ -173,6 +181,7 @@ class FreeCADGuiConnection:
                     "bridge_transport": ping.get("bridge_transport", "tcp"),
                     "active_document": ping.get("active_document"),
                     "freecad_version": ping.get("freecad_version"),
+                    "bridge_contract": ping.get("bridge_contract"),
                 }
             )
         return results
@@ -290,10 +299,22 @@ class FreeCADGuiConnection:
         )
 
     def call(self, method: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        requirement = (
+            bridge_contract([method]) if method in VERSIONED_OPERATIONS else None
+        )
+        if requirement is not None:
+            if self.bridge_contract is None:
+                ping = self.call("ping", {})
+                if not ping.get("ok"):
+                    return ping
+            negotiated = negotiate_contract(requirement, self.bridge_contract or {})
+            if not negotiated["ok"]:
+                return negotiated
         request = {
             "token": self.token,
             "method": method,
             "params": params,
+            **({"contract": requirement} if requirement is not None else {}),
         }
         socket_error: Optional[Exception] = None
         try:
@@ -309,6 +330,8 @@ class FreeCADGuiConnection:
             socket_error = exc
             file_response = self._call_via_files(method, params)
             if file_response.get("ok"):
+                if method == "ping":
+                    self.bridge_contract = file_response.get("bridge_contract")
                 file_response.setdefault("bridge_transport", "filesystem")
                 return file_response
             return {
@@ -326,6 +349,8 @@ class FreeCADGuiConnection:
             }
         try:
             response = json.loads(line.decode("utf-8"))
+            if method == "ping":
+                self.bridge_contract = response.get("bridge_contract")
             response.setdefault("bridge_transport", "tcp")
             return response
         except Exception as exc:
@@ -349,6 +374,11 @@ class FreeCADGuiConnection:
             "token": self.token,
             "method": method,
             "params": params,
+            **(
+                {"contract": bridge_contract([method])}
+                if method in VERSIONED_OPERATIONS
+                else {}
+            ),
         }
         timeout_seconds = (
             min(self.timeout_seconds, 2.0) if method == "ping" else self.timeout_seconds
@@ -390,6 +420,10 @@ class FreeCADGuiConnection:
                     path.unlink()
                 except FileNotFoundError:
                     pass
+
+    @property
+    def capabilities(self) -> tuple[str, ...]:
+        return advertised_capabilities(FREECAD_CAPABILITIES, self.bridge_contract)
 
     def close(self) -> None:
         """Disconnect while deliberately leaving the launched GUI open."""

@@ -208,7 +208,9 @@ class FreeCADSketch2D(Sketch2D):
                     ),
                 )
             else:
-                continue
+                raise NotImplementedError(
+                    f"Cannot preserve editable history for primitive {type(primitive).__name__}."
+                )
             sketch_obj.addGeometry(geom, False)
 
         return sketch_obj

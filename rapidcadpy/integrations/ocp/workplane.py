@@ -33,7 +33,11 @@ class OccWorkplane(Workplane):
 
     @classmethod
     def from_origin_normal(
-        cls, origin: VectorLike, normal: VectorLike, app: Optional[Any] = None
+        cls,
+        origin: VectorLike,
+        normal: VectorLike,
+        app: Optional[Any] = None,
+        x_axis: Optional[VectorLike] = None,
     ) -> "OccWorkplane":
         """Create an OccWorkplane from origin and normal vector.
 
@@ -53,11 +57,17 @@ class OccWorkplane(Workplane):
         Args:
             origin: Origin point of the workplane (not yet honored, see above)
             normal: Normal vector (up-axis direction)
+            x_axis: Optional local x-axis; not yet supported by this integration
             app: Optional app instance
 
         Returns:
             New OccWorkplane with specified origin and normal
         """
+        if x_axis is not None:
+            raise NotImplementedError(
+                "The OCP workplane integration does not support x_axis yet."
+            )
+
         from ...cad_types import Vector
 
         # Convert to vectors

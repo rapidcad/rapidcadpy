@@ -81,24 +81,71 @@ class FreeCADWorkplane(Workplane):
     def from_origin_normal(
         cls,
         app: Optional[App] = None,
-        origin: tuple = (0.0, 0.0, 0.0),
-        normal: tuple = (0.0, 0.0, 1.0),
+        origin: VectorLike = (0.0, 0.0, 0.0),
+        normal: VectorLike = (0.0, 0.0, 1.0),
+        x_axis: Optional[VectorLike] = None,
     ) -> "FreeCADWorkplane":
-        """Create a workplane at an arbitrary world-space origin with the given normal."""
-        origin_3d = tuple(origin) if len(origin) == 3 else (origin[0], origin[1], 0.0)  # type: ignore[index]
-        normal_3d = tuple(normal) if len(normal) == 3 else (normal[0], normal[1], 0.0)  # type: ignore[index]
-        wp = cls(app=app)
-        wp.normal_vector = Vector(
-            float(normal_3d[0]), float(normal_3d[1]), float(normal_3d[2])
+        """Create a workplane from a world origin and local Z/X directions."""
+        origin_3d = cls._vector3(origin, name="origin")
+        normal_3d = cls._vector3(normal, name="normal")
+        normal_length = math.sqrt(sum(float(value) ** 2 for value in normal_3d))
+        if normal_length <= 1e-12:
+            raise ValueError("Workplane normal must be a non-zero vector.")
+        normal_vec = Vector(
+            *(float(value) / normal_length for value in normal_3d)
         )
+        wp = cls(app=app)
+        wp.normal_vector = normal_vec
         wp._offset = 0.0
         wp._plane_origin = Vector(
             float(origin_3d[0]), float(origin_3d[1]), float(origin_3d[2])
         )
-        wp._setup_coordinate_system()
+        if x_axis is None:
+            wp._setup_coordinate_system()
+        else:
+            x_axis_3d = cls._vector3(x_axis, name="x_axis")
+            x_candidate = Vector(*(float(value) for value in x_axis_3d))
+            dot = float(
+                sum(
+                    x_candidate[index] * normal_vec[index]
+                    for index in range(3)
+                )
+            )
+            projected_x = x_candidate - normal_vec * dot
+            projected_length = math.sqrt(
+                sum(float(value) ** 2 for value in projected_x)
+            )
+            if projected_length <= 1e-12:
+                raise ValueError(
+                    "Workplane x_axis must be non-zero and not parallel to normal."
+                )
+            local_x = Vector(
+                *(float(value) / projected_length for value in projected_x)
+            )
+            local_y = Vector(
+                normal_vec.y * local_x.z - normal_vec.z * local_x.y,
+                normal_vec.z * local_x.x - normal_vec.x * local_x.z,
+                normal_vec.x * local_x.y - normal_vec.y * local_x.x,
+            )
+            wp._local_x = local_x
+            wp._local_y = local_y
+            wp._local_z = normal_vec
         if app is not None:
             app.register_workplane(wp)
         return wp
+
+    @staticmethod
+    def _vector3(value: VectorLike, *, name: str) -> tuple[float, float, float]:
+        """Return a finite 3-D vector, extending two-component inputs with Z=0."""
+
+        components = tuple(float(component) for component in value)
+        if len(components) == 2:
+            components = (*components, 0.0)
+        if len(components) != 3:
+            raise ValueError(f"Workplane {name} must contain two or three values.")
+        if not all(math.isfinite(component) for component in components):
+            raise ValueError(f"Workplane {name} values must be finite.")
+        return components
 
     @classmethod
     def create_offset_plane(
@@ -546,6 +593,14 @@ class FreeCADWorkplane(Workplane):
                 "Create a new loft and apply a linked boolean."
             )
 
+        if self.app is not None and hasattr(self.app, "get_doc"):
+            from .profiles import loft_workplanes
+
+            return loft_workplanes(
+                self.app, [self, *profile_wps],
+                make_solid=make_solid, ruled=ruled,
+            )
+
         # Build an ordered list of all profile workplanes (self first).
         all_wps = [self] + profile_wps
 
@@ -553,14 +608,11 @@ class FreeCADWorkplane(Workplane):
             # Prefer active sketch primitives; otherwise consume the last closed loop.
             if getattr(wp, "_pending_shapes", None):
                 primitives = list(wp._pending_shapes)
-                wp._pending_shapes = []
-                wp._current_position = Vertex(0, 0)
-                wp._loop_start = None  # type: ignore[assignment]
                 return primitives
 
             loops = getattr(wp, "_accumulated_loops", None)
             if loops:
-                return loops.pop()
+                return list(loops[-1])
 
             raise ValueError("Loft profile has no sketch primitives.")
 
@@ -583,69 +635,12 @@ class FreeCADWorkplane(Workplane):
         if len(wires) < 2:
             raise ValueError("Loft requires at least two profiles.")
 
-        # Prefer creating a real Part::Loft feature when we have a FreeCAD document,
-        # so users can edit loft sections in the FreeCAD UI.
-        if self.app is not None and hasattr(self.app, "get_doc"):
-            try:
-                app_any = cast(Any, self.app)
-                doc = app_any.get_doc()
-                section_objs = []
-                created_names = []
-                for wire, sketch in zip(wires, profile_sketches):
-                    section_name = f"LoftSection_{app_any.get_next_feature_index()}"
-                    section_obj = sketch._create_editable_sketch(doc, section_name)
-                    created_names.append(str(section_obj.Name))
-                    section_objs.append(section_obj)
-
-                loft_name = f"Loft_{app_any.get_next_feature_index()}"
-                loft_obj = doc.addObject("Part::Loft", loft_name)
-                created_names.append(str(loft_obj.Name))
-                loft_obj.Sections = section_objs
-                loft_obj.Solid = bool(make_solid)
-                loft_obj.Ruled = bool(ruled)
-                if hasattr(loft_obj, "Closed"):
-                    loft_obj.Closed = False
-
-                doc.recompute()
-                solid = loft_obj.Shape
-                if solid is None or solid.isNull():
-                    raise ValueError("FreeCAD recomputed an empty Part::Loft.")
-
-                # Default operation: return the true Loft feature as current feature.
-                if operation == "NewBodyFeatureOperation":
-                    from .shape import FreeCADShape
-
-                    return FreeCADShape(
-                        solid,
-                        self.app,
-                        doc=doc,
-                        current_feature=loft_obj,
-                    )
-            except Exception as exc:
-                for name in reversed(locals().get("created_names", [])):
-                    try:
-                        doc.removeObject(name)
-                    except Exception:
-                        pass
-                try:
-                    doc.recompute()
-                except Exception:
-                    pass
-                if getattr(self.app, "silent_geometry_failures", False):
-                    return None  # type: ignore[return-value]
-                from .errors import FreeCADNativeFeatureError
-
-                raise FreeCADNativeFeatureError(
-                    "Native Part::Loft creation failed; refusing to replace a "
-                    "section or result with Part::Feature geometry."
-                ) from exc
-        else:
-            try:
-                solid = Part.makeLoft(wires, bool(make_solid), bool(ruled))
-            except Exception as exc:
-                if getattr(self.app, "silent_geometry_failures", False):
-                    return None  # type: ignore[return-value]
-                raise RuntimeError(f"Loft failed: {exc}") from exc
+        try:
+            solid = Part.makeLoft(wires, bool(make_solid), bool(ruled))
+        except Exception as exc:
+            if getattr(self.app, "silent_geometry_failures", False):
+                return None  # type: ignore[return-value]
+            raise RuntimeError(f"Loft failed: {exc}") from exc
 
         if root_sketch is None:
             raise ValueError("Internal error: missing root profile for loft operation.")

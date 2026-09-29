@@ -22,6 +22,12 @@ class FreeCADAdapter:
     def recompute(self, document: Any) -> None:
         document.recompute()
 
+    def profile_operations(self, session: Any) -> Any:
+        """Supply persistent profile mutations for this native integration."""
+        from .profiles import FreeCADProfileOperations
+
+        return FreeCADProfileOperations(session)
+
     def save_document(self, document: Any, path: Optional[str] = None) -> str:
         if path:
             resolved = str(Path(path).expanduser().resolve())

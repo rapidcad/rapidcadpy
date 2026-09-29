@@ -9,12 +9,18 @@ from __future__ import annotations
 import importlib
 
 _EXPORTS = {
+    "FreeCADLiveBackendFactory": (".live_backend", "FreeCADLiveBackendFactory"),
     "FreeCADApp": (".app", "FreeCADApp"),
     "ensure_freecad_python_path": (".app", "ensure_freecad_python_path"),
     "FreeCADGuiConnection": (".gui_connection", "FreeCADGuiConnection"),
     "FreeCADShape": (".shape", "FreeCADShape"),
     "FreeCADSketch2D": (".sketch2d", "FreeCADSketch2D"),
     "FreeCADWorkplane": (".workplane", "FreeCADWorkplane"),
+    "FreeCADViewportBackend": (".viewport", "FreeCADViewportBackend"),
+    "FreeCADViewportBackendFactory": (
+        ".viewport",
+        "FreeCADViewportBackendFactory",
+    ),
     "discover_freecad_user_mod_dir": (
         ".connector_addon",
         "discover_freecad_user_mod_dir",

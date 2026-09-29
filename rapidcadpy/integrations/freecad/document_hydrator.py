@@ -1,30 +1,24 @@
-"""FreeCAD document hydration and serialization for :class:`CadSession`.
-
-Builds the backend-neutral semantic mirror (objects, geometry signatures,
-dependency/containment trees, serialized properties) from a live FreeCAD
-document while retaining the native ``DocumentObject`` handles.
-
-Provided as a mixin so the session's generic state (``self.objects``,
-``self.runtime_objects``, ``self.parameters`` …) stays owned by
-``CadSession``; these methods only read and write that state.
-"""
+"""FreeCAD hydration, serialization, and semantic classification."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ...cad_objects import CadDocument, CadFeature, CadObject
+from ...mutations import document_revision
 from ...session_records import SemanticObject
+from ...session_service import SessionService
 
 
-class FreeCADHydrationMixin:
-    """FreeCAD-specific document hydration and value serialization."""
-
+class FreeCADDocumentCodec(SessionService):
     def _geometry_signature(self, shape: Any) -> Dict[str, Any]:
         obj = getattr(shape, "obj", None)
+        if obj is None and isinstance(shape, CadObject):
+            obj = shape.shape
         if obj is None:
             return {}
         return self._shape_signature(obj)
@@ -65,6 +59,14 @@ class FreeCADHydrationMixin:
         parameter_adapter = getattr(cad_document.adapter, "parameter_adapter", None)
 
         ids_by_name: Dict[str, str] = {}
+        persisted_ids = {}
+        for native_obj in native_objects:
+            persistent_id = getattr(native_obj, "RapidCADObjectId", "")
+            if persistent_id:
+                if persistent_id in persisted_ids:
+                    raise ValueError(f"Duplicate persistent CAD object ID: {persistent_id}.")
+                persisted_ids[persistent_id] = native_obj.Name
+                cad_document.bind_object_id(native_obj.Name, persistent_id)
         for native_obj in native_objects:
             native_name = str(native_obj.Name)
             ids_by_name[native_name] = cad_document.object_id(
@@ -91,12 +93,8 @@ class FreeCADHydrationMixin:
                 geometry = self._shape_signature(shape)
                 self.geometry_signatures[rapidcad_id] = geometry
 
-            depends_on = self._freecad_object_ids(
-                getattr(native_obj, "OutList", []), ids_by_name
-            )
-            dependents = self._freecad_object_ids(
-                getattr(native_obj, "InList", []), ids_by_name
-            )
+            depends_on = self._freecad_object_ids(getattr(native_obj, "OutList", []), ids_by_name)
+            dependents = self._freecad_object_ids(getattr(native_obj, "InList", []), ids_by_name)
             properties = self._freecad_properties(native_obj, ids_by_name)
             capabilities = {"get_properties", "set_properties"}
             if geometry:
@@ -111,9 +109,7 @@ class FreeCADHydrationMixin:
             else:
                 wrapper_type = CadObject
             if parameter_adapter is not None:
-                for binding_name in parameter_adapter.supported_feature_properties(
-                    native_obj
-                ):
+                for binding_name in parameter_adapter.supported_feature_properties(native_obj):
                     capabilities.add(f"parameter.bind:{binding_name}")
             cad_object = wrapper_type(
                 id=rapidcad_id,
@@ -123,9 +119,7 @@ class FreeCADHydrationMixin:
                 native_type=str(getattr(native_obj, "TypeId", "")),
                 label=str(getattr(native_obj, "Label", native_obj.Name)),
                 semantic_type=semantic_type,
-                visibility=getattr(
-                    getattr(native_obj, "ViewObject", None), "Visibility", None
-                ),
+                visibility=getattr(getattr(native_obj, "ViewObject", None), "Visibility", None),
                 properties=properties,
                 depends_on=depends_on,
                 dependents=dependents,
@@ -160,6 +154,22 @@ class FreeCADHydrationMixin:
                 metadata=metadata,
             )
 
+        cad_document.feature_definitions.clear()
+        for native_obj in native_objects:
+            raw_definition = getattr(native_obj, "RapidCADFeatureDefinition", "")
+            if not raw_definition:
+                continue
+            try:
+                definition = json.loads(str(raw_definition))
+                if isinstance(definition, dict):
+                    cad_document.register_feature_definition(native_obj.Name, definition)
+            except (TypeError, ValueError, json.JSONDecodeError):
+                # Invalid third-party metadata must not prevent document hydration.
+                continue
+
+        from .profiles import hydrate_profiles
+
+        hydrate_profiles(self, doc)
         object_snapshots = [obj.to_dict() for obj in self.objects.values()]
         if parameter_adapter is not None:
             discovered_parameters = parameter_adapter.discover_parameters(
@@ -168,44 +178,23 @@ class FreeCADHydrationMixin:
                 ids_by_name,
                 lambda: self._new_id("parameter"),
             )
-            self.parameters = {
-                parameter.id: parameter for parameter in discovered_parameters
-            }
-        parameter_snapshots = [
-            parameter.to_dict() for parameter in self.parameters.values()
-        ]
-        revision_payload = json.dumps(
-            {
-                "objects": object_snapshots,
-                "parameters": parameter_snapshots,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        self.document_revision = (
-            "sha256:" + hashlib.sha256(revision_payload).hexdigest()
-        )
+            self.parameters = {parameter.id: parameter for parameter in discovered_parameters}
+        parameter_snapshots = [parameter.to_dict() for parameter in self.parameters.values()]
+        self.document_revision = document_revision(self.objects, self.parameters)
         cad_document.revision = self.document_revision
         cad_document.name = str(getattr(doc, "Name", ""))
         cad_document.label = str(getattr(doc, "Label", ""))
         cad_document.file_name = str(getattr(doc, "FileName", "") or source_path)
         self.document = {
-            key: value
-            for key, value in cad_document.to_dict().items()
-            if key != "backend"
+            key: value for key, value in cad_document.to_dict().items() if key != "backend"
         }
-        tree = self._freecad_tree(
-            rapidcad_ids, containment["children"], containment["parents"]
-        )
+        tree = self._freecad_tree(rapidcad_ids, containment["children"], containment["parents"])
         return self._ok(
             summary=(
                 f"Hydrated active FreeCAD document with {len(native_objects)} objects"
                 if source_tool == "use_active_document"
                 else (
-                    (
-                        "Opened and hydrated FreeCAD document with "
-                        f"{len(native_objects)} objects"
-                    )
+                    (f"Opened and hydrated FreeCAD document with {len(native_objects)} objects")
                     if source_tool == "open_document"
                     else (
                         f"Hydrated FreeCAD document after {source_tool} with "
@@ -223,9 +212,7 @@ class FreeCADHydrationMixin:
             tree=tree,
         )
 
-    def _freecad_properties(
-        self, obj: Any, ids_by_name: Dict[str, str]
-    ) -> Dict[str, Any]:
+    def _freecad_properties(self, obj: Any, ids_by_name: Dict[str, str]) -> Dict[str, Any]:
         properties: Dict[str, Any] = {}
         for name in getattr(obj, "PropertiesList", []):
             try:
@@ -247,16 +234,15 @@ class FreeCADHydrationMixin:
     ) -> Any:
         if value is None or isinstance(value, (bool, int, float, str)):
             return value
+        if callable(getattr(value, "exportBrepToString", None)):
+            return {"kind": "geometry", "signature": self._shape_signature(value)}
         if depth >= 4:
-            return str(value)
+            return re.sub(r"0x[0-9a-fA-F]+", "<address>", str(value))
         native_name = getattr(value, "Name", None)
         if native_name is not None and str(native_name) in ids_by_name:
             return {"object_id": ids_by_name[str(native_name)]}
         if isinstance(value, (list, tuple)):
-            return [
-                self._serialize_freecad_value(item, ids_by_name, depth + 1)
-                for item in value
-            ]
+            return [self._serialize_freecad_value(item, ids_by_name, depth + 1) for item in value]
         if isinstance(value, dict):
             return {
                 str(key): self._serialize_freecad_value(item, ids_by_name, depth + 1)
@@ -270,9 +256,7 @@ class FreeCADHydrationMixin:
             }
         if hasattr(value, "Base") and hasattr(value, "Rotation"):
             placement: Dict[str, Any] = {
-                "base": self._serialize_freecad_value(
-                    value.Base, ids_by_name, depth + 1
-                )
+                "base": self._serialize_freecad_value(value.Base, ids_by_name, depth + 1)
             }
             try:
                 placement["rotation_quaternion"] = [
@@ -287,11 +271,9 @@ class FreeCADHydrationMixin:
             if unit:
                 quantity["unit"] = unit
             return quantity
-        return str(value)
+        return re.sub(r"0x[0-9a-fA-F]+", "<address>", str(value))
 
-    def _freecad_object_ids(
-        self, native_objects: Any, ids_by_name: Dict[str, str]
-    ) -> list[str]:
+    def _freecad_object_ids(self, native_objects: Any, ids_by_name: Dict[str, str]) -> list[str]:
         result = []
         for native_obj in native_objects or []:
             rapidcad_id = ids_by_name.get(str(getattr(native_obj, "Name", "")))
@@ -337,9 +319,7 @@ class FreeCADHydrationMixin:
             next_ancestors.add(object_id)
             return {
                 "id": object_id,
-                "children": [
-                    node(item, next_ancestors) for item in children[object_id]
-                ],
+                "children": [node(item, next_ancestors) for item in children[object_id]],
             }
 
         roots = [object_id for object_id in object_ids if not parents[object_id]]
@@ -371,6 +351,10 @@ class FreeCADHydrationMixin:
 
     def _shape_signature(self, obj: Any) -> Dict[str, Any]:
         signature: Dict[str, Any] = {}
+        exporter = getattr(obj, "exportBrepToString", None)
+        if callable(exporter):
+            signature["brep_sha256"] = hashlib.sha256(exporter().encode()).hexdigest()
+
         try:
             bb = obj.BoundBox
             signature["bbox"] = {

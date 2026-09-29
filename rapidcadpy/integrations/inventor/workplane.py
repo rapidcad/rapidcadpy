@@ -27,7 +27,11 @@ class InventorWorkPlane(Workplane):
 
     @classmethod
     def from_origin_normal(
-        cls, app: Any, origin: VectorLike, normal: VectorLike
+        cls,
+        app: Any,
+        origin: VectorLike,
+        normal: VectorLike,
+        x_axis: Optional[VectorLike] = None,
     ) -> "InventorWorkPlane":
         """Create an InventorWorkPlane from origin and normal vector.
 
@@ -35,9 +39,15 @@ class InventorWorkPlane(Workplane):
             app: InventorApp instance
             origin: Origin point of the workplane (3D coordinates)
             normal: Normal vector (up-axis direction)
+            x_axis: Optional local x-axis; not yet supported by this integration
         Returns:
             New InventorWorkPlane with specified origin and normal
         """
+        if x_axis is not None:
+            raise NotImplementedError(
+                "The Inventor workplane integration does not support x_axis yet."
+            )
+
         tg = app.transient_geom
 
         # Ensure we have 3D coordinates
